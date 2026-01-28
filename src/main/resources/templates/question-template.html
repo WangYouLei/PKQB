@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{title}}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .question-list {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .question-item {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+        
+        .question-item:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+        }
+        
+        .question-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #667eea;
+        }
+        
+        .question-header h3 {
+            color: #667eea;
+            font-size: 20px;
+            flex: 1;
+        }
+        
+        .question-type {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        
+        .options {
+            margin: 20px 0;
+            padding-left: 20px;
+        }
+        
+        .option {
+            padding: 10px 15px;
+            margin-bottom: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            transition: background 0.3s;
+            cursor: pointer;
+        }
+        
+        .option:hover {
+            background: #e9ecef;
+        }
+        
+        .answer {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            font-weight: bold;
+        }
+        
+        .explanation {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin: 15px 0;
+            color: #856404;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 36px;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 18px;
+            opacity: 0.9;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{{title}}</h1>
+        <p>共 {{items.length}} 道题目</p>
+    </div>
+    <div class="question-list">
+        {{#each items}}
+            <div class="question-item">
+                <div class="question-header">
+                    <h3>{{@index}}. {{question}}</h3>
+                    <span class="question-type">{{questionType}}</span>
+                </div>
+                {{#if options}}
+                    <div class="options">
+                        {{#each options}}
+                            <div class="option">{{@index}}. {{this}}</div>
+                        {{/each}}
+                    </div>
+                {{/if}}
+                <div class="answer">
+                    答案：{{answer}}
+                </div>
+                {{#if explanation}}
+                    <div class="explanation">
+                        解析：{{explanation}}
+                    </div>
+                {{/if}}
+            </div>
+        {{/each}}
+    </div>
+</body>
+</html>

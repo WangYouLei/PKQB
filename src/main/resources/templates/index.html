@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PKQB - 智能题库生成系统</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/app.css">
+    <script src="/js/main.js"></script>
+</head>
+<body>
+    <div id="app">
+        <div class="header">
+            <h1>PKQB - 智能题库生成系统</h1>
+            <p class="subtitle">支持上传Word/PDF文件或直接输入文本</p>
+        </div>
+
+        <div class="container">
+            <div class="card">
+                <div class="input-tabs">
+                    <div class="tab active" data-tab="file">文件上传</div>
+                    <div class="tab" data-tab="text">文本输入</div>
+                </div>
+
+                <div class="tab-content active" id="file-tab">
+                    <div class="upload-area" id="uploadArea">
+                        <div class="upload-placeholder">
+                            <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M24 4L24 36" stroke="#00ff88" stroke-width="3" stroke-linecap="round"/>
+                                <path d="M12 24L24 36L36 24" stroke="#00ff88" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+                                <rect x="4" y="4" width="40" height="40" rx="8" stroke="#333" stroke-width="2"/>
+                            </svg>
+                            <p>点击或拖拽文件到此处上传</p>
+                            <p style="color: #666; font-size: 12px; margin-top: 8px;">支持 Word (.doc, .docx) 和 PDF 文件</p>
+                        </div>
+                        <input type="file" id="fileInput" accept=".doc,.docx,.pdf" style="display: none;">
+                    </div>
+                    <div id="fileList" style="display: none; margin-top: 15px;">
+                        <div class="file-item" id="fileItem">
+                            <span id="fileName"></span>
+                            <button id="removeFile" class="btn btn-small btn-secondary">移除</button>
+                        </div>
+                    </div>
+                    <button id="parseBtn" class="btn btn-primary" style="margin-top: 15px; width: 100%;">解析文件</button>
+                </div>
+
+                <div class="tab-content" id="text-tab">
+                    <textarea id="textInput" placeholder="请输入题目或笔记内容..."></textarea>
+                    <button id="analyzeBtn" class="btn btn-primary" style="margin-top: 15px; width: 100%;">分析内容</button>
+                </div>
+            </div>
+
+            <div class="card" id="resultSection" style="display: none;">
+                <h2>分析结果</h2>
+                <p><strong>类型：</strong><span id="resultType"></span></p>
+                <p><strong>标题：</strong><span id="resultTitle"></span></p>
+                <p><strong>数量：</strong><span id="resultCount"></span></p>
+                <div id="previewList" style="margin-top: 20px;"></div>
+                <button id="generateBtn" class="btn btn-primary" style="margin-top: 20px; width: 100%;">生成 HTML</button>
+            </div>
+
+            <div class="card" id="successSection" style="display: none;">
+                <h2>生成成功！</h2>
+                <p style="color: #00ff88; font-size: 18px; margin-bottom: 20px;">✓ HTML 文件已成功生成</p>
+                <button id="downloadBtn" class="btn btn-primary" style="width: 100%;">下载文件</button>
+                <button id="resetBtn" class="btn btn-secondary" style="width: 100%; margin-top: 10px;">重新开始</button>
+            </div>
+        </div>
+
+        <div class="loading-overlay" id="loadingOverlay" style="display: none;">
+            <div class="loading-spinner"></div>
+            <p class="loading-text" id="loadingText">处理中...</p>
+        </div>
+    </div>
+</body>
+</html>

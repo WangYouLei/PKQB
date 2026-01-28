@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>笔记列表</title>
+</head>
+<body>
+    <div class="note-list">
+        
+            <div class="note-item" data-id="0">
+                <h3 class="note-title">软件测试的概念:</h3>
+                <div class="note-content">软件测试是通过执行程序来发现软件缺陷、验证其是否满足预期需求和规格的过程。</div>
+            </div>
+        
+            <div class="note-item" data-id="1">
+                <h3 class="note-title">软件生命周期阶段：</h3>
+                <div class="note-content">一：问题定义
+二：可行性研究
+三：需求分析
+四：设计
+五：编码
+六：测试
+七：维护</div>
+            </div>
+        
+            <div class="note-item" data-id="2">
+                <h3 class="note-title">总体设计 详细设计：</h3>
+                <div class="note-content">总体设计：确定系统的整体架构、模块划分及模块间的接口关系，以满足软件需求。
+详细设计：在总体设计基础上，对每个模块的具体实现逻辑、数据结构和算法进行详细描述，为编码提供直接依据。</div>
+            </div>
+        
+            <div class="note-item" data-id="3">
+                <h3 class="note-title">验收测试阶段的测试对象：</h3>
+                <div class="note-content">功能测试
+性能测试
+安全测试
+兼容性测试
+可靠性测试
+用户体验测试</div>
+            </div>
+        
+            <div class="note-item" data-id="4">
+                <h3 class="note-title">单元测试（单元测试的内容）：</h3>
+                <div class="note-content">模块接口测试：验证模块之间数据传递和调用是否正确、完整。
+局部数据结构测试：检查模块内部使用的临时数据结构是否正确初始化、赋值和维护。
+路径测试：通过覆盖程序中的不同执行路径，确保所有逻辑分支都能正确运行。
+错误处理测试：验证程序在发生异常或错误时能否正确识别、处理并恢复。
+边界测试：测试输入或条件处于边界值时系统的响应，以发现边界相关的缺陷。</div>
+            </div>
+        
+            <div class="note-item" data-id="5">
+                <h3 class="note-title">集成测试：验证多个模块或组件在集成后能否正确协同工作，重点发现接口和交互中的问题。</h3>
+                <div class="note-content"></div>
+            </div>
+        
+            <div class="note-item" data-id="6">
+                <h3 class="note-title">确认测试：验证软件是否满足用户需求和规格说明，通常在系统测试阶段进行，以确认软件可交付使用。</h3>
+                <div class="note-content"></div>
+            </div>
+        
+            <div class="note-item" data-id="7">
+                <h3 class="note-title">等价类的分类（三角形划分）：</h3>
+                <div class="note-content">在软件测试中，等价类划分是一种黑盒测试技术，将输入域划分为若干等价类，使得每个类中的输入数据在测试中具有相同的行为。以“三角形问题”为例，等价类可按输出结果（三角形类型）进行分类，通常包括以下几类：</div>
+            </div>
+        
+            <div class="note-item" data-id="8">
+                <h3 class="note-title">1. 无效输入类（非三角形）</h3>
+                <div class="note-content">任意一边 ≤ 0（如：-1, 0, 2）
+不满足三角形不等式（任意两边之和 ≤ 第三边），如 (1, 2, 5)</div>
+            </div>
+        
+            <div class="note-item" data-id="9">
+                <h3 class="note-title">2. 有效输入类（构成三角形）</h3>
+                <div class="note-content">a. 一般三角形（不等边）：三边均不相等，且满足三角形不等式，如 (3, 4, 5)
+b. 等腰三角形（非等边）：恰好两边相等，且满足三角形不等式，如 (5, 5, 8)
+c. 等边三角形：三边全部相等，如 (6, 6, 6)
+注意：等腰直角或等边直角等属于更细粒度的分类，在基本三角形判定问题中通常不单独区分，除非需求明确要求判断角度。</div>
+            </div>
+        
+            <div class="note-item" data-id="10">
+                <h3 class="note-title">因此，等价类的分类（基于三角形判定）主要包括：</h3>
+                <div class="note-content">无效输入（不能构成三角形）
+有效输入中的：一般三角形、等腰三角形、等边三角形</div>
+            </div>
+        
+            <div class="note-item" data-id="11">
+                <h3 class="note-title">这些类别构成了测试用例设计的基础，每个等价类至少选取一个代表值进行测试。</h3>
+                <div class="note-content"></div>
+            </div>
+        
+            <div class="note-item" data-id="12">
+                <h3 class="note-title">正交试验用例设计法是什么，有什么好处：</h3>
+                <div class="note-content">是什么：是一种基于正交表的测试设计方法，从多因素多水平的组合中选取具有代表性的、均匀分散且整齐可比的少量测试用例。
+好处：能显著减少测试用例数量，同时有效覆盖主要因素间的组合影响，提高测试效率和缺陷发现能力。
+书上P119的表</div>
+            </div>
+        
+            <div class="note-item" data-id="13">
+                <h3 class="note-title">逻辑覆盖：</h3>
+                <div class="note-content">语句覆盖：是软件测试中的一种基本覆盖标准，其核心目标是确保程序中的每一条语句至少被执行一次。
+判定覆盖：主要用来衡量测试用例是否能够完全覆盖被测试程序的决策路径。
+条件覆盖：旨在构造一组测试用例，使得每一判定语句中每个逻辑条件的可能值至少满足一次。
+判定——条件覆盖：主要用于衡量测试用例集合的有效性和完整性。
+语句覆盖：每行代码都跑一遍。
+判定覆盖：if 的 true/false 分支都要走。
+条件覆盖：每个小条件（如 a&gt;0）的 true/false 都要试。
+判定-条件覆盖：既要 if 分支都走，也要每个小条件真假都出现。</div>
+            </div>
+        
+            <div class="note-item" data-id="14">
+                <h3 class="note-title">性能测试中的响应时间、资源利用率：</h3>
+                <div class="note-content">响应时间：是指系统对用户请求作出相应所需要的时间。
+资源利用率：是指软件对系统资源的使用情况，资源利用率是分析软件性能“瓶颈”的重要参数。</div>
+            </div>
+        
+    </div>
+</body>
+</html>

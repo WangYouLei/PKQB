@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>题库 - {{title}}</title>
+    <style>
+        body {
+            background-color: #000000;
+            color: #ffffff;
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            padding: 40px;
+            max-width: 900px;
+            margin: 0 auto;
+            line-height: 1.6;
+        }
+        .progress-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #00ff88, #00cc6a);
+            transition: width 0.5s;
+            z-index: 1000;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        .header h1 {
+            color: #00ff88;
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+        .score-board {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: linear-gradient(145deg, #1a1a1a, #0d0d0d);
+            border: 1px solid #333;
+            border-radius: 12px;
+        }
+        .score-item {
+            font-size: 18px;
+            color: #cccccc;
+        }
+        .score-item span {
+            color: #00ff88;
+            font-weight: bold;
+            font-size: 24px;
+        }
+        .question-card {
+            background: linear-gradient(145deg, #1a1a1a, #0d0d0d);
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 25px;
+            margin: 20px 0;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+        .question-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 40px rgba(0,0,0,0.7);
+        }
+        .question-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 15px;
+            gap: 15px;
+        }
+        .question-title {
+            font-size: 18px;
+            color: #00ff88;
+            flex: 1;
+        }
+        .question-type {
+            background: #2a2a2a;
+            color: #00ff88;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        .question-type.single_choice {
+            border: 1px solid #00ff88;
+        }
+        .question-type.multiple_choice {
+            border: 1px solid #ffaa00;
+            color: #ffaa00;
+        }
+        .question-type.true_false {
+            border: 1px solid #00aaff;
+            color: #00aaff;
+        }
+        .options {
+            margin-top: 20px;
+        }
+        .option {
+            padding: 14px 20px;
+            margin: 10px 0;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .option:hover {
+            background: #252525;
+            border-color: #00ff88;
+        }
+        .option.selected {
+            background: #00ff88;
+            color: #000;
+        }
+        .option.correct {
+            background: #00ff88;
+            border-color: #00ff88;
+            color: #000;
+        }
+        .option.wrong {
+            background: #ff4444;
+            border-color: #ff4444;
+            color: #fff;
+        }
+        .option-text {
+            flex: 1;
+        }
+        .answer-section {
+            display: none;
+            margin-top: 20px;
+            padding: 15px 20px;
+            background: #1a2a1a;
+            border-left: 4px solid #00ff88;
+            border-radius: 4px;
+            animation: slideDown 0.3s ease;
+        }
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        .answer-section p {
+            margin: 8px 0;
+        }
+        .answer-section strong {
+            color: #00ff88;
+        }
+        .submit-btn {
+            background: linear-gradient(145deg, #00ff88, #00cc6a);
+            color: #000;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 20px;
+            transition: all 0.2s;
+            box-shadow: 0 4px 15px rgba(0, 255, 136, 0.3);
+        }
+        .submit-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 255, 136, 0.4);
+        }
+        .submit-btn:disabled {
+            background: #444;
+            color: #888;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+        .stats-summary {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(145deg, #1a1a1a, #0d0d0d);
+            border-top: 1px solid #333;
+            padding: 15px;
+            text-align: center;
+            font-size: 14px;
+            color: #888;
+        }
+        .stats-summary span {
+            color: #00ff88;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="progress-bar" id="progressBar"></div>
+
+    <div class="header">
+        <h1>题库练习</h1>
+        <p style="color: #666;">共 {{totalQuestions}} 道题目</p>
+    </div>
+
+    <div class="score-board">
+        <div class="score-item">得分: <span id="score">0</span></div>
+        <div class="score-item">已完成: <span id="answered">0</span> / {{totalQuestions}}</div>
+        <div class="score-item">正确率: <span id="accuracy">0%</span></div>
+    </div>
+
+    <div id="questions">
+        {{#each items}}
+        <div class="question-card" data-id="{{@index}}" data-type="{{questionType}}">
+            <div class="question-header">
+                <div class="question-title">{{@index}}. {{question}}</div>
+                <div class="question-type {{questionType}}">
+                    {{#if (eq questionType "single_choice")}}单选题
+                    {{else if (eq questionType "multiple_choice")}}多选题
+                    {{else}}判断题{{/if}}
+                </div>
+            </div>
+            <div class="options">
+                {{#each options}}
+                <div class="option" data-value="{{this}}">
+                    <span class="option-text">{{this}}</span>
+                </div>
+                {{/each}}
+            </div>
+            <button class="submit-btn" onclick="checkAnswer({{@index}})">提交答案</button>
+            <div class="answer-section" id="answer-{{@index}}">
+                <p><strong>正确答案：</strong>{{answer}}</p>
+                {{#if explanation}}
+                <p><strong>解析：</strong>{{explanation}}</p>
+                {{/if}}
+            </div>
+        </div>
+        {{/each}}
+    </div>
+
+    <div class="stats-summary" id="statsSummary" style="display: none;">
+        练习完成！<span id="finalScore"></span>
+    </div>
+
+    <script>
+        const questionsData = [
+            {{#each items}}
+            {
+                index: {{@index}},
+                question: "{{question}}",
+                questionType: "{{questionType}}",
+                options: [{{#each options}}"{{this}}",{{/each}}],
+                answer: "{{answer}}",
+                explanation: "{{explanation}}"
+            }{{#unless @last}},{{/unless}}
+            {{/each}}
+        ];
+
+        let userAnswers = {};
+        let score = 0;
+        let answered = 0;
+
+        function selectSingleOption(questionIndex, value, element) {
+            const options = document.querySelectorAll('[data-id="' + questionIndex + '"] .option');
+            options.forEach(opt => opt.classList.remove('selected'));
+            element.classList.add('selected');
+            userAnswers[questionIndex] = [value];
+        }
+
+        function selectMultipleOption(questionIndex, value, element) {
+            element.classList.toggle('selected');
+
+            if (!userAnswers[questionIndex]) {
+                userAnswers[questionIndex] = [];
+            }
+
+            const index = userAnswers[questionIndex].indexOf(value);
+            if (index > -1) {
+                userAnswers[questionIndex].splice(index, 1);
+            } else {
+                userAnswers[questionIndex].push(value);
+            }
+        }
+
+        function checkAnswer(questionIndex) {
+            const selected = userAnswers[questionIndex];
+            if (!selected || selected.length === 0) {
+                alert('请先选择答案！');
+                return;
+            }
+
+            const questionData = questionsData[questionIndex];
+            const correctAnswers = questionData.answer.split(',').map(a => a.trim());
+            const selectedAnswers = Array.isArray(selected) ? selected : [selected];
+
+            const isCorrect = correctAnswers.length === selectedAnswers.length &&
+                            correctAnswers.every(a => selectedAnswers.includes(a));
+
+            const options = document.querySelectorAll('[data-id="' + questionIndex + '"] .option');
+            options.forEach(opt => {
+                const optValue = opt.dataset.value;
+                if (correctAnswers.includes(optValue)) {
+                    opt.classList.add('correct');
+                } else if (opt.classList.contains('selected')) {
+                    opt.classList.add('wrong');
+                }
+            });
+
+            document.getElementById('answer-' + questionIndex).style.display = 'block';
+            document.querySelector('[data-id="' + questionIndex + '"] .submit-btn').disabled = true;
+
+            options.forEach(opt => opt.style.pointerEvents = 'none');
+
+            if (isCorrect) score++;
+            answered++;
+
+            updateStats();
+        }
+
+        function updateStats() {
+            document.getElementById('score').textContent = score;
+            document.getElementById('answered').textContent = answered;
+
+            const accuracy = answered > 0 ? Math.round((score / answered) * 100) : 0;
+            document.getElementById('accuracy').textContent = accuracy + '%';
+
+            document.getElementById('progressBar').style.width =
+                (answered / {{totalQuestions}} * 100) + '%';
+
+            if (answered >= {{totalQuestions}}) {
+                showFinalStats();
+            }
+        }
+
+        function showFinalStats() {
+            const summary = document.getElementById('statsSummary');
+            const accuracy = Math.round((score / {{totalQuestions}}) * 100);
+
+            let message = '';
+            if (accuracy === 100) {
+                message = '太棒了！全部正确！';
+            } else if (accuracy >= 80) {
+                message = '做得很好！继续保持！';
+            } else if (accuracy >= 60) {
+                message = '还需努力，加油！';
+            } else {
+                message = '建议复习相关知识！';
+            }
+
+            document.getElementById('finalScore').textContent =
+                message + ' 得分: ' + score + ' / {{totalQuestions}} (' + accuracy + '%)';
+            summary.style.display = 'block';
+        }
+
+        document.querySelectorAll('.option').forEach(option => {
+            option.addEventListener('click', function() {
+                const card = this.closest('.question-card');
+                const questionIndex = parseInt(card.dataset.id);
+                const questionType = card.dataset.type;
+                const value = this.dataset.value;
+
+                if (questionType === 'single_choice' || questionType === 'true_false') {
+                    selectSingleOption(questionIndex, value, this);
+                } else if (questionType === 'multiple_choice') {
+                    selectMultipleOption(questionIndex, value, this);
+                }
+            });
+        });
+    </script>
+</body>
+</html>
