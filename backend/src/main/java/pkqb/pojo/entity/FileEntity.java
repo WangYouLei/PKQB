@@ -1,0 +1,31 @@
+package pkqb.pojo.entity;
+
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.Data;
+
+import java.time.LocalDateTime;
+
+/**
+ * HTML文件实体类
+ */
+@Data
+@TableName("file")
+public class FileEntity {
+
+    @TableId(type = IdType.AUTO)
+    private Long id;
+
+    private Long userId;
+
+    private String fileName;
+
+    private String minioKey;
+
+    private Boolean isPublic;
+
+    private LocalDateTime createTime;
+
+    private LocalDateTime updateTime;
+}
