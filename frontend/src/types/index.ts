@@ -99,3 +99,11 @@ export interface RubricQuestion {
   calculationStepsJson?: string
   orderIndex?: number
 }
+
+/** Rubric生成HTML响应 */
+export interface RubricGenerateResponse {
+  fileId: number
+  fileName: string
+  downloadUrl: string
+  createTime: string
+}

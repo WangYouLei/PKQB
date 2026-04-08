@@ -19,6 +19,8 @@ public class FileEntity {
 
     private Long userId;
 
+    private Long rubricId;
+
     private String fileName;
 
     private String minioKey;

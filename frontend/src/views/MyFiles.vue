@@ -61,7 +61,8 @@
           </div>
           <div class="rubric-actions">
             <button class="btn btn-sm btn-secondary" @click.stop="showEditRubric(rubric)">修改</button>
-            <span class="rubric-arrow">&#8250;</span>
+            <button class="btn btn-sm btn-primary" @click.stop="handleGenerateHtml(rubric)">生成HTML</button>
+            <span class="rubric-arrow">›</span>
           </div>
         </div>
       </div>
@@ -264,7 +265,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { apiGetMyFiles, apiGetPresignedUrl, apiGetMyRubrics, apiGetQuestionsByRubricId, apiUpdateRubric } from '@/api'
+import { apiGetMyFiles, apiGetPresignedUrl, apiGetMyRubrics, apiGetQuestionsByRubricId, apiUpdateRubric, apiGenerateRubricHtml } from '@/api'
 import { useUserStore } from '@/stores/user'
 import type { HtmlFileItem, RubricItem, RubricQuestion } from '@/types'
 import FileCard from '@/components/FileCard.vue'
@@ -394,6 +395,23 @@ async function handleOpenRubric(rubric: RubricItem) {
     }
   } catch (e) { console.error('获取题目列表失败', e) }
   finally { questionsLoading.value = false }
+}
+
+// 生成HTML文件
+async function handleGenerateHtml(rubric: RubricItem) {
+  try {
+    const res = await apiGenerateRubricHtml(rubric.id, rubric.title + '.html', false)
+    if (res.code === 200) {
+      alert('HTML生成成功！文件已保存到您的文件列表中。')
+      // 刷新文件列表
+      await loadFiles()
+    } else {
+      alert(res.message || '生成失败')
+    }
+  } catch (e) {
+    console.error('生成HTML失败', e)
+    alert('生成失败')
+  }
 }
 
 // 判断题目是否有选项

@@ -12,9 +12,10 @@ public interface SpringAiAlibabaService {
      * 添加文档
      *
      * @param file 文档文件
+     * @param userId 用户ID
      * @return 添加结果
      */
-    Result<String> addDocuments(MultipartFile file);
+    Result<String> addDocuments(MultipartFile file, Long userId);
 
 
     /**
@@ -25,7 +26,7 @@ public interface SpringAiAlibabaService {
      * @param userId    用户ID
      * @return 回答结果
      */
-    Flux<String> ragQuery(String query, String sessionId, String userId);
+    Flux<String> ragQuery(String query, String sessionId, Long userId);
 
     /**
      * 获取历史对话
@@ -44,7 +45,7 @@ public interface SpringAiAlibabaService {
      * @param userId    用户ID
      * @return 回答结果
      */
-    Flux<String> query(String query, String sessionId, String userId);
+    Flux<String> query(String query, String sessionId, Long userId);
 
 
 
@@ -70,7 +71,8 @@ public interface SpringAiAlibabaService {
      * 上传题库文件
      *
      * @param file 文件
+     * @param userId 用户ID
      * @return 添加结果
      */
-    Result<List<AiRubric>> handleRubricFile(MultipartFile file);
+    Result<List<AiRubric>> handleRubricFile(MultipartFile file, Long userId);
 }

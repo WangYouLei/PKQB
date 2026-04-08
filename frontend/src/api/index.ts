@@ -1,5 +1,5 @@
 import { post, get, del, put } from './request'
-import type { Result, RegisterRequest, LoginRequest, LoginResponse, HtmlFileItem, PresignedUrlResponse, QuestionItem, RubricItem, RubricQuestion } from '@/types'
+import type { Result, RegisterRequest, LoginRequest, LoginResponse, HtmlFileItem, PresignedUrlResponse, QuestionItem, RubricItem, RubricQuestion, RubricGenerateResponse } from '@/types'
 
 export const apiRegister = async (data: RegisterRequest) => {
   const res = await post<Result<void>>('/auth/register', data)
@@ -137,5 +137,15 @@ export const apiGetQuestionsByRubricId = async (rubricId: number) => {
 /** 修改试卷 */
 export const apiUpdateRubric = async (data: { id: number; title: string; isPublic: boolean }) => {
   const res = await put<Result<void>>('/rubric/update', data)
+  return res
+}
+
+/** 根据Rubric生成HTML文件 */
+export const apiGenerateRubricHtml = async (rubricId: number, fileName?: string, isPublic?: boolean) => {
+  const res = await post<Result<RubricGenerateResponse>>('/rubric/generate-html', {
+    rubricId,
+    fileName,
+    isPublic
+  })
   return res
 }

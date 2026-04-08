@@ -1,6 +1,8 @@
 package pkqb.service;
 
 import pkqb.common.Result;
+import pkqb.pojo.dto.RubricGenerateRequest;
+import pkqb.pojo.dto.RubricGenerateResponse;
 import pkqb.pojo.dto.RubricRequest;
 import pkqb.pojo.entity.QuestionEntity;
 import pkqb.pojo.entity.RubricEntity;
@@ -76,4 +78,12 @@ public interface RubricService {
      * @return 结果
      */
     Result<?> deleteQuestion(Long questionId, Long userId);
+
+    /**
+     * 根据Rubric生成HTML文件并保存到MinIO，同时保存记录到file表
+     * @param request 生成请求（包含rubricId）
+     * @param userId 当前用户ID
+     * @return 结果（包含文件信息）
+     */
+    Result<RubricGenerateResponse> generateHtml(RubricGenerateRequest request, Long userId);
 }

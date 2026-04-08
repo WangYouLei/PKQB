@@ -4,6 +4,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 import pkqb.common.Result;
+import pkqb.pojo.dto.RubricGenerateRequest;
+import pkqb.pojo.dto.RubricGenerateResponse;
 import pkqb.pojo.dto.RubricRequest;
 import pkqb.pojo.entity.QuestionEntity;
 import pkqb.pojo.entity.RubricEntity;
@@ -122,5 +124,19 @@ public class RubricController {
     public Result<?> deleteQuestion(@PathVariable Long questionId, HttpServletRequest request) {
         Long userId = (Long) request.getAttribute("userId");
         return rubricService.deleteQuestion(questionId, userId);
+    }
+
+    /**
+     * 根据Rubric生成HTML文件
+     * @param request 生成请求
+     * @param httpRequest HttpServletRequest
+     * @return 结果
+     */
+    @PostMapping("/generate-html")
+    public Result<RubricGenerateResponse> generateHtml(
+            @RequestBody RubricGenerateRequest request,
+            HttpServletRequest httpRequest) {
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        return rubricService.generateHtml(request, userId);
     }
 }

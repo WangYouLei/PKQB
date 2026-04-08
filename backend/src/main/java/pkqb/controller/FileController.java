@@ -22,7 +22,7 @@ public class FileController {
     private final FileService fileService;
 
     /**
-     * 上传 文件
+     * 上传文件
      */
     @PostMapping("/upload")
     public Result<FileResponse> upload(

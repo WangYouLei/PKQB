@@ -27,21 +27,27 @@ public class SpringAiAlibabaController {
     /**
      * 添加文档（知识库）
      * @param file 文档文件
+     * @param userId 用户ID
      * @return 添加结果
      */
     @PostMapping(value = "/add-documentsFile")
-    public Result<String> addDocumentsFile(@RequestParam("file") MultipartFile file) {
-        return saaService.addDocuments(file);
+    public Result<String> addDocumentsFile(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam("userId") Long userId) {
+        return saaService.addDocuments(file, userId);
     }
 
 
     /**处理上传的"问题"文件
-     * @param file
-     * @return
+     * @param file 上传的文件
+     * @param userId 用户ID
+     * @return 解析结果
      */
     @PostMapping("/handle-rubricFile")
-    public Result<List<AiRubric>> handleRubricFile(@RequestParam("file") MultipartFile file) {
-        return saaService.handleRubricFile(file);
+    public Result<List<AiRubric>> handleRubricFile(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam("userId") Long userId) {
+        return saaService.handleRubricFile(file, userId);
     }
 
     /**
@@ -54,7 +60,7 @@ public class SpringAiAlibabaController {
     @GetMapping(value = "/query", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<String> query(@RequestParam("query") String query,
                               @RequestParam("sessionId")String sessionId,
-                              @RequestParam("userId") String userId
+                              @RequestParam("userId") Long userId
     ) {
         return saaService.query(query, sessionId, userId);
     }
@@ -71,8 +77,7 @@ public class SpringAiAlibabaController {
             @RequestParam String query,
             @RequestParam(value = "sessionId", defaultValue =
                     "student_session") String sessionId,
-            @RequestParam(value = "userId", defaultValue = "default_userId")
-            String userId) {
+            @RequestParam(value = "userId") Long userId) {
         return saaService.ragQuery(query, sessionId, userId);
     }
 
@@ -84,16 +89,16 @@ public class SpringAiAlibabaController {
      */
     @GetMapping(value = "/get-historyList")
     public Result<List<Object>> getHistory(
-            @RequestParam(value = "userId") String userId,
+            @RequestParam(value = "userId") Long userId,
             @RequestParam(value = "type") String type){
-        return saaService.getHistory(userId, type);
+        return saaService.getHistory(userId.toString(), type);
     }
 
     @GetMapping(value = "/get-history-by-sessionId")
     public Result<Object> getHistoryById(
             @RequestParam(value = "sessionId") String sessionId,
-            @RequestParam(value = "userId") String userId,
+            @RequestParam(value = "userId") Long userId,
             @RequestParam(value = "type") String type){
-        return saaService.getHistoryBySessionId(sessionId, userId, type);
+        return saaService.getHistoryBySessionId(sessionId, userId.toString(), type);
     }
 }

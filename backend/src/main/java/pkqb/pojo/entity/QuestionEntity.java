@@ -39,3 +39,4 @@ public class QuestionEntity {
 
     private Integer deleted;
 }
+

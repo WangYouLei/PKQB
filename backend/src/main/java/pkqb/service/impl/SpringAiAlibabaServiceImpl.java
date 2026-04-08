@@ -23,6 +23,7 @@ import pkqb.common.Result;
 import pkqb.enums.RubricEnum;
 import pkqb.enums.RubricQuestionTypeEnum;
 import pkqb.pojo.dto.AiRubric;
+import pkqb.service.RateLimitService;
 import pkqb.service.SpringAiAlibabaService;
 import reactor.core.publisher.Flux;
 import java.io.ByteArrayInputStream;
@@ -32,6 +33,27 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static org.springframework.ai.chat.memory.ChatMemory.CONVERSATION_ID;
+
+/**
+ * AI功能次数限制常量
+ */
+class RateLimitConstants {
+    // AI对话: 每天30次
+    public static final String FEATURE_CHAT = "chat";
+    public static final int CHAT_LIMIT = 30;
+
+    // 知识库问答: 每天30次
+    public static final String FEATURE_RAG = "rag";
+    public static final int RAG_LIMIT = 30;
+
+    // 上传知识库: 每天10次
+    public static final String FEATURE_KNOWLEDGE = "knowledge";
+    public static final int KNOWLEDGE_LIMIT = 10;
+
+    // 上传题目: 每天5次
+    public static final String FEATURE_RUBRIC = "rubric";
+    public static final int RUBRIC_LIMIT = 5;
+}
 
 
 @Service
@@ -51,6 +73,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
 
     private final ObjectMapper objectMapper;
 
+    private final RateLimitService rateLimitService;
+
     // 题目类型枚举映射，用于动态生成prompt和转换
     private static final StringBuilder TYPE_DESC = new StringBuilder();
     static {
@@ -67,7 +91,13 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             %s
 
             1.必须以纯JSON数组格式返回，不要包含任何其他文字或说明。直接返回JSON数组，不要用对象包裹。
-            2.只从文档内容中提取信息，文档中有的答案和解析就提取。
+            2.从文档内容中提取信息，文档中有的答案和解析就提取。
+            3.如果文档中没有答案、解析或计算步骤，请根据题目内容自行生成合理的答案、解析和计算步骤。
+               - 单选题/多选题：根据题目内容推断正确答案，简要题目解析
+               - 填空题：根据题目内容推断正确答案
+               - 判断题：根据题目内容判断对错，给出解析
+               - 简答题：给出合理的答案要点
+               - 计算题：给出正确答案和详细的计算步骤
            
             JSON格式要求（直接返回数组，不要用对象包裹）：
             [
@@ -146,7 +176,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                                       @Qualifier("milvusChatClient") ChatClient milvusChatClient,
                                       RedisTemplate<String,Object> redisTemplate,
                                       StringRedisTemplate stringRedisTemplate,
-                                      ObjectMapper objectMapper) {
+                                      ObjectMapper objectMapper,
+                                      RateLimitService rateLimitService) {
         this.vectorStore = vectorStore;
         this.defaultChatClient = defaultChatClient;
         this.chatClient = chatClient;
@@ -154,13 +185,20 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         this.redisTemplate = redisTemplate;
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
+        this.rateLimitService = rateLimitService;
     }
 
     @Override
-    public Result<String> addDocuments(MultipartFile file) {
-        log.info("[知识库-文件上传] 开始处理文件: {}, 大小: {} bytes",
-                file.getOriginalFilename(), file.getSize());
+    public Result<String> addDocuments(MultipartFile file, Long userId) {
+        log.info("[知识库-文件上传] 开始处理文件: {}, 大小: {} bytes, userId={}",
+                file.getOriginalFilename(), file.getSize(), userId);
         try {
+            // 检查速率限制 - 上传知识库每天10次
+            Result<?> limitCheck = rateLimitService.checkLimit(userId, RateLimitConstants.FEATURE_KNOWLEDGE, RateLimitConstants.KNOWLEDGE_LIMIT);
+            if (limitCheck != null) {
+                log.warn("[知识库-文件上传] 用户 {} 超过每日限制", userId);
+                return Result.error(limitCheck.getMessage());
+            }
 
             List<Document> documents = getDocuments(file);
             if(documents == null || documents.isEmpty()){
@@ -172,7 +210,12 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             String content = documents.stream()
                     .map(Document::getText)
                     .collect(Collectors.joining("\n"));
-            return processDocumentsContent(content, "文件上传");
+            Result<String> result = processDocumentsContent(content, "文件上传");
+            // 上传成功后增加计数
+            if (result.getCode() == 200) {
+                rateLimitService.incrementUsage(userId, RateLimitConstants.FEATURE_KNOWLEDGE);
+            }
+            return result;
         } catch (Exception e) {
             log.error("[知识库-文件上传] 上传到向量数据库时发生错误: ", e);
             return Result.error("上传文件失败，请从新上传");
@@ -212,10 +255,17 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     }
 
     @Override
-    public Flux<String> ragQuery(String query, String sessionId, String userId) {
+    public Flux<String> ragQuery(String query, String sessionId, Long userId) {
         log.info("[RAG查询] userId={}, sessionId={}, query={}", userId, sessionId, query);
+        
+        // 检查速率限制 - 知识库问答每天30次
+        Result<?> limitCheck = rateLimitService.checkLimit(userId, RateLimitConstants.FEATURE_RAG, RateLimitConstants.RAG_LIMIT);
+        if (limitCheck != null) {
+            return Flux.error(new RuntimeException(limitCheck.getMessage()));
+        }
+        
         // 记录会话ID
-        recordSessionId(userId, sessionId, "rag");
+        recordSessionId(userId.toString(), sessionId, "rag");
         try {
             log.info("[RAG查询] 开始流式查询，conversationId={}", "spring_ai_alibaba_chat_memory" + "history:rag:" + userId + ":" + sessionId);
             // 使用QuestionAnswerAdvisor实现RAG功能
@@ -231,7 +281,11 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                     )
                     .stream()
                     .content()
-                    .doOnComplete(() -> log.info("[RAG查询] 流式查询完成，sessionId={}", sessionId))
+                    .doOnComplete(() -> {
+                        log.info("[RAG查询] 流式查询完成，sessionId={}", sessionId);
+                        // 成功后增加计数
+                        rateLimitService.incrementUsage(userId, RateLimitConstants.FEATURE_RAG);
+                    })
                     .doOnError(e -> log.error("[RAG查询] 流式查询异常，sessionId={}", sessionId, e));
         } catch (Exception e) {
             log.error("[RAG查询] RAG查询时发生错误: ", e);
@@ -255,10 +309,17 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     }
 
     @Override
-    public Flux<String> query(String query, String sessionId, String userId) {
+    public Flux<String> query(String query, String sessionId, Long userId) {
         log.info("[AI对话] userId={}, sessionId={}, query={}", userId, sessionId, query);
+        
+        // 检查速率限制 - AI对话每天30次
+        Result<?> limitCheck = rateLimitService.checkLimit(userId, RateLimitConstants.FEATURE_CHAT, RateLimitConstants.CHAT_LIMIT);
+        if (limitCheck != null) {
+            return Flux.error(new RuntimeException(limitCheck.getMessage()));
+        }
+        
         // 记录会话ID
-        recordSessionId(userId, sessionId, "chat");
+        recordSessionId(userId.toString(), sessionId, "chat");
         try {
             log.info("[AI对话] 开始流式查询，conversationId={}", "spring_ai_alibaba_chat_memory:history:chat:" + userId + ":" + sessionId);
             return chatClient
@@ -269,7 +330,11 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                     .user(query)
                     .stream()
                     .content()
-                    .doOnComplete(() -> log.info("[AI对话] 流式查询完成，sessionId={}", sessionId))
+                    .doOnComplete(() -> {
+                        log.info("[AI对话] 流式查询完成，sessionId={}", sessionId);
+                        // 成功后增加计数
+                        rateLimitService.incrementUsage(userId, RateLimitConstants.FEATURE_CHAT);
+                    })
                     .doOnError(e -> log.error("[AI对话] 流式查询异常，sessionId={}", sessionId, e));
         } catch (Exception e) {
             log.error("[AI对话] 查询时发生错误", e);
@@ -394,10 +459,16 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     }
 
     @Override
-    public Result<List<AiRubric>> handleRubricFile(MultipartFile file) {
-        log.info("[题目文件解析] 开始处理文件: {}, 大小: {} bytes",
-                file.getOriginalFilename(), file.getSize());
+    public Result<List<AiRubric>> handleRubricFile(MultipartFile file, Long userId) {
+        log.info("[题目文件解析] 开始处理文件: {}, 大小: {} bytes, userId={}",
+                file.getOriginalFilename(), file.getSize(), userId);
         try {
+            // 检查速率限制 - 上传题目每天5次
+            Result<?> limitCheck = rateLimitService.checkLimit(userId, RateLimitConstants.FEATURE_RUBRIC, RateLimitConstants.RUBRIC_LIMIT);
+            if (limitCheck != null) {
+                return Result.error(limitCheck.getMessage());
+            }
+            
             // 1. 读取文件内容
             List<Document> documents = getDocuments(file);
             if (documents == null || documents.isEmpty()) {
@@ -450,6 +521,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             }
             
             log.info("[题目文件解析] 解析完成，共提取 {} 道题目", aiRubrics.size());
+            // 上传成功后增加计数
+            rateLimitService.incrementUsage(userId, RateLimitConstants.FEATURE_RUBRIC);
             return Result.success(aiRubrics);
             
         } catch (Exception e) {
