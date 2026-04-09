@@ -1,6 +1,5 @@
 package pkqb.service.impl;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -13,6 +12,7 @@ import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.data.redis.core.BoundListOperations;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -20,6 +20,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import pkqb.common.Result;
+import pkqb.common.RateLimitConstants;
 import pkqb.enums.RubricEnum;
 import pkqb.enums.RubricQuestionTypeEnum;
 import pkqb.pojo.dto.AiRubric;
@@ -33,28 +34,6 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static org.springframework.ai.chat.memory.ChatMemory.CONVERSATION_ID;
-
-/**
- * AI功能次数限制常量
- */
-class RateLimitConstants {
-    // AI对话: 每天30次
-    public static final String FEATURE_CHAT = "chat";
-    public static final int CHAT_LIMIT = 30;
-
-    // 知识库问答: 每天30次
-    public static final String FEATURE_RAG = "rag";
-    public static final int RAG_LIMIT = 30;
-
-    // 上传知识库: 每天10次
-    public static final String FEATURE_KNOWLEDGE = "knowledge";
-    public static final int KNOWLEDGE_LIMIT = 10;
-
-    // 上传题目: 每天5次
-    public static final String FEATURE_RUBRIC = "rubric";
-    public static final int RUBRIC_LIMIT = 5;
-}
-
 
 @Service
 @Slf4j
@@ -484,23 +463,25 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             log.info("[题目文件解析] 文件解析成功，内容长度: {}", content.length());
             
             // 3. 使用AI解析题目内容
-            String jsonStr;
             String prompt = getQuestionAnalysisPrompt(content);
             
             try {
                 log.info("[题目文件解析] 开始调用AI解析题目");
-                String result = defaultChatClient.prompt()
+                List<AiRubric> aiRubrics = defaultChatClient.prompt()
                         .user(prompt)
                         .call()
-                        .content();
-                jsonStr = result.trim();
-                // 去除AI可能返回的markdown代码块标记
-                if (jsonStr.startsWith("```")) {
-                    jsonStr = jsonStr.replaceAll("^```(?:json)?\\s*", "").replaceAll("\\s*```$", "").trim();
-                }
-                // 验证JSON是否有效
-                objectMapper.readTree(jsonStr);
+                        .entity(new ParameterizedTypeReference<>() {});
                 log.info("[题目文件解析] AI解析完成");
+                
+                if (aiRubrics == null || aiRubrics.isEmpty()) {
+                    log.warn("[题目文件解析] AI返回为空");
+                    return Result.error("AI解析结果为空");
+                }
+                
+                log.info("[题目文件解析] 解析完成，共提取 {} 道题目", aiRubrics.size());
+                // 上传成功后增加计数
+                rateLimitService.incrementUsage(userId, RateLimitConstants.FEATURE_RUBRIC);
+                return Result.success(aiRubrics);
             } catch (Exception e) {
                 log.warn("[题目文件解析] AI解析超时或失败: {}，开始执行兜底策略", e.getMessage());
                 // 兜底策略：使用本地规则解析
@@ -509,39 +490,21 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                     log.warn("[题目文件解析] 兜底解析也失败");
                     return Result.error("解析题目失败，请检查文件内容格式");
                 }
-                jsonStr = objectMapper.writeValueAsString(maps);
+                
+                // 兜底策略返回Map列表，前端需要处理
+                @SuppressWarnings("unchecked")
+                List<AiRubric> aiRubrics = (List<AiRubric>) (List<?>) maps;
+                log.info("[题目文件解析] 兜底解析完成，共 {} 道题目", aiRubrics.size());
+                rateLimitService.incrementUsage(userId, RateLimitConstants.FEATURE_RUBRIC);
+                return Result.success(aiRubrics);
             }
-            
-            // 4. 将JSON字符串转换为List<AiRubric>
-            List<AiRubric> aiRubrics = parseJsonToRubrics(jsonStr);
-            
-            if (aiRubrics.isEmpty()) {
-                log.warn("[题目文件解析] 未能解析出任何题目");
-                return Result.error("未能解析出任何题目");
-            }
-            
-            log.info("[题目文件解析] 解析完成，共提取 {} 道题目", aiRubrics.size());
-            // 上传成功后增加计数
-            rateLimitService.incrementUsage(userId, RateLimitConstants.FEATURE_RUBRIC);
-            return Result.success(aiRubrics);
             
         } catch (Exception e) {
             log.error("[题目文件解析] 处理文件时发生错误: ", e);
             return Result.error("处理文件失败: " + e.getMessage());
         }
     }
-    
-    /**
-     * 将JSON字符串转换为List<AiRubric>
-     */
-    private List<AiRubric> parseJsonToRubrics(String jsonStr) {
-        try {
-            return objectMapper.readValue(jsonStr, new TypeReference<List<AiRubric>>() {});
-        } catch (Exception e) {
-            log.error("[题目转换] JSON解析失败: {}", e.getMessage());
-            return new ArrayList<>();
-        }
-    }
+
 
 
 

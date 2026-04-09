@@ -13,7 +13,7 @@ public class FileResponse {
     private Long id;
     private Long userId;
     private String fileName;
-    private Boolean isPublic;
+    private Boolean isPrivate;
     private String creatorName;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;

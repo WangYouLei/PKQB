@@ -25,7 +25,7 @@ public class RubricEntity {
 
     private String createStudentNo;
 
-    private Boolean isPublic;
+    private Boolean isPrivate;
 
     private Integer questionCount;
 

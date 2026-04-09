@@ -51,7 +51,7 @@ public class RubricServiceImpl implements RubricService {
             rubricEntity.setClassName(rubricRequest.getClassName());
             rubricEntity.setCreateId(rubricRequest.getCreateId());
             rubricEntity.setCreateStudentNo(rubricRequest.getCreateStudentNo());
-            rubricEntity.setIsPublic(rubricRequest.getIsPublic());
+            rubricEntity.setIsPrivate(rubricRequest.getIsPrivate());
             rubricEntity.setQuestionCount(rubricRequest.getRubrics() != null ? rubricRequest.getRubrics().size() : 0);
             rubricEntity.setDeleted(0);
             
@@ -116,7 +116,7 @@ public class RubricServiceImpl implements RubricService {
     public Result<List<RubricEntity>> getPublicRubrics(Long excludeUserId) {
         try {
             LambdaQueryWrapper<RubricEntity> wrapper = new LambdaQueryWrapper<>();
-            wrapper.eq(RubricEntity::getIsPublic, true)
+            wrapper.eq(RubricEntity::getIsPrivate, true)
                    .eq(RubricEntity::getDeleted, 0)
                    .ne(RubricEntity::getCreateId, excludeUserId)  // 排除当前用户
                    .orderByDesc(RubricEntity::getCreateTime);
@@ -157,7 +157,7 @@ public class RubricServiceImpl implements RubricService {
             
             rubric.setTitle(rubricRequest.getTitle());
             rubric.setClassName(rubricRequest.getClassName());
-            rubric.setIsPublic(rubricRequest.getIsPublic());
+            rubric.setIsPrivate(rubricRequest.getIsPrivate());
             rubric.setUpdateTime(LocalDateTime.now());
             rubricMapper.updateById(rubric);
             
@@ -329,7 +329,7 @@ public class RubricServiceImpl implements RubricService {
             fileEntity.setRubricId(request.getRubricId());
             fileEntity.setFileName(fileName);
             fileEntity.setMinioKey(objectKey);
-            fileEntity.setIsPublic(request.getIsPublic() != null ? request.getIsPublic() : false);
+            fileEntity.setIsPrivate(request.getIsPrivate() != null ? request.getIsPrivate() : false);
             fileMapper.insert(fileEntity);
 
             // 6. 返回结果

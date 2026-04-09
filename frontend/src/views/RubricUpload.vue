@@ -284,7 +284,7 @@ async function handleFileParse() {
   parsing.value = true
   editMode.value = false
   try {
-    const res = await apiAddRubricFile(selectedFile.value)
+    const res = await apiAddRubricFile(selectedFile.value, userStore.userId!)
     if (res.code === 200 && res.data) {
       // 后端直接返回数组对象，不需要再 JSON.parse
       const questionsArr = Array.isArray(res.data) ? res.data : []

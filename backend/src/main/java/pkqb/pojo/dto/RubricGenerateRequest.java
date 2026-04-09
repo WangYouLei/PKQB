@@ -19,7 +19,7 @@ public class RubricGenerateRequest {
     private String fileName;
 
     /**
-     * 是否公开（可选，默认false）
+     * 是否私有 (true=公开, false=不公开)
      */
-    private Boolean isPublic;
+    private Boolean isPrivate;
 }

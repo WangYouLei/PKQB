@@ -14,7 +14,7 @@ public interface FileService {
     /**
      * 上传文件
      */
-    FileResponse uploadFile(MultipartFile file, Long userId,String fileName, boolean isPublic);
+    FileResponse uploadFile(MultipartFile file, Long userId,String fileName, boolean isPrivate);
 
     /**
      * 获取文件预签名下载 URL

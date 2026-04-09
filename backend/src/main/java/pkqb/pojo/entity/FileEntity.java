@@ -25,7 +25,7 @@ public class FileEntity {
 
     private String minioKey;
 
-    private Boolean isPublic;
+    private Boolean isPrivate;
 
     private LocalDateTime createTime;
 

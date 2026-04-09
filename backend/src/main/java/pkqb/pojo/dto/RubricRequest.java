@@ -16,8 +16,8 @@ public class RubricRequest {
     private Long createId;
     //创建者学号
     private String createStudentNo;
-    //是否公开
-    private Boolean isPublic;
+    //是否私有 (true=公开, false=不公开)
+    private Boolean isPrivate;
     //题目
     private List<AiRubric> rubrics;
 }

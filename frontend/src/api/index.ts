@@ -46,9 +46,10 @@ export const apiGetClassPublicFiles = async () => {
 // ========== AI 相关 API ==========
 
 /** 上传文档到知识库（文件） */
-export const apiAddDocumentsFile = async (file: File) => {
+export const apiAddDocumentsFile = async (file: File, userId: number) => {
   const formData = new FormData()
   formData.append('file', file)
+  formData.append('userId', String(userId))
   const { default: request } = await import('./request')
   const res = await request.post('/ai/add-documentsFile', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
@@ -68,9 +69,10 @@ export const apiAddDocuments = async (content: string) => {
 }
 
 /** 上传题目文件解析 */
-export const apiAddRubricFile = async (file: File) => {
+export const apiAddRubricFile = async (file: File, userId: number) => {
   const formData = new FormData()
   formData.append('file', file)
+  formData.append('userId', String(userId))
   const { default: request } = await import('./request')
   const res = await request.post('/ai/handle-rubricFile', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },

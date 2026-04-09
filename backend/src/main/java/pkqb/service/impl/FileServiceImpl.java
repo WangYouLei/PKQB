@@ -34,7 +34,7 @@ public class FileServiceImpl implements FileService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public FileResponse uploadFile(MultipartFile file, Long userId,String fileName, boolean isPublic) {
+    public FileResponse uploadFile(MultipartFile file, Long userId,String fileName, boolean isPrivate) {
         // 生成唯一对象路径
         String originalFilename = file.getOriginalFilename();
         String extension = originalFilename != null && originalFilename.contains(".")
@@ -54,7 +54,7 @@ public class FileServiceImpl implements FileService {
         entity.setUserId(userId);
         entity.setFileName(fileName);
         entity.setMinioKey(objectKey);
-        entity.setIsPublic(isPublic);
+        entity.setIsPrivate(isPrivate);
 
         fileMapper.insert(entity);
 
@@ -69,7 +69,7 @@ public class FileServiceImpl implements FileService {
         }
 
         // 权限校验：只能访问自己的文件或公开文件
-        if (!entity.getUserId().equals(userId) && !Boolean.TRUE.equals(entity.getIsPublic())) {
+        if (!entity.getUserId().equals(userId) && !Boolean.TRUE.equals(entity.getIsPrivate())) {
             throw new RuntimeException("无权访问该文件");
         }
 
@@ -132,7 +132,7 @@ public class FileServiceImpl implements FileService {
 
         // 获取该班级中所有用户的公开文件（排除当前用户）
         LambdaQueryWrapper<FileEntity> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(FileEntity::getIsPublic, true)
+        wrapper.eq(FileEntity::getIsPrivate, true)
                .in(FileEntity::getUserId, classUserIds)
                .ne(FileEntity::getUserId, userId)  // 排除当前用户
                .orderByDesc(FileEntity::getCreateTime);
@@ -170,7 +170,7 @@ public class FileServiceImpl implements FileService {
         response.setId(entity.getId());
         response.setUserId(entity.getUserId());
         response.setFileName(entity.getFileName());
-        response.setIsPublic(entity.getIsPublic());
+        response.setIsPrivate(entity.getIsPrivate());
         response.setCreateTime(entity.getCreateTime());
         response.setUpdateTime(entity.getUpdateTime());
         

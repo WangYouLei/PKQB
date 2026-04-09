@@ -19,9 +19,9 @@ spring:
   servlet:
     multipart:
       # 最大文件大小   springboot默认是10mb
-      max-file-size: 50MB
+      max-file-size: 15MB
       # 最大请求大小
-      max-request-size: 50MB
+      max-request-size: 15MB
   ai:
     # 重试配置  失败后，再重试一次（所以是2）
     retry:

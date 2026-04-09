@@ -29,9 +29,9 @@ public class FileController {
             @RequestParam("file") MultipartFile file,
             @RequestAttribute("userId") Long userId,
             @RequestParam("file_name") String fileName,
-            @RequestParam("is_public") boolean isPublic
+            @RequestParam("is_private") boolean isPrivate
     ) {
-        FileResponse response = fileService.uploadFile(file, userId,fileName,isPublic);
+        FileResponse response = fileService.uploadFile(file, userId,fileName,isPrivate);
         return Result.success("上传成功", response);
     }
 
