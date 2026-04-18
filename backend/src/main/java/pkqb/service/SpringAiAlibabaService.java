@@ -94,4 +94,16 @@ public interface SpringAiAlibabaService {
      * @return 删除结果
      */
     Result<Boolean> deleteHistory(String sessionId, Long userId, String type);
+
+    /**
+     * AI解答题目 - 生成答案、解析或计算步骤
+     *
+     * @param questionText 题目内容
+     * @param questionType 题目类型
+     * @param optionsJson  选项JSON
+     * @param generateType 生成类型：answer/explanation/steps
+     * @param userId       用户ID
+     * @return 生成结果
+     */
+    Result<String> aiSolveQuestion(String questionText, String questionType, String optionsJson, String generateType, Long userId);
 }

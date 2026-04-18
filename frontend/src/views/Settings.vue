@@ -222,7 +222,7 @@
       <div class="info-content">
         <h3>使用说明</h3>
         <ul>
-          <li><strong>平台 API Key</strong>：使用项目提供的 API Key，每日有使用次数限制（对话30次、知识库10次）</li>
+          <li><strong>平台 API Key</strong>：使用项目提供的 API Key，每日有使用次数限制（对话10次、知识库问答10次、上传知识库5次、上传题目5次）</li>
           <li><strong>个人 API Key</strong>：使用您自己的 API Key，无使用次数限制，费用由您自己承担</li>
           <li>API Key 会加密存储，确保安全性</li>
           <li>删除 API Key 后将自动切换回平台 API Key</li>

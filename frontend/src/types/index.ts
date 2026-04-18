@@ -77,10 +77,11 @@ export interface RubricItem {
   className: string
   createId: number
   createStudentNo: string
-  isPrivate: boolean  // 是否私有：true=私有（仅自己可见），false=公开（班级可见）
+  creatorName?: string
+  isPrivate: boolean
   createTime: string
   updateTime: string
-  questionCount?: number  // 题目总数
+  questionCount?: number
 }
 
 export interface RubricQuestion {

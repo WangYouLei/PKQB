@@ -135,11 +135,13 @@
       <div class="chat-input-bar">
         <div class="input-wrapper">
           <textarea
+            ref="textareaRef"
             v-model="inputText"
             class="chat-input"
             :placeholder="currentSessionId ? '基于知识库提问...' : '输入问题开始新对话...'"
             rows="1"
-            @keydown.enter.exact.prevent="sendMessage"
+            @keydown="handleKeydown"
+            @input="autoResize"
           ></textarea>
           <button
             class="send-btn"
@@ -152,16 +154,13 @@
             </svg>
           </button>
         </div>
-        <div v-if="!hasOwnApiKey && remainingUsage >= 0" class="usage-hint">
-          今日剩余 {{ remainingUsage }} 次问答
-        </div>
       </div>
     </main>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, onMounted } from 'vue'
+import { ref, nextTick, onMounted, watch } from 'vue'
 import { useUserStore } from '@/stores/user'
 import { apiGetHistoryList, apiGetHistoryBySessionId, apiDeleteHistory, apiGetUsage } from '@/api'
 
@@ -181,6 +180,7 @@ const loadingSessions = ref(false)
 const chatContainer = ref<HTMLElement | null>(null)
 const showDeleteConfirm = ref(false)
 const pendingDeleteSessionId = ref<string | null>(null)
+const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
 // 使用次数相关
 const showLimitModal = ref(false)
@@ -193,6 +193,42 @@ function scrollToBottom() {
     if (chatContainer.value) chatContainer.value.scrollTop = chatContainer.value.scrollHeight
   })
 }
+
+function autoResize() {
+  const textarea = textareaRef.value
+  if (!textarea) return
+  textarea.style.height = 'auto'
+  const lineHeight = 21
+  const maxHeight = lineHeight * 4
+  const newHeight = Math.min(textarea.scrollHeight, maxHeight)
+  textarea.style.height = newHeight + 'px'
+}
+
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter') {
+    if (e.shiftKey || e.altKey) {
+      e.preventDefault()
+      const textarea = textareaRef.value
+      if (!textarea) return
+      const start = textarea.selectionStart
+      const end = textarea.selectionEnd
+      inputText.value = inputText.value.substring(0, start) + '\n' + inputText.value.substring(end)
+      nextTick(() => {
+        textarea.selectionStart = textarea.selectionEnd = start + 1
+        autoResize()
+      })
+    } else {
+      e.preventDefault()
+      sendMessage()
+    }
+  }
+}
+
+watch(inputText, () => {
+  nextTick(() => {
+    autoResize()
+  })
+})
 
 function formatContent(text: string): string {
   if (!text) return ''
@@ -253,8 +289,8 @@ async function selectSession(sessionId: string) {
 }
 
 function newSession() {
-  if (sessions.value.length >= 15) {
-    limitMessage.value = '会话数量已达上限(15个)，请删除一个会话后再创建新会话。'
+  if (sessions.value.length >= 20) {
+    limitMessage.value = '会话数量已达上限(20个)，请删除一个会话后再创建新会话。'
     showLimitModal.value = true
     return
   }
@@ -313,7 +349,7 @@ async function sendMessage() {
 
   // 检查使用次数
   if (!hasOwnApiKey.value && remainingUsage.value === 0) {
-    limitMessage.value = '今日问答次数已达上限(30次)，请新建会话或明天再试。'
+    limitMessage.value = '今日免费问答次数已用完，请切换使用您自己的模型或明天再试。'
     showLimitModal.value = true
     return
   }
@@ -333,10 +369,25 @@ async function sendMessage() {
   try {
     const token = localStorage.getItem('token') || ''
     const userId = String(userStore.userId || localStorage.getItem('userId') || '')
-    const url = `/api/ai/rag-query?query=${encodeURIComponent(text)}&sessionId=${currentSessionId.value}&userId=${userId}`
 
-    const response = await fetch(url, { headers: { token } })
-    if (!response.ok) throw new Error('请求失败')
+    const response = await fetch(`/api/ai/rag-query?userId=${userId}`, {
+      method: 'POST',
+      headers: {
+        'token': token,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        query: text,
+        sessionId: currentSessionId.value
+      })
+    })
+    if (!response.ok) {
+      const errorText = await response.text()
+      if (errorText.includes('今日使用次数已达上限')) {
+        throw new Error('今日免费问答次数已用完，请切换使用您自己的模型或明天再试')
+      }
+      throw new Error('请求失败')
+    }
 
     const reader = response.body?.getReader()
     if (!reader) throw new Error('无法读取响应流')
@@ -373,7 +424,9 @@ async function sendMessage() {
     await loadSessions()
     await checkUsage()
   } catch (e: unknown) {
-    assistantMsg.content = `请求出错：${(e as Error).message}`
+    if (!assistantMsg.content.trim()) {
+      assistantMsg.content = `请求出错：${(e as Error).message}`
+    }
   } finally {
     streaming.value = false
     scrollToBottom()
@@ -458,14 +511,12 @@ onMounted(() => {
 .chat-input-bar { padding: 20px 24px; border-top: 1px solid var(--border-glass); }
 .input-wrapper { display: flex; gap: 12px; align-items: flex-end; background: var(--card-bg); border: 1px solid var(--border-glass); border-radius: 16px; padding: 8px 8px 8px 16px; transition: all 0.3s ease; }
 .input-wrapper:focus-within { border-color: var(--tertiary); box-shadow: 0 0 0 3px rgba(6,182,212,0.1); }
-.chat-input { flex: 1; resize: none; border: none; background: transparent; font-size: 14px; color: var(--text-primary); font-family: inherit; outline: none; line-height: 1.5; max-height: 120px; }
+.chat-input { flex: 1; resize: none; border: none; background: transparent; font-size: 14px; color: var(--text-primary); font-family: inherit; outline: none; line-height: 21px; min-height: 21px; overflow-y: auto; }
 .chat-input::placeholder { color: var(--text-muted); }
 .send-btn { width: 40px; height: 40px; border-radius: 12px; border: none; background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%); color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.3s ease; flex-shrink: 0; }
 .send-btn svg { width: 18px; height: 18px; }
 .send-btn:hover:not(:disabled) { transform: scale(1.05); box-shadow: 0 4px 16px rgba(6,182,212,0.4); }
 .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.usage-hint { text-align: center; font-size: 12px; color: var(--text-muted); margin-top: 8px; }
 
 .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(4px); }
 .confirm-modal { background: var(--card-bg); border: 1px solid var(--border-glass); border-radius: 16px; padding: 24px; min-width: 320px; text-align: center; }

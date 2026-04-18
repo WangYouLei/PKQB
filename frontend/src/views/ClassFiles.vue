@@ -32,7 +32,7 @@
         <div class="empty-state-hint">班级中还没有同学分享公开文件</div>
       </div>
       <div v-else class="file-grid">
-        <FileCard v-for="file in files" :key="file.id" :file="file" @preview="handlePreviewFile" @download="handleDownloadFile" />
+        <FileCard v-for="file in files" :key="file.id" :file="file" :showEdit="file.userId === userStore.userId" :showDelete="file.userId === userStore.userId" @preview="handlePreviewFile" @download="handleDownloadFile" @remove="handleDeleteFile" @updated="handleFileUpdated" />
       </div>
     </div>
 
@@ -54,7 +54,7 @@
           <div class="rubric-info">
             <div class="rubric-title">{{ rubric.title }}</div>
             <div class="rubric-meta">
-              <span>创建者ID: {{ rubric.createId }}</span>
+              <span>创建者: {{ rubric.creatorName || rubric.createId }}</span>
               <span>班级: {{ rubric.className }}</span>
               <span>创建时间: {{ formatDate(rubric.createTime) }}</span>
             </div>
@@ -85,6 +85,14 @@
               @click="examMode = 'review'"
             >
               背题模式
+            </button>
+            <button 
+              v-if="isCreator"
+              class="mode-btn edit-mode-btn" 
+              :class="{ active: examMode === 'edit' }" 
+              @click="examMode = 'edit'"
+            >
+              修改题目
             </button>
           </div>
         </div>
@@ -205,14 +213,56 @@
             </div>
           </div>
         </div>
+
+        <!-- 修改题目模式 -->
+        <div v-else-if="examMode === 'edit'" class="edit-mode">
+          <div class="questions-list">
+            <div v-for="(q, idx) in questions" :key="q.id" class="question-item editable">
+              <div class="question-header">
+                <span class="question-num">第 {{ idx + 1 }} 题</span>
+                <span class="question-type">{{ getTypeLabel(q.questionType) }}</span>
+              </div>
+              <div class="question-text">{{ q.questionText }}</div>
+              <div v-if="getOptions(q).length" class="question-options">
+                <div v-for="(opt, oi) in getOptions(q)" :key="oi" class="option">
+                  {{ String.fromCharCode(65 + oi) }}. {{ opt }}
+                </div>
+              </div>
+              <div class="question-answer">答案: {{ q.answer }}</div>
+              <div v-if="q.explanation" class="question-explanation">解析: {{ q.explanation }}</div>
+              <div v-if="q.calculationStepsJson" class="question-steps">
+                <div>计算步骤:</div>
+                <div v-for="(step, si) in parseJson(q.calculationStepsJson)" :key="si">{{ si + 1 }}. {{ step }}</div>
+              </div>
+              
+              <!-- AI解答按钮 -->
+              <div class="ai-actions">
+                <button class="ai-btn" @click="generateAiAnswer(idx)" :disabled="aiLoading[idx]">
+                  {{ aiLoading[idx] ? '生成中...' : 'AI生成答案' }}
+                </button>
+                <button class="ai-btn" @click="generateAiExplanation(idx)" :disabled="aiLoading[idx]">
+                  {{ aiLoading[idx] ? '生成中...' : 'AI生成解析' }}
+                </button>
+                <button 
+                  v-if="q.questionType === 'calculation'" 
+                  class="ai-btn" 
+                  @click="generateAiSteps(idx)" 
+                  :disabled="aiLoading[idx]"
+                >
+                  {{ aiLoading[idx] ? '生成中...' : 'AI生成步骤' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { apiGetClassPublicFiles, apiGetPublicRubrics, apiGetQuestionsByRubricId } from '@/api'
+import { ref, onMounted, reactive } from 'vue'
+import { apiGetClassPublicFiles, apiGetPublicRubrics, apiGetQuestionsByRubricId, apiAiSolveQuestion, apiDeleteFile } from '@/api'
 import { useUserStore } from '@/stores/user'
 import type { HtmlFileItem, RubricItem, RubricQuestion } from '@/types'
 import FileCard from '@/components/FileCard.vue'
@@ -235,11 +285,17 @@ const questions = ref<RubricQuestion[]>([])
 const questionsLoading = ref(false)
 
 // 考试模式
-const examMode = ref<'practice' | 'review'>('practice')
+const examMode = ref<'practice' | 'review' | 'edit'>('practice')
 const currentQuestionIndex = ref(0)
 const userAnswers = ref<Record<number, string>>({})  // 选择题/判断题答案
 const userTextAnswers = ref<Record<number, string>>({})  // 简答题/计算题答案
 const showAnswer = ref(false)
+
+// 是否为创建者
+const isCreator = ref(false)
+
+// AI解答加载状态
+const aiLoading = reactive<Record<number, boolean>>({})
 
 onMounted(async () => {
   await loadFiles()
@@ -255,7 +311,7 @@ async function switchTab(tab: 'files' | 'rubrics') {
 async function loadFiles() {
   try {
     const res = await apiGetClassPublicFiles()
-    if (res.code === 200) files.value = res.data?.data || []
+    if (res.code === 200) files.value = res.data || []
   } catch (e) { console.error('获取班级共享文件失败', e) }
   finally { loading.value = false }
 }
@@ -269,6 +325,120 @@ async function loadRubrics() {
     }
   } catch (e) { console.error('获取公开试卷列表失败', e) }
   finally { rubricLoading.value = false }
+}
+
+async function handleDeleteFile(file: HtmlFileItem) {
+  if (!confirm(`确定要删除文件"${file.fileName}"吗？`)) return
+  
+  try {
+    const res = await apiDeleteFile(file.id)
+    if (res.code === 200) {
+      files.value = files.value.filter(f => f.id !== file.id)
+    }
+  } catch (e) {
+    console.error('删除文件失败', e)
+    alert('删除文件失败')
+  }
+}
+
+function handleFileUpdated(updatedFile: HtmlFileItem) {
+  const idx = files.value.findIndex(f => f.id === updatedFile.id)
+  if (idx !== -1) {
+    files.value[idx] = updatedFile
+  }
+}
+
+async function handleOpenRubric(rubric: RubricItem) {
+  currentRubric.value = rubric
+  showRubricDetail.value = true
+  questionsLoading.value = true
+  examMode.value = 'practice'
+  
+  isCreator.value = rubric.createId === userStore.userId
+  
+  try {
+    const res = await apiGetQuestionsByRubricId(rubric.id)
+    if (res.code === 200) {
+      questions.value = res.data || []
+    }
+  } catch (e) {
+    console.error('获取题目列表失败', e)
+  } finally {
+    questionsLoading.value = false
+  }
+}
+
+async function generateAiAnswer(idx: number) {
+  const q = questions.value[idx]
+  if (!q) return
+  
+  aiLoading[idx] = true
+  try {
+    const res = await apiAiSolveQuestion({
+      questionText: q.questionText,
+      questionType: q.questionType,
+      optionsJson: q.optionsJson,
+      generateType: 'answer',
+      userId: userStore.userId
+    })
+    if (res.code === 200) {
+      questions.value[idx].answer = res.data
+    }
+  } catch (e) {
+    console.error('AI生成答案失败', e)
+    alert('AI生成答案失败')
+  } finally {
+    aiLoading[idx] = false
+  }
+}
+
+async function generateAiExplanation(idx: number) {
+  const q = questions.value[idx]
+  if (!q) return
+  
+  aiLoading[idx] = true
+  try {
+    const res = await apiAiSolveQuestion({
+      questionText: q.questionText,
+      questionType: q.questionType,
+      optionsJson: q.optionsJson,
+      generateType: 'explanation',
+      userId: userStore.userId
+    })
+    if (res.code === 200) {
+      questions.value[idx].explanation = res.data
+    }
+  } catch (e) {
+    console.error('AI生成解析失败', e)
+    alert('AI生成解析失败')
+  } finally {
+    aiLoading[idx] = false
+  }
+}
+
+async function generateAiSteps(idx: number) {
+  const q = questions.value[idx]
+  if (!q || q.questionType !== 'calculation') return
+  
+  aiLoading[idx] = true
+  try {
+    const res = await apiAiSolveQuestion({
+      questionText: q.questionText,
+      questionType: q.questionType,
+      optionsJson: q.optionsJson,
+      generateType: 'steps',
+      userId: userStore.userId
+    })
+    if (res.code === 200) {
+      const steps = res.data?.split('\n').filter((s: string) => s.trim()) || []
+      questions.value[idx].calculationStepsJson = JSON.stringify(steps)
+    }
+  } catch (e) {
+    console.error('AI生成步骤失败', e)
+    alert('AI生成步骤失败')
+  } finally {
+    aiLoading[idx] = false
+  }
 }
 
 // 预览文件 - 在新窗口打开
@@ -567,4 +737,23 @@ function getTypeLabel(type: string): string {
 .review-mode .question-answer { padding: 12px 16px; background: var(--success-light); border-radius: 10px; margin-bottom: 10px; color: var(--success); border: 1px solid rgba(16,185,129,0.2); }
 .review-mode .question-explanation { padding: 12px 16px; background: rgba(59,130,246,0.08); border-radius: 10px; color: #3b82f6; margin-bottom: 10px; border: 1px solid rgba(59,130,246,0.15); }
 .review-mode .question-steps { padding: 12px 16px; background: rgba(236,72,153,0.08); border-radius: 10px; color: var(--secondary); border: 1px solid rgba(236,72,153,0.15); }
+
+/* 修改题目模式 */
+.edit-mode-btn { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%) !important; border-color: transparent !important; }
+.edit-mode-btn.active { box-shadow: 0 4px 16px rgba(245,158,11,0.4) !important; }
+
+.edit-mode .questions-list { display: flex; flex-direction: column; gap: 24px; }
+.edit-mode .question-item.editable { padding: 24px; border: 1px solid var(--border-glass); border-radius: 16px; background: var(--card-bg); }
+.edit-mode .question-header { margin-bottom: 16px; }
+.edit-mode .question-text { margin-bottom: 20px; }
+.edit-mode .question-options { margin-bottom: 16px; }
+.edit-mode .option { padding: 8px 0; }
+.edit-mode .question-answer { padding: 12px 16px; background: var(--success-light); border-radius: 10px; margin-bottom: 10px; color: var(--success); border: 1px solid rgba(16,185,129,0.2); }
+.edit-mode .question-explanation { padding: 12px 16px; background: rgba(59,130,246,0.08); border-radius: 10px; color: #3b82f6; margin-bottom: 10px; border: 1px solid rgba(59,130,246,0.15); }
+.edit-mode .question-steps { padding: 12px 16px; background: rgba(236,72,153,0.08); border-radius: 10px; color: var(--secondary); border: 1px solid rgba(236,72,153,0.15); margin-bottom: 16px; }
+
+.ai-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; padding-top: 16px; border-top: 1px dashed var(--border-glass); }
+.ai-btn { padding: 10px 20px; border: 1px solid var(--accent-border); border-radius: 10px; background: var(--accent-light); color: var(--accent); cursor: pointer; transition: all 0.3s ease; font-size: 13px; font-weight: 500; }
+.ai-btn:hover:not(:disabled) { background: var(--accent-gradient); color: #fff; border-color: transparent; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(99,102,241,0.3); }
+.ai-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 </style>

@@ -1,6 +1,7 @@
 package pkqb.pojo.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
@@ -37,4 +38,7 @@ public class RubricEntity {
     private LocalDateTime updateTime;
 
     private Integer deleted;
+
+    @TableField(exist = false)
+    private String creatorName;
 }

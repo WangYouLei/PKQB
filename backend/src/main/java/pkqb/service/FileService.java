@@ -21,4 +21,6 @@ public interface FileService {
     byte[] downloadFile(Long fileId, Long userId);
 
     FileEntity getFileEntity(Long fileId, Long userId);
+
+    FileResponse updateFile(Long fileId, Long userId, String fileName, Boolean isPrivate);
 }

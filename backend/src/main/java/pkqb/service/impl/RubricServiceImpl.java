@@ -118,6 +118,15 @@ public class RubricServiceImpl implements RubricService {
                    .eq(RubricEntity::getDeleted, 0)
                    .orderByDesc(RubricEntity::getCreateTime);
             List<RubricEntity> rubrics = rubricMapper.selectList(wrapper);
+            
+            // 填充创建者昵称
+            UserEntity creator = userMapper.selectById(userId);
+            if (creator != null) {
+                for (RubricEntity rubric : rubrics) {
+                    rubric.setCreatorName(creator.getUsername());
+                }
+            }
+            
             return Result.success(rubrics);
         } catch (Exception e) {
             log.error("[获取用户试卷] 获取失败", e);
@@ -147,6 +156,15 @@ public class RubricServiceImpl implements RubricService {
                    .eq(RubricEntity::getDeleted, 0)
                    .orderByDesc(RubricEntity::getCreateTime);
             List<RubricEntity> rubrics = rubricMapper.selectList(wrapper);
+            
+            // 填充创建者昵称
+            for (RubricEntity rubric : rubrics) {
+                UserEntity creator = userMapper.selectById(rubric.getCreateId());
+                if (creator != null) {
+                    rubric.setCreatorName(creator.getUsername());
+                }
+            }
+            
             return Result.success(rubrics);
         } catch (Exception e) {
             log.error("[获取公开试卷] 获取失败", e);

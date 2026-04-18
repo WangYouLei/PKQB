@@ -37,7 +37,6 @@ spring:
           # 系统API输出最大token数（限制较小） 选择范围为：【1,2000】
           # localhost-max-tokens:本地apikey的限制    personal-max-tokens：个人apikey的限制
           localhost-max-tokens: 1024
-
           personal-max-tokens:  2000
       embedding:
         options:

@@ -64,6 +64,17 @@ public class FileController {
         return Result.success("删除成功", null);
     }
 
+    @PutMapping("/{fileId}")
+    @Operation(summary = "更新文件信息", description = "更新文件名称和可见性")
+    public Result<FileResponse> updateFile(
+            @Parameter(description = "文件ID") @PathVariable Long fileId,
+            @Parameter(description = "用户ID") @RequestAttribute("userId") Long userId,
+            @Parameter(description = "文件名") @RequestParam(value = "file_name", required = false) String fileName,
+            @Parameter(description = "是否私有") @RequestParam(value = "is_private", required = false) Boolean isPrivate) {
+        FileResponse response = fileService.updateFile(fileId, userId, fileName, isPrivate);
+        return Result.success("更新成功", response);
+    }
+
     @GetMapping("/class/public")
     @Operation(summary = "获取班级公开文件", description = "获取班级公开的文件列表")
     public Result<List<FileResponse>> getClassPublicFiles(

@@ -16,7 +16,6 @@ import org.springframework.core.io.InputStreamResource;
 import org.springframework.data.redis.core.BoundListOperations;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import pkqb.common.Result;
@@ -28,8 +27,8 @@ import pkqb.pojo.dto.AiRubric;
 import pkqb.service.RateLimitService;
 import pkqb.service.ChatMemoryService;
 import pkqb.service.SpringAiAlibabaService;
+import pkqb.service.strategy.QuestionExtractContext;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 import java.io.ByteArrayInputStream;
 import java.util.*;
 import java.util.regex.Matcher;
@@ -48,6 +47,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     private final ObjectMapper objectMapper;
     private final RateLimitService rateLimitService;
     private final ChatMemoryService chatMemoryService;
+    private final QuestionExtractContext questionExtractContext;
 
     private static final StringBuilder TYPE_DESC = new StringBuilder();
     static {
@@ -92,15 +92,9 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         return String.format(QUESTION_ANALYSIS_PROMPT_TEMPLATE, TYPE_DESC, content);
     }
 
-    private static final Pattern QUESTION_NUMBER_PATTERN = Pattern.compile("^(\\d+|[（(]\\d+[）)]|[（(][A-Z][）)]|\\([A-Z]\\))([.、.．])\\s*(.+)");
-    private static final Pattern ANSWER_IN_BRACKETS = Pattern.compile(".*\\(([A-D]+)\\)\\s*$");
-    private static final Pattern MULTI_ANSWER_NO_BRACKETS = Pattern.compile(".*[？?]?\\s*([A-D]{2,})\\s*$");
-    private static final Pattern SINGLE_ANSWER = Pattern.compile(".*[？?]?\\s*([A-D])\\s*$");
-    private static final Pattern OPTION_PATTERN = Pattern.compile("^([A-D])[.、、]\\s*(.+)");
-    private static final Pattern MULTI_OPTION_LINE = Pattern.compile("([A-D])[.、]\\s*([^A-D]+?)(?=\\s+[A-D][.、]|$)");
-    private static final Pattern ANSWER_LINE = Pattern.compile("(答案|Answer|参考答案)[:：]\\s*(.+)");
-    private static final Pattern EXPLANATION_LINE = Pattern.compile("(解析|Explanation|解析如下)[:：]\\s*(.+)");
-    private static final Pattern CALCULATION_STEP = Pattern.compile("(步骤\\d*|第\\d*步)[:：.]?\\s*(.+)");
+    private static final int RUBRIC_TRUNCATE_LENGTH = 3000;
+    private static final int RUBRIC_DETECT_LENGTH = 1500;
+    private static final int NOTE_DETECT_LENGTH = 1000;
 
     private static final String[] QUESTION_TYPE_KEYWORDS = {"单选题", "多选题", "选择题", "填空题", "判断题", "简答题",
             "计算题", "应用题", "解答题", "证明题", "阅读理解", "完形填空",
@@ -125,17 +119,14 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     private static final Pattern QUESTION_MARK_PATTERN = Pattern.compile("\\?|\\？");
     private static final Pattern NUMBER_PATTERN = Pattern.compile("(?m)^\\s*\\d+[、.．)）]");
 
-    private static final int RUBRIC_TRUNCATE_LENGTH = 3000;
-    private static final int RUBRIC_DETECT_LENGTH = 1500;
-    private static final int NOTE_DETECT_LENGTH = 1000;
-
     public SpringAiAlibabaServiceImpl(VectorStore vectorStore,
                                       ChatClientFactory chatClientFactory,
                                       RedisTemplate<String,Object> redisTemplate,
                                       StringRedisTemplate stringRedisTemplate,
                                       ObjectMapper objectMapper,
                                       RateLimitService rateLimitService,
-                                      ChatMemoryService chatMemoryService) {
+                                      ChatMemoryService chatMemoryService,
+                                      QuestionExtractContext questionExtractContext) {
         this.vectorStore = vectorStore;
         this.chatClientFactory = chatClientFactory;
         this.redisTemplate = redisTemplate;
@@ -143,6 +134,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         this.objectMapper = objectMapper;
         this.rateLimitService = rateLimitService;
         this.chatMemoryService = chatMemoryService;
+        this.questionExtractContext = questionExtractContext;
     }
 
     @Override
@@ -181,7 +173,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         boolean isRubric = isRubric(content, userId);
         if (isRubric) {
             log.info("[知识库-{}] 检测到题目内容，已拒绝上传", operationType);
-            return Result.success("检测到题目内容，已拒绝上传");
+            return Result.error("检测到题目内容，已拒绝上传");
         }
         log.info("[知识库-{}] 检测为知识点内容，开始分割文档", operationType);
         
@@ -204,7 +196,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
 
     @Override
     public Flux<String> ragQuery(String query, String sessionId, Long userId) {
-        log.info("[RAG查询] userId={}, sessionId={}, query={}", userId, sessionId, query);
+        log.info("[RAG查询] userId={}, sessionId={}", userId, sessionId);
         
         Result<?> limitCheck = rateLimitService.checkLimit(userId, RateLimitConstants.FEATURE_RAG, RateLimitConstants.RAG_LIMIT);
         if (limitCheck != null) {
@@ -263,7 +255,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
 
     @Override
     public Flux<String> query(String query, String sessionId, Long userId) {
-        log.info("[AI对话] userId={}, sessionId={}, query={}", userId, sessionId, query);
+        log.info("[AI对话] userId={}, sessionId={}", userId, sessionId);
         
         Result<?> limitCheck = rateLimitService.checkLimit(userId, RateLimitConstants.FEATURE_CHAT, RateLimitConstants.CHAT_LIMIT);
         if (limitCheck != null) {
@@ -306,6 +298,11 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         String sessionListKey = "history:" + type + ":" + userId;
         BoundListOperations<String, Object> boundListOps = redisTemplate.boundListOps(sessionListKey);
         List<Object> existing = redisTemplate.opsForList().range(sessionListKey, 0, -1);
+        
+        if (existing != null && existing.size() >= 20 && !existing.contains(sessionId)) {
+            throw new RuntimeException("会话数量已达上限(20个)，请删除一个会话后再创建新会话");
+        }
+        
         if (existing == null || !existing.contains(sessionId)) {
             boundListOps.leftPush(sessionId);
             log.info("[会话记录] 新会话已记录，type={}, sessionId={}", type, sessionId);
@@ -347,7 +344,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             log.warn("[题目解析] AI解析超时或失败: {}，开始执行兜底策略", e.getMessage());
         }
         
-        List<Map<String, Object>> maps = extractQuestions(content);
+        List<Map<String, Object>> maps = questionExtractContext.extractQuestions(content);
         if (maps.isEmpty()) {
             log.warn("[题目解析] 兜底解析也失败，内容可能不符合预期格式");
             return Result.error("解析题目失败，请检查内容格式");
@@ -478,7 +475,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             
             try {
                 log.info("[题目文件解析-本地] 开始调用本地解析题目");
-                List<Map<String, Object>> maps = extractQuestions(content);
+                List<Map<String, Object>> maps = questionExtractContext.extractQuestions(content);
                 if (maps.isEmpty()) {
                     log.warn("[题目文件解析-本地] 本地解析失败");
                     return Result.error("解析题目失败，请检查文件内容格式");
@@ -533,6 +530,90 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         } catch (Exception e) {
             log.error("[删除历史] 删除会话时发生错误: ", e);
             return Result.error("删除会话失败: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public Result<String> aiSolveQuestion(String questionText, String questionType, String optionsJson, String generateType, Long userId) {
+        log.info("[AI解答] 开始生成，userId={}, questionType={}, generateType={}", userId, questionType, generateType);
+        
+        if (questionText == null || questionText.trim().isEmpty()) {
+            return Result.error("题目内容不能为空");
+        }
+        
+        String prompt = buildAiSolvePrompt(questionText, questionType, optionsJson, generateType);
+        if (prompt == null) {
+            return Result.error("无效的生成类型");
+        }
+        
+        try {
+            ChatClient chatClient = chatClientFactory.getMilvusChatClient(userId);
+            String result = chatClient.prompt()
+                    .user(prompt)
+                    .call()
+                    .content();
+            
+            log.info("[AI解答] 生成完成，generateType={}", generateType);
+            return Result.success(result);
+        } catch (Exception e) {
+            log.error("[AI解答] 生成失败: ", e);
+            return Result.error("AI解答失败: " + e.getMessage());
+        }
+    }
+    
+    private String buildAiSolvePrompt(String questionText, String questionType, String optionsJson, String generateType) {
+        StringBuilder prompt = new StringBuilder();
+        
+        prompt.append("请根据以下题目内容");
+        
+        String typeDesc = getTypeDescription(questionType);
+        prompt.append("（").append(typeDesc).append("）");
+        
+        if (optionsJson != null && !optionsJson.isEmpty() && !optionsJson.equals("[]")) {
+            prompt.append("\n\n选项：\n").append(optionsJson);
+        }
+        
+        prompt.append("\n\n题目：\n").append(questionText);
+        
+        switch (generateType) {
+            case "answer":
+                prompt.append("\n\n请直接给出正确答案，不要包含任何解释。");
+                if ("true_false".equals(questionType)) {
+                    prompt.append(" 判断题请回答:正确或错误");
+                } else if ("short_answer".equals(questionType)) {
+                    prompt.append(" 简答题请给出简洁的答案要点。");
+                } else if ("calculation".equals(questionType)) {
+                    prompt.append(" 计算题请给出最终计算结果。");
+                } else {
+                    prompt.append(" 选择题请直接给出选项字母（如A、B、C、D，多选用逗号分隔）。");
+                }
+                break;
+            case "explanation":
+                prompt.append("\n\n请给出这道题的详细解析，字数控制在150字以内，要求简洁明了，突出重点。");
+                break;
+            case "steps":
+                if (!"calculation".equals(questionType)) {
+                    return null;
+                }
+                prompt.append("\n\n请给出这道计算题的详细计算步骤，每步一行，格式如下：\n");
+                prompt.append("步骤1: xxx\n步骤2: xxx\n...");
+                break;
+            default:
+                return null;
+        }
+        
+        return prompt.toString();
+    }
+    
+    private String getTypeDescription(String questionType) {
+        if (questionType == null) return "题目";
+        switch (questionType) {
+            case "single_choice": return "单选题";
+            case "multiple_choice": return "多选题";
+            case "true_false": return "判断题";
+            case "short_answer": return "简答题";
+            case "calculation": return "计算题";
+            default: return questionType;
         }
     }
 
@@ -660,210 +741,5 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         int count = 0;
         while (matcher.find()) count++;
         return count;
-    }
-
-    private List<Map<String, Object>> extractQuestions(String text) {
-        List<Map<String, Object>> questions = new ArrayList<>();
-        String[] lines = text.split("\n");
-
-        Map<String, Object> currentQuestion = null;
-        List<String> currentOptions = new ArrayList<>();
-        String currentAnswer = null;
-        String currentExplanation = null;
-        String currentQuestionType = null;
-        List<String> calculationSteps = new ArrayList<>();
-
-        for (String line : lines) {
-            line = line.trim();
-            if (line.isEmpty()) {
-                if (currentQuestion != null && currentQuestion.containsKey(RubricEnum.QUESTION.getCode())) {
-                    addQuestionToList(questions, currentQuestion, currentOptions, currentAnswer, currentExplanation, currentQuestionType, calculationSteps);
-                    currentQuestion = null;
-                    currentOptions = new ArrayList<>();
-                    currentAnswer = null;
-                    currentExplanation = null;
-                    currentQuestionType = null;
-                    calculationSteps = new ArrayList<>();
-                }
-                continue;
-            }
-
-            Matcher qm = QUESTION_NUMBER_PATTERN.matcher(line);
-            if (qm.find()) {
-                if (currentQuestion != null && currentQuestion.containsKey(RubricEnum.QUESTION.getCode())) {
-                    addQuestionToList(questions, currentQuestion, currentOptions, currentAnswer, currentExplanation, currentQuestionType, calculationSteps);
-                }
-
-                String questionText = qm.group(3);
-                currentOptions = new ArrayList<>();
-                currentAnswer = null;
-                currentExplanation = null;
-                calculationSteps = new ArrayList<>();
-
-                if (questionText.endsWith("√") || questionText.endsWith("×")
-                        || questionText.endsWith("对") || questionText.endsWith("错")
-                        || questionText.endsWith("正确") || questionText.endsWith("错误")
-                ) {
-                    if (questionText.endsWith("√") || questionText.endsWith("对") || questionText.endsWith("正确")) {
-                        currentAnswer = "正确";
-                    } else {
-                        currentAnswer = "错误";
-                    }
-                    currentQuestion = new HashMap<>();
-                currentQuestion.put(RubricEnum.QUESTION.getCode(), questionText.replaceAll("[√×对错正确错误\\s]+$", "").trim());
-                    currentQuestionType = RubricQuestionTypeEnum.TRUE_FALSE.getCode();
-                    continue;
-                }
-
-                if (questionText.contains("___") || questionText.contains("____") 
-                        || questionText.contains("（  ）") || questionText.contains("（）")
-                        || questionText.contains("[]") || questionText.contains("（ ）")) {
-                    currentQuestion = new HashMap<>();
-                    currentQuestion.put(RubricEnum.QUESTION.getCode(), questionText);
-                    currentQuestionType = RubricQuestionTypeEnum.TRUE_FALSE.getCode();
-                    continue;
-                }
-
-                boolean isMultipleChoice = questionText.contains("(多选题)") 
-                        || questionText.contains("【多选题]") 
-                        || questionText.contains("[多选题]");
-
-                Matcher answerInBrackets = ANSWER_IN_BRACKETS.matcher(questionText);
-                if (answerInBrackets.matches()) {
-                    String answerLetters = answerInBrackets.group(1);
-                    currentAnswer = String.join(",", answerLetters.split(""));
-                    String cleanedQuestion = questionText.replaceAll("\\([A-D]+\\)\\s*$", "").trim();
-                    currentQuestion = new HashMap<>();
-                    currentQuestion.put(RubricEnum.QUESTION.getCode(), cleanedQuestion);
-                    currentQuestionType = isMultipleChoice || answerLetters.length() > 1 ? RubricQuestionTypeEnum.MULTIPLE_CHOICE.getCode() : RubricQuestionTypeEnum.SINGLE_CHOICE.getCode();
-                    continue;
-                }
-
-                Matcher multiAnswerNoBrackets = MULTI_ANSWER_NO_BRACKETS.matcher(questionText);
-                if (multiAnswerNoBrackets.matches()) {
-                    String answerLetters = multiAnswerNoBrackets.group(1);
-                    currentAnswer = String.join(",", answerLetters.split(""));
-                    String cleanedQuestion = questionText.replaceAll("\\s*[A-D]{2,}\\s*$", "").trim();
-                    currentQuestion = new HashMap<>();
-                    currentQuestion.put(RubricEnum.QUESTION.getCode(), cleanedQuestion);
-                    currentQuestionType = RubricQuestionTypeEnum.MULTIPLE_CHOICE.getCode();
-                    continue;
-                }
-
-                Matcher singleAnswer = SINGLE_ANSWER.matcher(questionText);
-                if (singleAnswer.matches() && !questionText.matches("^[A-D][.、].*")) {
-                    currentAnswer = singleAnswer.group(1);
-                    String cleanedQuestion = questionText.replaceAll("\\s*[A-D]\\s*$", "").trim();
-                    currentQuestion = new HashMap<>();
-                    currentQuestion.put(RubricEnum.QUESTION.getCode(), cleanedQuestion);
-                    currentQuestionType = isMultipleChoice ? RubricQuestionTypeEnum.MULTIPLE_CHOICE.getCode() : RubricQuestionTypeEnum.SINGLE_CHOICE.getCode();
-                    continue;
-                }
-
-                if (questionText.contains("简答题") || questionText.contains("论述题") 
-                        || questionText.contains("问答") || questionText.contains("计算题")
-                        || questionText.contains("应用题")) {
-                    currentQuestion = new HashMap<>();
-                    currentQuestion.put(RubricEnum.QUESTION.getCode(), questionText);
-                    if (questionText.contains("计算") || questionText.contains("应用")) {
-                        currentQuestionType = RubricQuestionTypeEnum.CALCULATION.getCode();
-                    } else {
-                        currentQuestionType = RubricQuestionTypeEnum.SHORT_ANSWER.getCode();
-                    }
-                    continue;
-                }
-
-                currentQuestion = new HashMap<>();
-                currentQuestion.put(RubricEnum.QUESTION.getCode(), questionText);
-                currentQuestionType = RubricQuestionTypeEnum.SINGLE_CHOICE.getCode();
-                continue;
-            }
-
-            Matcher om = OPTION_PATTERN.matcher(line);
-            if (om.find()) {
-                String optionLetter = om.group(1);
-                String optionText = om.group(2).trim();
-                currentOptions.add(optionLetter + ". " + optionText);
-                if (currentQuestionType == null) {
-                    currentQuestionType = RubricQuestionTypeEnum.SINGLE_CHOICE.getCode();
-                }
-                continue;
-            }
-
-            Matcher multiOptionLine = MULTI_OPTION_LINE.matcher(line);
-            if (multiOptionLine.find()) {
-                java.util.regex.Matcher m = MULTI_OPTION_LINE.matcher(line);
-                while (m.find()) {
-                    String optionLetter = m.group(1);
-                    String optionText = m.group(2).trim();
-                    if (!optionText.isEmpty()) {
-                        currentOptions.add(optionLetter + ". " + optionText);
-                    }
-                }
-                if (currentQuestionType == null) {
-                    currentQuestionType = RubricQuestionTypeEnum.SINGLE_CHOICE.getCode();
-                }
-                continue;
-            }
-
-            Matcher am = ANSWER_LINE.matcher(line);
-            if (am.find()) {
-                currentAnswer = am.group(2).trim();
-                continue;
-            }
-
-            Matcher em = EXPLANATION_LINE.matcher(line);
-            if (em.find()) {
-                currentExplanation = em.group(2).trim();
-                continue;
-            }
-
-            Matcher cs = CALCULATION_STEP.matcher(line);
-            if (cs.find()) {
-                calculationSteps.add(cs.group(2).trim());
-                if (currentQuestionType == null) {
-                    currentQuestionType = RubricQuestionTypeEnum.CALCULATION.getCode();
-                }
-            }
-        }
-
-        if (currentQuestion != null && currentQuestion.containsKey(RubricEnum.QUESTION.getCode())) {
-            addQuestionToList(questions, currentQuestion, currentOptions, currentAnswer, currentExplanation, currentQuestionType, calculationSteps);
-        }
-
-        return questions;
-    }
-
-    private void addQuestionToList(List<Map<String, Object>> questions, Map<String, Object> currentQuestion,
-                                    List<String> currentOptions, String currentAnswer, String currentExplanation,
-                                    String currentQuestionType, List<String> calculationSteps) {
-        Map<String, Object> questionMap = new HashMap<>(currentQuestion);
-        questionMap.put(RubricEnum.QUESTION_TYPE.getCode(), currentQuestionType != null ? currentQuestionType : RubricQuestionTypeEnum.SINGLE_CHOICE.getCode());
-        
-        if (currentAnswer != null &&!currentAnswer.isEmpty()) {
-            questionMap.put(RubricEnum.ANSWER.getCode(), currentAnswer);
-        } else {
-            questionMap.put(RubricEnum.ANSWER.getCode(), "");
-        }
-        
-        if ( currentExplanation != null &&!currentExplanation.isEmpty()) {
-            questionMap.put(RubricEnum.EXPLANATION.getCode(), currentExplanation);
-        } else {
-            questionMap.put(RubricEnum.EXPLANATION.getCode(), "");
-        }
-        
-        if (currentOptions != null && !currentOptions.isEmpty()) {
-            questionMap.put(RubricEnum.OPTIONS.getCode(), currentOptions);
-        } else {
-            questionMap.put(RubricEnum.OPTIONS.getCode(), Collections.emptyList());
-        }
-        
-        if (RubricQuestionTypeEnum.CALCULATION.getCode().equals(currentQuestionType) && !calculationSteps.isEmpty()) {
-            questionMap.put(RubricEnum.CALCULATION_STEPS.getCode(), calculationSteps);
-        } else {
-            questionMap.put(RubricEnum.CALCULATION_STEPS.getCode(), Collections.emptyList());
-        }
-        
-        questions.add(questionMap);
     }
 }

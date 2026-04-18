@@ -39,6 +39,14 @@ export const apiDeleteFile = async (fileId: number) => {
   return res
 }
 
+export const apiUpdateFile = async (fileId: number, fileName?: string, isPrivate?: boolean) => {
+  const res = await put<HtmlFileItem>(`/files/${fileId}`, null, { 
+    file_name: fileName, 
+    is_private: isPrivate 
+  })
+  return res
+}
+
 export const apiGetClassPublicFiles = async () => {
   const res = await get<HtmlFileItem[]>('/files/class/public')
   return res
@@ -217,5 +225,19 @@ export const apiUpdateUsername = async (username: string) => {
 /** 修改密码 */
 export const apiUpdatePassword = async (oldPassword: string, newPassword: string) => {
   const res = await put<void>('/user/password', null, { oldPassword, newPassword })
+  return res
+}
+
+// ========== AI 解答相关 API ==========
+
+/** AI解答题目 */
+export const apiAiSolveQuestion = async (params: {
+  questionText: string
+  questionType: string
+  optionsJson?: string
+  generateType: 'answer' | 'explanation' | 'steps'
+  userId: number
+}) => {
+  const res = await post<string>('/ai/ai-solve', null, params)
   return res
 }

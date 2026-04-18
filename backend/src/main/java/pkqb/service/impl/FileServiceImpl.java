@@ -79,10 +79,10 @@ public class FileServiceImpl implements FileService {
             throw new ResourceNotFoundException("文件不存在");
         }
 
-        if (!entity.getUserId().equals(userId) && !Boolean.TRUE.equals(entity.getIsPrivate())) {
+        if (!entity.getUserId().equals(userId) && Boolean.TRUE.equals(entity.getIsPrivate())) {
             throw new PermissionDeniedException("无权访问该文件");
         }
-
+        log.info("用户{}: 获取了文件 {} 的地址" , userId, fileId);
         return minioEndpoint + "/" + bucketName + "/" + entity.getMinioKey();
     }
 
@@ -154,7 +154,7 @@ public class FileServiceImpl implements FileService {
             throw new ResourceNotFoundException("文件不存在");
         }
 
-        if (!entity.getUserId().equals(userId) && !Boolean.TRUE.equals(entity.getIsPrivate())) {
+        if (!entity.getUserId().equals(userId) && Boolean.TRUE.equals(entity.getIsPrivate())) {
             throw new PermissionDeniedException("无权访问该文件");
         }
 
@@ -168,11 +168,33 @@ public class FileServiceImpl implements FileService {
             throw new ResourceNotFoundException("文件不存在");
         }
 
-        if (!entity.getUserId().equals(userId) && !Boolean.TRUE.equals(entity.getIsPrivate())) {
+        if (!entity.getUserId().equals(userId) && Boolean.TRUE.equals(entity.getIsPrivate())) {
             throw new PermissionDeniedException("无权访问该文件");
         }
 
         return entity;
+    }
+
+    @Override
+    public FileResponse updateFile(Long fileId, Long userId, String fileName, Boolean isPrivate) {
+        FileEntity entity = fileMapper.selectById(fileId);
+        if (entity == null) {
+            throw new ResourceNotFoundException("文件不存在");
+        }
+
+        if (!entity.getUserId().equals(userId)) {
+            throw new PermissionDeniedException("无权修改该文件");
+        }
+
+        if (fileName != null && !fileName.trim().isEmpty()) {
+            entity.setFileName(fileName);
+        }
+        if (isPrivate != null) {
+            entity.setIsPrivate(isPrivate);
+        }
+
+        fileMapper.updateById(entity);
+        return toResponse(entity);
     }
 
     private Map<Long, String> batchGetUserNames(List<FileEntity> entities) {

@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import pkqb.common.Result;
 import pkqb.pojo.dto.AiRubric;
+import pkqb.pojo.dto.QueryRequest;
 import pkqb.service.RateLimitService;
 import pkqb.service.SpringAiAlibabaService;
 import reactor.core.publisher.Flux;
@@ -72,35 +73,31 @@ public class SpringAiAlibabaController {
 
     /**
      * 使用ChatClient回答问题
-     * @param query 问题
-     * @param sessionId 会话ID
+     * @param request 问题以及会话ID
      * @param userId 用户ID
      * @return 回答结果
      */
-    @GetMapping(value = "/query", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @PostMapping(value = "/query", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @Operation(summary = "AI对话", description = "普通AI对话（流式返回）")
     public Flux<String> query(
-            @Parameter(description = "问题内容") @RequestParam("query") String query,
-            @Parameter(description = "会话ID") @RequestParam("sessionId")String sessionId,
+            @RequestBody QueryRequest request,
             @Parameter(description = "用户ID") @RequestParam("userId") Long userId
     ) {
-        return saaService.query(query, sessionId, userId);
+        return saaService.query(request.getQuery(), request.getSessionId(), userId);
     }
 
     /**
      * 使用RAG从Milvus检索信息并回答问题
-     * @param query 问题
-     * @param sessionId 会话ID
+     * @param request 问题以及会话ID
      * @param userId 用户ID
      * @return 回答结果
      */
-    @GetMapping(value = "/rag-query", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @PostMapping(value = "/rag-query", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @Operation(summary = "知识库问答", description = "基于RAG的向量知识库问答（流式返回）")
     public Flux<String> ragQuery(
-            @Parameter(description = "问题内容") @RequestParam String query,
-            @Parameter(description = "会话ID") @RequestParam(value = "sessionId", defaultValue = "student_session") String sessionId,
+            @RequestBody QueryRequest request,
             @Parameter(description = "用户ID") @RequestParam(value = "userId") Long userId) {
-        return saaService.ragQuery(query, sessionId, userId);
+        return saaService.ragQuery(request.getQuery(), request.getSessionId(), userId);
     }
 
     /**
@@ -165,5 +162,16 @@ public class SpringAiAlibabaController {
         }
         
         return Result.success(result);
+    }
+
+    @PostMapping("/ai-solve")
+    @Operation(summary = "AI解答题目", description = "使用AI生成题目的答案、解析或计算步骤")
+    public Result<String> aiSolveQuestion(
+            @Parameter(description = "题目内容") @RequestParam("questionText") String questionText,
+            @Parameter(description = "题目类型") @RequestParam("questionType") String questionType,
+            @Parameter(description = "选项JSON") @RequestParam(value = "optionsJson", required = false) String optionsJson,
+            @Parameter(description = "生成类型：answer/explanation/steps") @RequestParam("generateType") String generateType,
+            @Parameter(description = "用户ID") @RequestParam("userId") Long userId) {
+        return saaService.aiSolveQuestion(questionText, questionType, optionsJson, generateType, userId);
     }
 }
