@@ -45,7 +45,7 @@
       </div>
       <div class="form-group" style="display:flex;align-items:center;justify-content:space-between">
         <label class="form-label" style="margin-bottom:0">是否公开（班级可见）</label>
-        <label class="toggle"><input v-model="isPublic" type="checkbox" /><span class="toggle-slider"></span></label>
+        <label class="toggle"><input v-model="isPrivate" type="checkbox" /><span class="toggle-slider"></span></label>
       </div>
       <div style="display:flex;gap:12px;margin-top:24px">
         <button class="btn btn-secondary" @click="step=2">返回预览</button>
@@ -78,7 +78,7 @@ const selectedFile = ref<File|null>(null)
 const dragOver = ref(false)
 const fileInput = ref<HTMLInputElement|null>(null)
 const fileName = ref('')
-const isPublic = ref(false)
+const isPrivate = ref(false)
 const saving = ref(false)
 const analysisResult = ref('')
 
@@ -117,18 +117,21 @@ async function handleSave() {
     const htmlContent = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>${fileName.value}</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.8;color:#333}h1{color:#ff6b35;border-bottom:2px solid #ff6b35;padding-bottom:8px}pre{background:#f5f5f5;padding:16px;border-radius:8px;overflow-x:auto;white-space:pre-wrap}</style></head><body><h1>${escapeHtml(fileName.value)}</h1><pre>${escapeHtml(analysisResult.value)}</pre></body></html>`
     const blob = new Blob([htmlContent], { type: 'text/html' })
     const file = new File([blob], `${fileName.value}.html`, { type: 'text/html' })
-    const res = await apiUploadFile(file, fileName.value, isPublic.value)
+    const res = await apiUploadFile(file, fileName.value, isPrivate.value)
     if (res.code === 200) { step.value = 4 } else { alert(res.message || '保存失败') }
   } catch (e: unknown) {
     alert((e as { message?: string })?.message || '保存失败，请重试')
   } finally { saving.value = false }
 }
-function resetForm() { step.value=1; textContent.value=''; selectedFile.value=null; fileName.value=''; isPublic.value=false; analysisResult.value='' }
+function resetForm() { step.value=1; textContent.value=''; selectedFile.value=null; fileName.value=''; isPrivate.value=false; analysisResult.value='' }
 </script>
 
 <style scoped>
-.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
-.page-title { font-size: 24px; font-weight: 700; color: var(--text-primary); }
-.analysis-preview { background: rgba(0,0,0,0.3); border-radius: 12px; padding: 20px; max-height: 400px; overflow-y: auto; }
+.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; }
+.page-title { font-size: 28px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.02em; }
+.analysis-preview { background: var(--bg-glass); border: 1px solid var(--border-glass); border-radius: 16px; padding: 24px; max-height: 400px; overflow-y: auto; }
 .preview-text { white-space: pre-wrap; word-break: break-word; color: var(--text-primary); font-size: 14px; line-height: 1.8; margin: 0; font-family: inherit; }
+
+.card { position: relative; }
+.card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--accent-gradient); border-radius: var(--card-radius) var(--card-radius) 0 0; }
 </style>

@@ -2,7 +2,6 @@
   <div>
     <div class="page-header">
       <h2 class="page-title">我的文件</h2>
-      <router-link to="/upload" class="btn btn-primary btn-sm">+ 生成新文件</router-link>
     </div>
     
     <!-- 切换按钮 -->
@@ -32,7 +31,7 @@
         <div class="empty-state-hint">点击上方按钮生成你的第一个文件</div>
       </div>
       <div v-else class="file-grid">
-        <FileCard v-for="file in files" :key="file.id" :file="file" @open="handleOpenFile" />
+        <FileCard v-for="file in files" :key="file.id" :file="file" @preview="handlePreviewFile" @download="handleDownloadFile" @remove="handleDeleteFile" />
       </div>
     </div>
 
@@ -68,6 +67,43 @@
       </div>
     </div>
 
+    <!-- 删除确认弹窗 -->
+    <div v-if="showDeleteConfirm" class="modal-overlay confirm-overlay" @click.self="showDeleteConfirm = false">
+      <div class="confirm-modal">
+        <h3>确认删除</h3>
+        <p>确定删除该试卷吗？删除后无法恢复。</p>
+        <div class="confirm-btns">
+          <button class="btn btn-secondary" @click="showDeleteConfirm = false">取消</button>
+          <button class="btn btn-danger" @click="confirmDeleteRubric" :disabled="deleteLoading">
+            <span v-if="deleteLoading" class="spinner"></span><span v-else>确定删除</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 提示弹窗 -->
+    <div v-if="showToast" class="modal-overlay" @click="showToast = false">
+      <div class="confirm-modal">
+        <h3>{{ toastTitle }}</h3>
+        <p>{{ toastMessage }}</p>
+        <div class="confirm-btns">
+          <button class="btn btn-primary" @click="showToast = false">确定</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 删除文件确认弹窗 -->
+    <div v-if="showFileDeleteConfirm" class="modal-overlay" @click.self="showFileDeleteConfirm = false">
+      <div class="confirm-modal">
+        <h3>确认删除</h3>
+        <p>确定要删除文件 "{{ pendingDeleteFile?.fileName }}" 吗？</p>
+        <div class="confirm-btns">
+          <button class="btn btn-secondary" @click="showFileDeleteConfirm = false">取消</button>
+          <button class="btn btn-danger" @click="confirmDeleteFile">确定删除</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 修改试卷弹窗 -->
     <div v-if="showEditModal" class="modal-overlay" @click.self="showEditModal = false">
       <div class="modal-content">
@@ -79,12 +115,15 @@
         <div class="form-group" style="display:flex;align-items:center;justify-content:space-between">
           <label class="form-label" style="margin-bottom:0">是否公开（班级可见）</label>
           <label class="toggle">
-            <input v-model="editRubricForm.isPublic" type="checkbox" />
+            <input v-model="editRubricForm.isPrivate" type="checkbox" />
             <span class="toggle-slider"></span>
           </label>
         </div>
         <div style="display:flex;gap:12px;margin-top:24px">
           <button class="btn btn-secondary" @click="showEditModal = false">取消</button>
+          <button class="btn btn-danger" @click="deleteRubric" :disabled="deleteLoading">
+            <span v-if="deleteLoading" class="spinner"></span><span v-else>删除</span>
+          </button>
           <button class="btn btn-primary" @click="submitEditRubric" :disabled="editLoading">
             <span v-if="editLoading" class="spinner"></span><span v-else>保存</span>
           </button>
@@ -146,31 +185,13 @@
                 class="option-item"
                 :class="{ 
                   selected: userAnswers[currentQuestionIndex] === String.fromCharCode(65 + oi),
-                  correct: showAnswer && String.fromCharCode(65 + oi) === getCorrectAnswer(questions[currentQuestionIndex])
+                  correct: showAnswer && (String.fromCharCode(65 + oi) === getCorrectAnswer(questions[currentQuestionIndex]) || opt === getCorrectAnswer(questions[currentQuestionIndex]))
                 }"
                 @click="selectAnswer(String.fromCharCode(65 + oi))"
               >
                 <span class="option-label">{{ String.fromCharCode(65 + oi) }}.</span>
                 <span class="option-text">{{ opt }}</span>
               </div>
-            </div>
-
-            <!-- 判断题选项 -->
-            <div v-if="questions[currentQuestionIndex]?.questionType === 'true_false'" class="true-false-options">
-              <button 
-                class="tf-btn" 
-                :class="{ selected: userAnswers[currentQuestionIndex] === '正确', correct: showAnswer && getCorrectAnswer(questions[currentQuestionIndex]) === '正确' }"
-                @click="selectAnswer('正确')"
-              >
-                正确
-              </button>
-              <button 
-                class="tf-btn" 
-                :class="{ selected: userAnswers[currentQuestionIndex] === '错误', correct: showAnswer && getCorrectAnswer(questions[currentQuestionIndex]) === '错误' }"
-                @click="selectAnswer('错误')"
-              >
-                错误
-              </button>
             </div>
 
             <!-- 简答题/计算题 输入框 -->
@@ -183,8 +204,8 @@
               ></textarea>
             </div>
 
-            <!-- 提交答案按钮 -->
-            <div v-if="!showAnswer && hasAnswer(currentQuestionIndex)" class="submit-answer">
+            <!-- 简答题/计算题 提交答案按钮 -->
+            <div v-if="!showAnswer && isTextQuestion(questions[currentQuestionIndex]) && userTextAnswers[currentQuestionIndex]" class="submit-answer">
               <button class="btn btn-primary" @click="submitAnswer">确认答案</button>
             </div>
 
@@ -211,14 +232,7 @@
                 上一题
               </button>
               <button 
-                v-if="!showAnswer && hasAnswer(currentQuestionIndex)" 
-                class="btn btn-secondary" 
-                @click="submitAnswer"
-              >
-                显示答案
-              </button>
-              <button 
-                v-if="!showAnswer" 
+                v-if="!showAnswer && isTextQuestion(questions[currentQuestionIndex])" 
                 class="btn btn-ghost" 
                 @click="skipQuestion"
               >
@@ -265,7 +279,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { apiGetMyFiles, apiGetPresignedUrl, apiGetMyRubrics, apiGetQuestionsByRubricId, apiUpdateRubric, apiGenerateRubricHtml } from '@/api'
+import { apiGetMyFiles, apiGetMyRubrics, apiGetQuestionsByRubricId, apiUpdateRubric, apiDeleteRubric, apiGenerateRubricHtml, apiDownloadFile, apiDeleteFile } from '@/api'
 import { useUserStore } from '@/stores/user'
 import type { HtmlFileItem, RubricItem, RubricQuestion } from '@/types'
 import FileCard from '@/components/FileCard.vue'
@@ -292,9 +306,22 @@ const showEditModal = ref(false)
 const editRubricForm = ref({
   id: 0,
   title: '',
-  isPublic: false
+  isPrivate: false
 })
 const editLoading = ref(false)
+const deleteLoading = ref(false)
+const showDeleteConfirm = ref(false)
+
+// 提示弹窗
+const showToast = ref(false)
+const toastTitle = ref('')
+const toastMessage = ref('')
+
+function showToastMsg(title: string, message: string) {
+  toastTitle.value = title
+  toastMessage.value = message
+  showToast.value = true
+}
 
 // 考试模式
 const examMode = ref<'practice' | 'review'>('practice')
@@ -310,7 +337,10 @@ onMounted(async () => {
 async function loadFiles() {
   try {
     const res = await apiGetMyFiles()
-    if (res.code === 200) files.value = res.data?.data || []
+    if (res.code === 200) {
+      // 直接使用 isPrivate 字段
+      files.value = res.data || []
+    }
   } catch (e) { console.error('获取文件列表失败', e) }
   finally { loading.value = false }
 }
@@ -330,7 +360,7 @@ function showEditRubric(rubric: RubricItem) {
   editRubricForm.value = {
     id: rubric.id,
     title: rubric.title,
-    isPublic: rubric.isPublic
+    isPrivate: rubric.isPrivate
   }
   showEditModal.value = true
 }
@@ -338,7 +368,7 @@ function showEditRubric(rubric: RubricItem) {
 // 提交修改
 async function submitEditRubric() {
   if (!editRubricForm.value.title.trim()) {
-    alert('请输入试卷名称')
+    showToastMsg('提示', '请输入试卷名称')
     return
   }
   editLoading.value = true
@@ -347,36 +377,130 @@ async function submitEditRubric() {
     const res = await apiUpdateRubric({
       id: editRubricForm.value.id,
       title: editRubricForm.value.title,
-      isPublic: editRubricForm.value.isPublic
+      isPrivate: editRubricForm.value.isPrivate
     })
     console.log('修改响应:', res)
     if (res.code === 200) {
-      // 更新列表中的数据
       const idx = rubrics.value.findIndex(r => r.id === editRubricForm.value.id)
       if (idx !== -1) {
         rubrics.value[idx].title = editRubricForm.value.title
-        rubrics.value[idx].isPublic = editRubricForm.value.isPublic
+        rubrics.value[idx].isPrivate = editRubricForm.value.isPrivate
       }
       showEditModal.value = false
-      alert('修改成功')
+      showToastMsg('成功', '修改成功')
     } else {
-      alert(res.message || '修改失败')
+      showToastMsg('错误', res.message || '修改失败')
     }
   } catch (e) { console.error('修改试卷失败', e) }
   finally { editLoading.value = false }
 }
 
-async function handleOpenFile(file: HtmlFileItem) {
+// 删除试卷
+function deleteRubric() {
+  showDeleteConfirm.value = true
+}
+
+async function confirmDeleteRubric() {
+  deleteLoading.value = true
   try {
-    const res = await apiGetPresignedUrl(file.id)
-    if (res.code === 200 && res.data?.url) {
-      window.open(res.data.url, '_blank')
+    const res = await apiDeleteRubric(editRubricForm.value.id)
+    if (res.code === 200) {
+      rubrics.value = rubrics.value.filter(r => r.id !== editRubricForm.value.id)
+      showEditModal.value = false
+      showDeleteConfirm.value = false
+      showToastMsg('成功', '删除成功')
     } else {
-      alert('获取文件链接失败')
+      showToastMsg('错误', res.message || '删除失败')
+    }
+  } catch (e) { 
+    console.error('删除试卷失败', e)
+    showToastMsg('错误', '删除失败')
+  }
+  finally { deleteLoading.value = false }
+}
+
+// 预览文件 - 在新窗口打开
+async function handlePreviewFile(file: HtmlFileItem) {
+  try {
+    const token = localStorage.getItem('token')
+    const response = await fetch(`/api/files/download/${file.id}`, {
+      headers: { 'token': token || '' }
+    })
+    if (!response.ok) {
+      throw new Error('预览失败')
+    }
+    const blob = await response.blob()
+    const htmlBlob = new Blob([blob], { type: 'text/html;charset=utf-8' })
+    const blobUrl = URL.createObjectURL(htmlBlob)
+    const newWindow = window.open(blobUrl, '_blank')
+    if (!newWindow) {
+      showToastMsg('提示', '无法打开新窗口，请允许弹窗')
+    }
+    setTimeout(() => {
+      URL.revokeObjectURL(blobUrl)
+    }, 10000)
+  } catch (e) {
+    console.error('预览文件失败', e)
+    showToastMsg('错误', '预览文件失败')
+  }
+}
+
+// 下载文件 - 直接触发下载
+async function handleDownloadFile(file: HtmlFileItem) {
+  try {
+    const token = localStorage.getItem('token')
+    const response = await fetch(`/api/files/download/${file.id}`, {
+      headers: { 'token': token || '' }
+    })
+    if (!response.ok) {
+      throw new Error('下载失败')
+    }
+    const blob = await response.blob()
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    let fileName = file.fileName
+    if (!fileName.toLowerCase().endsWith('.html')) {
+      fileName += '.html'
+    }
+    a.download = fileName
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    window.URL.revokeObjectURL(url)
+  } catch (e) {
+    console.error('下载文件失败', e)
+    showToastMsg('错误', '下载文件失败')
+  }
+}
+
+// 删除文件
+const showFileDeleteConfirm = ref(false)
+const pendingDeleteFile = ref<HtmlFileItem | null>(null)
+
+function handleDeleteFile(file: HtmlFileItem) {
+  pendingDeleteFile.value = file
+  showFileDeleteConfirm.value = true
+}
+
+async function confirmDeleteFile() {
+  if (!pendingDeleteFile.value) return
+  const file = pendingDeleteFile.value
+  showFileDeleteConfirm.value = false
+  
+  try {
+    const res = await apiDeleteFile(file.id)
+    if (res.code === 200) {
+      showToastMsg('成功', '删除成功')
+      await loadFiles()
+    } else {
+      showToastMsg('错误', res.message || '删除失败')
     }
   } catch (e) {
-    console.error('获取预签名URL失败', e)
-    alert('获取文件链接失败')
+    console.error('删除文件失败', e)
+    showToastMsg('错误', '删除失败')
+  } finally {
+    pendingDeleteFile.value = null
   }
 }
 
@@ -402,15 +526,14 @@ async function handleGenerateHtml(rubric: RubricItem) {
   try {
     const res = await apiGenerateRubricHtml(rubric.id, rubric.title + '.html', false)
     if (res.code === 200) {
-      alert('HTML生成成功！文件已保存到您的文件列表中。')
-      // 刷新文件列表
+      showToastMsg('成功', 'HTML生成成功！文件已保存到您的文件列表中。')
       await loadFiles()
     } else {
-      alert(res.message || '生成失败')
+      showToastMsg('错误', res.message || '生成失败')
     }
   } catch (e) {
     console.error('生成HTML失败', e)
-    alert('生成失败')
+    showToastMsg('错误', '生成失败')
   }
 }
 
@@ -465,6 +588,26 @@ function hasAnswer(index: number): boolean {
 function selectAnswer(answer: string) {
   if (showAnswer.value) return
   userAnswers.value[currentQuestionIndex.value] = answer
+  
+  const q = questions.value[currentQuestionIndex.value]
+  if (hasOptions(q)) {
+    const options = getOptions(q)
+    const selectedIndex = answer.charCodeAt(0) - 65
+    const selectedContent = options[selectedIndex]
+    const isCorrect = answer === q.answer || selectedContent === q.answer
+    if (isCorrect) {
+      setTimeout(() => {
+        if (currentQuestionIndex.value < questions.value.length - 1) {
+          currentQuestionIndex.value++
+          showAnswer.value = false
+        } else {
+          showRubricDetail.value = false
+        }
+      }, 300)
+    } else {
+      showAnswer.value = true
+    }
+  }
 }
 
 // 提交答案
@@ -481,7 +624,16 @@ function submitAnswer() {
 function isCurrentAnswerCorrect(): boolean {
   const q = questions.value[currentQuestionIndex.value]
   if (!q) return false
-  return userAnswers.value[currentQuestionIndex.value] === q.answer
+  const userAnswer = userAnswers.value[currentQuestionIndex.value]
+  if (!userAnswer) return false
+  
+  if (hasOptions(q)) {
+    const options = getOptions(q)
+    const selectedIndex = userAnswer.charCodeAt(0) - 65
+    const selectedContent = options[selectedIndex]
+    return userAnswer === q.answer || selectedContent === q.answer
+  }
+  return userAnswer === q.answer
 }
 
 // 上一题
@@ -497,6 +649,8 @@ function nextQuestion() {
   if (currentQuestionIndex.value < questions.value.length - 1) {
     currentQuestionIndex.value++
     showAnswer.value = false
+  } else {
+    showRubricDetail.value = false
   }
 }
 
@@ -539,83 +693,93 @@ function getTypeLabel(type: string): string {
 </script>
 
 <style scoped>
-.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
-.page-title { font-size: 24px; font-weight: 700; color: var(--text-primary); }
-.loading-center { display: flex; justify-content: center; padding: 64px 0; }
+.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; }
+.page-title { font-size: 28px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.02em; }
+.loading-center { display: flex; justify-content: center; padding: 80px 0; }
 
-/* 标签切换 */
-.tab-switch { display: flex; gap: 8px; margin-bottom: 24px; }
-.tab-btn { padding: 8px 20px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--card-bg); color: var(--text-muted); cursor: pointer; transition: all 0.2s; }
-.tab-btn:hover { border-color: var(--accent); }
-.tab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.tab-switch { display: flex; gap: 8px; margin-bottom: 28px; }
+.tab-btn { padding: 10px 24px; border: 1px solid var(--border-glass); border-radius: 12px; background: var(--bg-glass); color: var(--text-muted); cursor: pointer; transition: all 0.3s ease; font-size: 14px; font-weight: 500; }
+.tab-btn:hover { border-color: var(--accent); color: var(--text-secondary); }
+.tab-btn.active { background: var(--accent-gradient); color: #fff; border-color: transparent; box-shadow: 0 4px 16px rgba(99,102,241,0.3); }
 
-/* 试卷列表 */
-.rubric-list { display: flex; flex-direction: column; gap: 12px; }
-.rubric-card { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border: 1px solid var(--border-color); border-radius: 12px; cursor: pointer; transition: all 0.2s; }
-.rubric-card:hover { border-color: var(--accent); background: var(--accent-light); }
-.rubric-title { font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
-.rubric-meta { font-size: 13px; color: var(--text-muted); display: flex; gap: 16px; }
-.rubric-arrow { font-size: 24px; color: var(--text-muted); }
-.rubric-actions { display: flex; align-items: center; gap: 12px; }
+.rubric-list { display: flex; flex-direction: column; gap: 16px; }
+.rubric-card { display: flex; align-items: center; justify-content: space-between; padding: 20px 24px; border: 1px solid var(--border-glass); border-radius: 16px; cursor: pointer; transition: all 0.3s ease; background: var(--card-bg); position: relative; overflow: hidden; }
+.rubric-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--accent-gradient); opacity: 0; transition: opacity 0.3s ease; }
+.rubric-card:hover { border-color: var(--accent-border); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.2); }
+.rubric-card:hover::before { opacity: 1; }
+.rubric-title { font-size: 17px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
+.rubric-meta { font-size: 13px; color: var(--text-muted); display: flex; gap: 20px; }
+.rubric-arrow { font-size: 24px; color: var(--text-muted); transition: transform 0.3s ease; }
+.rubric-card:hover .rubric-arrow { transform: translateX(4px); color: var(--accent); }
+.rubric-actions { display: flex; align-items: center; gap: 10px; }
 
-/* 全屏试卷详情 */
 .exam-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg-primary); z-index: 1000; overflow-y: auto; }
-.exam-container { max-width: 800px; margin: 0 auto; padding: 24px; }
-.exam-header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color); }
-.back-btn { padding: 8px 16px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--card-bg); cursor: pointer; }
-.exam-title { flex: 1; font-size: 20px; font-weight: 600; text-align: center; }
+.exam-container { max-width: 800px; margin: 0 auto; padding: 32px; }
+.exam-header { display: flex; align-items: center; gap: 16px; margin-bottom: 28px; padding-bottom: 20px; border-bottom: 1px solid var(--border-glass); }
+.back-btn { padding: 10px 20px; border: 1px solid var(--border-glass); border-radius: 12px; background: var(--bg-glass); cursor: pointer; color: var(--text-secondary); transition: all 0.3s ease; font-size: 14px; }
+.back-btn:hover { background: var(--accent-light); border-color: var(--accent-border); color: var(--accent); }
+.exam-title { flex: 1; font-size: 22px; font-weight: 600; text-align: center; }
 .mode-switch { display: flex; gap: 8px; }
-.mode-btn { padding: 8px 16px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--card-bg); cursor: pointer; }
-.mode-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.mode-btn { padding: 10px 20px; border: 1px solid var(--border-glass); border-radius: 12px; background: var(--bg-glass); cursor: pointer; font-size: 14px; transition: all 0.3s ease; color: var(--text-secondary); }
+.mode-btn:hover { color: var(--text-primary); border-color: var(--accent-border); }
+.mode-btn.active { background: var(--accent-gradient); color: #fff; border-color: transparent; box-shadow: 0 4px 16px rgba(99,102,241,0.3); }
 
-/* 做题模式 */
-.practice-mode { display: flex; flex-direction: column; gap: 20px; }
+.practice-mode { display: flex; flex-direction: column; gap: 24px; }
 .progress-bar { text-align: center; }
-.progress-text { font-size: 14px; color: var(--text-muted); margin-bottom: 8px; }
-.progress-track { height: 6px; background: var(--border-color); border-radius: 3px; overflow: hidden; }
-.progress-fill { height: 100%; background: var(--accent); transition: width 0.3s; }
+.progress-text { font-size: 14px; color: var(--text-muted); margin-bottom: 12px; }
+.progress-track { height: 8px; background: var(--bg-glass); border-radius: 4px; overflow: hidden; }
+.progress-fill { height: 100%; background: var(--accent-gradient); transition: width 0.3s ease; border-radius: 4px; }
 
-.question-card { padding: 24px; border: 1px solid var(--border-color); border-radius: 12px; background: var(--card-bg); }
-.question-header { display: flex; justify-content: space-between; margin-bottom: 16px; }
-.question-num { font-weight: 600; font-size: 16px; }
-.question-type { font-size: 12px; padding: 4px 12px; background: var(--accent-light); color: var(--accent); border-radius: 12px; }
-.question-text { font-size: 18px; line-height: 1.8; margin-bottom: 20px; }
+.question-card { padding: 28px; border: 1px solid var(--border-glass); border-radius: 20px; background: var(--card-bg); position: relative; }
+.question-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--accent-gradient); border-radius: 20px 20px 0 0; }
+.question-header { display: flex; justify-content: space-between; margin-bottom: 20px; }
+.question-num { font-weight: 600; font-size: 17px; }
+.question-type { font-size: 12px; padding: 6px 14px; background: var(--accent-light); color: var(--accent); border-radius: 20px; border: 1px solid var(--accent-border); }
+.question-text { font-size: 18px; line-height: 1.8; margin-bottom: 24px; }
 
-.question-options { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; }
-.option-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer; transition: all 0.2s; }
-.option-item:hover { border-color: var(--accent); }
-.option-item.selected { border-color: var(--accent); background: var(--accent-light); }
-.option-item.correct { border-color: #22c55e; background: rgba(34,197,94,0.1); }
-.option-label { font-weight: 600; width: 24px; }
+.question-options { display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px; }
+.option-item { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border: 1px solid var(--border-glass); border-radius: 14px; cursor: pointer; transition: all 0.3s ease; color: var(--text-primary); }
+.option-item:hover { border-color: var(--accent); background: rgba(99,102,241,0.05); }
+.option-item.selected { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
+.option-item.correct { border-color: var(--success); background: var(--success-light); color: var(--success); }
+.option-label { font-weight: 600; width: 28px; height: 28px; border-radius: 8px; background: var(--bg-glass); display: flex; align-items: center; justify-content: center; font-size: 14px; color: var(--text-primary); }
+.option-item.selected .option-label { background: var(--accent); color: #fff; }
+.option-item.correct .option-label { background: var(--success); color: #fff; }
 
-.true-false-options { display: flex; gap: 16px; margin-bottom: 20px; }
-.tf-btn { flex: 1; padding: 16px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--card-bg); font-size: 16px; cursor: pointer; transition: all 0.2s; }
-.tf-btn:hover { border-color: var(--accent); }
-.tf-btn.selected { border-color: var(--accent); background: var(--accent-light); }
-.tf-btn.correct { border-color: #22c55e; background: rgba(34,197,94,0.1); }
+.true-false-options { display: flex; gap: 16px; margin-bottom: 24px; }
+.tf-btn { flex: 1; padding: 18px; border: 1px solid var(--border-glass); border-radius: 14px; background: var(--card-bg); font-size: 16px; font-weight: 500; cursor: pointer; transition: all 0.3s ease; color: var(--text-primary); }
+.tf-btn:hover { border-color: var(--accent); background: rgba(99,102,241,0.05); }
+.tf-btn.selected { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
+.tf-btn.correct { border-color: var(--success); background: var(--success-light); color: var(--success); }
 
-.text-answer-area { margin-bottom: 20px; }
-.text-answer-input { width: 100%; min-height: 150px; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--card-bg); color: var(--text-primary); font-size: 16px; font-family: inherit; resize: vertical; line-height: 1.6; }
-.text-answer-input:focus { outline: none; border-color: var(--accent); }
+.text-answer-area { margin-bottom: 24px; }
+.text-answer-input { width: 100%; min-height: 160px; padding: 16px; border: 1px solid var(--border-glass); border-radius: 14px; background: var(--bg-glass); color: var(--text-primary); font-size: 15px; font-family: inherit; resize: vertical; line-height: 1.7; }
+.text-answer-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
 .text-answer-input:disabled { opacity: 0.7; cursor: not-allowed; }
 
-.submit-answer { text-align: center; margin-bottom: 20px; }
+.submit-answer { text-align: center; margin-bottom: 24px; }
 
-.answer-section { padding: 16px; border-radius: 8px; margin-bottom: 20px; }
+.answer-section { padding: 20px; border-radius: 14px; margin-bottom: 24px; background: var(--bg-glass); border: 1px solid var(--border-glass); }
 .your-answer { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
-.your-answer.correct { color: #22c55e; }
+.your-answer.correct { color: var(--success); }
 .correct-answer { font-size: 14px; color: var(--text-muted); margin-bottom: 12px; }
 
 .nav-buttons { display: flex; gap: 12px; justify-content: center; }
 
-/* 背题模式 */
-.review-mode .questions-list { display: flex; flex-direction: column; gap: 20px; }
-.review-mode .question-item { padding: 20px; border: 1px solid var(--border-color); border-radius: 12px; }
-.review-mode .question-header { margin-bottom: 12px; }
-.review-mode .question-text { margin-bottom: 16px; }
-.review-mode .question-options { margin-bottom: 12px; }
-.review-mode .option { padding: 6px 0; }
-.review-mode .question-answer { padding: 8px; background: rgba(34,197,94,0.1); border-radius: 6px; margin-bottom: 8px; color: #16a34a; }
-.review-mode .question-explanation { padding: 8px; background: rgba(59,130,246,0.1); border-radius: 6px; color: #2563eb; margin-bottom: 8px; }
-.review-mode .question-steps { padding: 8px; background: rgba(236,72,153,0.1); border-radius: 6px; color: #ec4899; }
+.review-mode .questions-list { display: flex; flex-direction: column; gap: 24px; }
+.review-mode .question-item { padding: 24px; border: 1px solid var(--border-glass); border-radius: 16px; background: var(--card-bg); }
+.review-mode .question-header { margin-bottom: 16px; }
+.review-mode .question-text { margin-bottom: 20px; }
+.review-mode .question-options { margin-bottom: 16px; }
+.review-mode .option { padding: 8px 0; }
+.review-mode .question-answer { padding: 12px 16px; background: var(--success-light); border-radius: 10px; margin-bottom: 10px; color: var(--success); border: 1px solid rgba(16,185,129,0.2); }
+.review-mode .question-explanation { padding: 12px 16px; background: rgba(59,130,246,0.08); border-radius: 10px; color: #3b82f6; margin-bottom: 10px; border: 1px solid rgba(59,130,246,0.15); }
+.review-mode .question-steps { padding: 12px 16px; background: rgba(236,72,153,0.08); border-radius: 10px; color: var(--secondary); border: 1px solid rgba(236,72,153,0.15); }
+
+.modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(4px); }
+.confirm-overlay { z-index: 1100; }
+.confirm-modal { background: var(--card-bg); border: 1px solid var(--border-glass); border-radius: 16px; padding: 24px; min-width: 320px; text-align: center; }
+.confirm-modal h3 { margin: 0 0 12px; font-size: 18px; color: var(--text-primary); }
+.confirm-modal p { margin: 0 0 20px; color: var(--text-secondary); font-size: 14px; }
+.confirm-btns { display: flex; gap: 12px; justify-content: center; }
 </style>

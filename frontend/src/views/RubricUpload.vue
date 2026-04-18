@@ -20,6 +20,9 @@
       <button class="btn btn-primary" style="margin-top:16px" @click="confirmParse" :disabled="!selectedFile || parsing">
         <span v-if="parsing" class="spinner"></span><span v-else>AI 解析题目</span>
       </button>
+      <button class="btn btn-secondary" style="margin-top:16px;margin-left:12px" @click="confirmParseLocal" :disabled="!selectedFile || parsing">
+        <span v-if="parsingLocal" class="spinner"></span><span v-else>本地解析题目</span>
+      </button>
 
       <!-- 结果提示 -->
       <div v-if="parseResult" class="upload-result" :class="parseResult.success ? 'success' : 'error'">
@@ -132,7 +135,7 @@
         <div class="form-group" style="display:flex;align-items:center;justify-content:space-between">
           <label class="form-label" style="margin-bottom:0">是否公开（班级可见）</label>
           <label class="toggle">
-            <input v-model="rubricIsPublic" type="checkbox" />
+            <input v-model="rubricIsPrivate" type="checkbox" />
             <span class="toggle-slider"></span>
           </label>
         </div>
@@ -141,6 +144,34 @@
           <button class="btn btn-primary" @click="handleUploadRubric" :disabled="uploadLoading || !rubricTitle.trim() || !rubricClassName.trim()">
             <span v-if="uploadLoading" class="spinner"></span><span v-else>确定上传</span>
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 试卷列表弹窗 -->
+    <div v-if="showExamListModal" class="modal-overlay" @click.self="showExamListModal = false">
+      <div class="modal-content" style="max-width:500px">
+        <h3 style="font-size:18px;margin-bottom:16px">📋 已有试卷列表</h3>
+        <p style="color:var(--text-muted);margin-bottom:16px;font-size:14px">
+          以下是您和班级公开的试卷，请确认是否已存在相同试卷，不要重复上传。
+        </p>
+        <div v-if="examListLoading" style="text-align:center;padding:20px;color:var(--text-muted)">
+          加载中...
+        </div>
+        <div v-else-if="examList.length === 0" style="text-align:center;padding:20px;color:var(--text-muted)">
+          暂无可用试卷
+        </div>
+        <div v-else style="max-height:300px;overflow-y:auto;margin-bottom:16px">
+          <div v-for="exam in examList" :key="exam.id" class="exam-item">
+            <span class="exam-title">{{ exam.title }}</span>
+            <span class="exam-badge" :class="exam.isPrivate ? 'private' : 'public'">
+              {{ exam.isPrivate ? '我的' : '公开' }}
+            </span>
+          </div>
+        </div>
+        <div style="display:flex;gap:12px">
+          <button class="btn btn-secondary" @click="showExamListModal = false">取消</button>
+          <button class="btn btn-primary" @click="proceedToParse">确认继续解析</button>
         </div>
       </div>
     </div>
@@ -163,9 +194,9 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { apiAddRubricFile } from '@/api'
+import { apiAddRubricFile, apiAddRubricFileLocal, apiGetMyRubrics, apiGetPublicRubrics } from '@/api'
 import { useUserStore } from '@/stores/user'
-import type { QuestionItem } from '@/types'
+import type { QuestionItem, RubricItem } from '@/types'
 
 const userStore = useUserStore()
 
@@ -173,6 +204,7 @@ const selectedFile = ref<File|null>(null)
 const dragOver = ref(false)
 const fileInput = ref<HTMLInputElement|null>(null)
 const parsing = ref(false)
+const parsingLocal = ref(false)
 const parseResult = ref<{ success: boolean; message: string } | null>(null)
 const questions = ref<QuestionItem[]>([])
 const editMode = ref(false)
@@ -180,10 +212,13 @@ const editMode = ref(false)
 // 上传题目表单相关
 const showUploadModal = ref(false)
 const showParseConfirm = ref(false)  // AI解析确认弹窗
+const showExamListModal = ref(false)  // 试卷列表弹窗
 const uploadLoading = ref(false)
 const rubricTitle = ref('')
 const rubricClassName = ref('')
-const rubricIsPublic = ref(false)
+const rubricIsPrivate = ref(false)
+const examList = ref<RubricItem[]>([])  // 试卷列表（公开+用户）
+const examListLoading = ref(false)
 
 function triggerFileInput() { fileInput.value?.click() }
 function handleFileSelect(e: Event) {
@@ -214,7 +249,7 @@ function toggleEditMode() {
 function showUploadForm() {
   rubricTitle.value = ''
   rubricClassName.value = userStore.className || ''
-  rubricIsPublic.value = false
+  rubricIsPrivate.value = false
   showUploadModal.value = true
 }
 
@@ -241,7 +276,7 @@ async function handleUploadRubric() {
       className: rubricClassName.value,
       createId: userStore.userId,
       createStudentNo: userStore.studentNo,
-      isPublic: rubricIsPublic.value,
+      isPrivate: rubricIsPrivate.value,
       rubrics: rubrics
     }
     
@@ -275,7 +310,7 @@ function resetForm() {
   parseResult.value = null
   rubricTitle.value = ''
   rubricClassName.value = ''
-  rubricIsPublic.value = false
+  rubricIsPrivate.value = false
   editMode.value = false
 }
 
@@ -295,15 +330,76 @@ async function handleFileParse() {
       }))
       parseResult.value = { success: true, message: `成功解析 ${questionsArr.length} 道题目` }
     } else {
-      parseResult.value = { success: false, message: res.message || '解析失败' }
+      parseResult.value = { success: false, message: res.message || 'AI解析失败，可能原因：题目数量过多等，可以尝试减少题目数量或者使用"本地解析题目"功能' }
     }
   } catch (e: unknown) {
-    parseResult.value = { success: false, message: (e as Error).message || '解析失败' }
+    const errorMsg = (e as Error).message || 'AI解析失败'
+    parseResult.value = { 
+      success: false, 
+      message: `AI解析失败，可能原因：题目数量过多等，可以尝试减少题目数量或者使用"本地解析题目"功能\n\n错误详情：${errorMsg}` 
+    }
   } finally { parsing.value = false }
 }
 
+async function handleFileParseLocal() {
+  if (!selectedFile.value || !userStore.userId) return
+  parsingLocal.value = true
+  parseResult.value = null
+  try {
+    const res = await apiAddRubricFileLocal(selectedFile.value, userStore.userId!)
+    if (res.code === 200 && res.data) {
+      // 后端直接返回数组对象，不需要再 JSON.parse
+      const questionsArr = Array.isArray(res.data) ? res.data : []
+      questions.value = questionsArr.map((q: any) => ({
+        ...q,
+        // 处理 calculationStepsText
+        calculationStepsText: q.calculationSteps?.join('\n') || ''
+      }))
+      parseResult.value = { success: true, message: `成功解析 ${questionsArr.length} 道题目` }
+    } else {
+      parseResult.value = { success: false, message: res.message || '本地解析失败' }
+    }
+  } catch (e: unknown) {
+    parseResult.value = { success: false, message: (e as Error).message || '本地解析失败' }
+  } finally { parsingLocal.value = false }
+}
+
 function confirmParse() {
+  // 先获取试卷列表，显示弹窗让用户确认
+  examListLoading.value = true
+  showExamListModal.value = true
+  
+  Promise.all([
+    apiGetMyRubrics(),
+    apiGetPublicRubrics()
+  ]).then(([myRes, publicRes]) => {
+    const myList = myRes.code === 200 && myRes.data ? myRes.data : []
+    const publicList = publicRes.code === 200 && publicRes.data ? publicRes.data : []
+    // 合并并去重（按id）
+    const allList = [...myList]
+    const existingIds = new Set(allList.map(r => r.id))
+    publicList.forEach((r: RubricItem) => {
+      if (!existingIds.has(r.id)) {
+        allList.push(r)
+      }
+    })
+    examList.value = allList
+  }).catch(() => {
+    examList.value = []
+  }).finally(() => {
+    examListLoading.value = false
+  })
+}
+
+// 用户确认继续解析
+function proceedToParse() {
+  showExamListModal.value = false
   showParseConfirm.value = true
+}
+
+function confirmParseLocal() {
+  // 直接进行本地解析，不需要确认
+  handleFileParseLocal()
 }
 </script>
 
@@ -363,4 +459,12 @@ function confirmParse() {
 .toggle-slider::before { content: ''; position: absolute; width: 20px; height: 20px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.3s; }
 .toggle input:checked + .toggle-slider { background: var(--accent); }
 .toggle input:checked + .toggle-slider::before { transform: translateX(22px); }
+
+/* 试卷列表样式 */
+.exam-item { display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid var(--border-color); }
+.exam-item:last-child { border-bottom:none; }
+.exam-title { font-size:14px;color:var(--text-primary); }
+.exam-badge { font-size:12px;padding:2px 8px;border-radius:12px; }
+.exam-badge.public { background:rgba(34,197,94,0.1);color:#22c55e; }
+.exam-badge.private { background:rgba(59,130,246,0.1);color:#3b82f6; }
 </style>

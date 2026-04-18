@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
@@ -13,6 +14,8 @@ import pkqb.common.Result;
 import pkqb.mapper.FileMapper;
 import pkqb.mapper.QuestionMapper;
 import pkqb.mapper.RubricMapper;
+import pkqb.mapper.UserMapper;
+import pkqb.mapper.ClassMapper;
 import pkqb.pojo.dto.AiRubric;
 import pkqb.pojo.dto.RubricGenerateRequest;
 import pkqb.pojo.dto.RubricGenerateResponse;
@@ -20,6 +23,8 @@ import pkqb.pojo.dto.RubricRequest;
 import pkqb.pojo.entity.FileEntity;
 import pkqb.pojo.entity.QuestionEntity;
 import pkqb.pojo.entity.RubricEntity;
+import pkqb.pojo.entity.UserEntity;
+import pkqb.pojo.entity.ClassEntity;
 import pkqb.service.MinioService;
 import pkqb.service.RubricService;
 
@@ -38,8 +43,16 @@ public class RubricServiceImpl implements RubricService {
     private final RubricMapper rubricMapper;
     private final QuestionMapper questionMapper;
     private final FileMapper fileMapper;
+    private final UserMapper userMapper;
+    private final ClassMapper classMapper;
     private final MinioService minioService;
     private final ObjectMapper objectMapper;
+
+    @Value("${minio.endpoint}")
+    private String minioEndpoint;
+
+    @Value("${minio.bucket-name}")
+    private String bucketName;
 
     @Override
     @Transactional
@@ -113,12 +126,25 @@ public class RubricServiceImpl implements RubricService {
     }
 
     @Override
-    public Result<List<RubricEntity>> getPublicRubrics(Long excludeUserId) {
+    public Result<List<RubricEntity>> getPublicRubrics(Long userId) {
         try {
+            // 先获取用户的班级信息
+            UserEntity user = userMapper.selectById(userId);
+            if (user == null || user.getClassId() == null) {
+                return Result.success(List.of());
+            }
+            
+            // 通过classId获取班级名称
+            ClassEntity classEntity = classMapper.selectById(user.getClassId());
+            if (classEntity == null) {
+                return Result.success(List.of());
+            }
+            
             LambdaQueryWrapper<RubricEntity> wrapper = new LambdaQueryWrapper<>();
-            wrapper.eq(RubricEntity::getIsPrivate, true)
+            wrapper.eq(RubricEntity::getIsPrivate, false)  // 公开试卷 isPrivate=false
+                   .eq(RubricEntity::getClassName, classEntity.getClassName())  // 同班级（使用班级名称）
+                   .ne(RubricEntity::getCreateId, userId)  // 排除当前用户
                    .eq(RubricEntity::getDeleted, 0)
-                   .ne(RubricEntity::getCreateId, excludeUserId)  // 排除当前用户
                    .orderByDesc(RubricEntity::getCreateTime);
             List<RubricEntity> rubrics = rubricMapper.selectList(wrapper);
             return Result.success(rubrics);
@@ -217,8 +243,9 @@ public class RubricServiceImpl implements RubricService {
             questionEntity.setDeleted(0);
             questionMapper.insert(questionEntity);
             
-            // 更新试卷题目数量
-            rubric.setQuestionCount(rubric.getQuestionCount() + 1);
+            // 更新试卷题目数量（增加）
+            Integer currentCount = rubric.getQuestionCount();
+            rubric.setQuestionCount(currentCount == null ? 1 : currentCount + 1);
             rubric.setUpdateTime(LocalDateTime.now());
             rubricMapper.updateById(rubric);
             
@@ -282,8 +309,9 @@ public class RubricServiceImpl implements RubricService {
             question.setUpdateTime(LocalDateTime.now());
             questionMapper.updateById(question);
             
-            // 更新试卷题目数量
-            rubric.setQuestionCount(Math.max(0, rubric.getQuestionCount() - 1));
+            // 更新试卷题目数量（减少，处理null情况）
+            Integer currentCount = rubric.getQuestionCount();
+            rubric.setQuestionCount(currentCount == null ? 0 : Math.max(0, currentCount - 1));
             rubric.setUpdateTime(LocalDateTime.now());
             rubricMapper.updateById(rubric);
             
@@ -304,17 +332,26 @@ public class RubricServiceImpl implements RubricService {
                 return Result.error("试卷不存在");
             }
 
-            // 2. 获取所有题目
+            // 2. 检查是否已经存在HTML文件
+            LambdaQueryWrapper<FileEntity> existWrapper = new LambdaQueryWrapper<>();
+            existWrapper.eq(FileEntity::getRubricId, request.getRubricId())
+                       .eq(FileEntity::getUserId, userId);
+            FileEntity existFile = fileMapper.selectOne(existWrapper);
+            if (existFile != null) {
+                return Result.error("HTML文件已经存在，请在MinIO文件中查看");
+            }
+
+            // 3. 获取所有题目
             LambdaQueryWrapper<QuestionEntity> wrapper = new LambdaQueryWrapper<>();
             wrapper.eq(QuestionEntity::getRubricId, request.getRubricId())
                    .eq(QuestionEntity::getDeleted, 0)
                    .orderByAsc(QuestionEntity::getOrderIndex);
             List<QuestionEntity> questions = questionMapper.selectList(wrapper);
 
-            // 3. 生成HTML内容
+            // 4. 生成HTML内容
             String htmlContent = generateHtmlContent(rubric, questions);
 
-            // 4. 上传到MinIO
+            // 5. 上传到MinIO
             String fileName = request.getFileName() != null && !request.getFileName().isEmpty()
                     ? request.getFileName()
                     : rubric.getTitle() + ".html";
@@ -323,7 +360,7 @@ public class RubricServiceImpl implements RubricService {
             ByteArrayInputStream inputStream = new ByteArrayInputStream(htmlContent.getBytes(StandardCharsets.UTF_8));
             minioService.upload(objectKey, inputStream, "text/html", htmlContent.getBytes(StandardCharsets.UTF_8).length);
 
-            // 5. 保存到数据库
+            // 6. 保存到数据库
             FileEntity fileEntity = new FileEntity();
             fileEntity.setUserId(userId);
             fileEntity.setRubricId(request.getRubricId());
@@ -332,11 +369,11 @@ public class RubricServiceImpl implements RubricService {
             fileEntity.setIsPrivate(request.getIsPrivate() != null ? request.getIsPrivate() : false);
             fileMapper.insert(fileEntity);
 
-            // 6. 返回结果
+            // 7. 返回结果
             RubricGenerateResponse response = new RubricGenerateResponse();
             response.setFileId(fileEntity.getId());
             response.setFileName(fileName);
-            response.setDownloadUrl("/api/files/presigned/" + fileEntity.getId());
+            response.setDownloadUrl(minioEndpoint + "/" + bucketName + "/" + objectKey);
             response.setCreateTime(fileEntity.getCreateTime());
 
             return Result.success("HTML生成成功", response);

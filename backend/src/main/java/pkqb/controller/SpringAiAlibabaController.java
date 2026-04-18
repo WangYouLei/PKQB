@@ -1,14 +1,20 @@
 package pkqb.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import pkqb.common.Result;
 import pkqb.pojo.dto.AiRubric;
+import pkqb.service.RateLimitService;
 import pkqb.service.SpringAiAlibabaService;
 import reactor.core.publisher.Flux;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Spring AI Alibaba 控制器
@@ -16,12 +22,15 @@ import java.util.List;
 @RestController
 @Slf4j
 @RequestMapping("/api/ai")
+@Tag(name = "AI服务", description = "AI对话、知识库管理、题库解析接口")
 public class SpringAiAlibabaController {
 
   private final SpringAiAlibabaService saaService;
+  private final RateLimitService rateLimitService;
 
-    public SpringAiAlibabaController(SpringAiAlibabaService saaService) {
+    public SpringAiAlibabaController(SpringAiAlibabaService saaService, RateLimitService rateLimitService) {
         this.saaService = saaService;
+        this.rateLimitService = rateLimitService;
     }
 
     /**
@@ -31,23 +40,34 @@ public class SpringAiAlibabaController {
      * @return 添加结果
      */
     @PostMapping(value = "/add-documentsFile")
+    @Operation(summary = "上传知识库文档", description = "上传文档到向量知识库")
     public Result<String> addDocumentsFile(
-            @RequestParam("file") MultipartFile file,
-            @RequestParam("userId") Long userId) {
+            @Parameter(description = "文档文件") @RequestParam("file") MultipartFile file,
+            @Parameter(description = "用户ID") @RequestParam("userId") Long userId) {
         return saaService.addDocuments(file, userId);
     }
 
 
-    /**处理上传的"问题"文件
+    /**
+     * 处理上传的"问题"文件
      * @param file 上传的文件
      * @param userId 用户ID
      * @return 解析结果
      */
     @PostMapping("/handle-rubricFile")
+    @Operation(summary = "解析题目文件（AI）", description = "上传题目文件并使用AI解析为结构化题目数据")
     public Result<List<AiRubric>> handleRubricFile(
-            @RequestParam("file") MultipartFile file,
-            @RequestParam("userId") Long userId) {
+            @Parameter(description = "题目文件") @RequestParam("file") MultipartFile file,
+            @Parameter(description = "用户ID") @RequestParam("userId") Long userId) {
         return saaService.handleRubricFile(file, userId);
+    }
+
+    @PostMapping("/handle-rubricFile-local")
+    @Operation(summary = "解析题目文件（本地）", description = "上传题目文件并使用本地算法解析为结构化题目数据")
+    public Result<List<AiRubric>> handleRubricFileLocal(
+            @Parameter(description = "题目文件") @RequestParam("file") MultipartFile file,
+            @Parameter(description = "用户ID") @RequestParam("userId") Long userId) {
+        return saaService.handleRubricFileLocal(file, userId);
     }
 
     /**
@@ -58,9 +78,11 @@ public class SpringAiAlibabaController {
      * @return 回答结果
      */
     @GetMapping(value = "/query", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<String> query(@RequestParam("query") String query,
-                              @RequestParam("sessionId")String sessionId,
-                              @RequestParam("userId") Long userId
+    @Operation(summary = "AI对话", description = "普通AI对话（流式返回）")
+    public Flux<String> query(
+            @Parameter(description = "问题内容") @RequestParam("query") String query,
+            @Parameter(description = "会话ID") @RequestParam("sessionId")String sessionId,
+            @Parameter(description = "用户ID") @RequestParam("userId") Long userId
     ) {
         return saaService.query(query, sessionId, userId);
     }
@@ -73,11 +95,11 @@ public class SpringAiAlibabaController {
      * @return 回答结果
      */
     @GetMapping(value = "/rag-query", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @Operation(summary = "知识库问答", description = "基于RAG的向量知识库问答（流式返回）")
     public Flux<String> ragQuery(
-            @RequestParam String query,
-            @RequestParam(value = "sessionId", defaultValue =
-                    "student_session") String sessionId,
-            @RequestParam(value = "userId") Long userId) {
+            @Parameter(description = "问题内容") @RequestParam String query,
+            @Parameter(description = "会话ID") @RequestParam(value = "sessionId", defaultValue = "student_session") String sessionId,
+            @Parameter(description = "用户ID") @RequestParam(value = "userId") Long userId) {
         return saaService.ragQuery(query, sessionId, userId);
     }
 
@@ -88,17 +110,60 @@ public class SpringAiAlibabaController {
      * @return
      */
     @GetMapping(value = "/get-historyList")
+    @Operation(summary = "获取历史会话列表", description = "获取用户的历史会话列表")
     public Result<List<Object>> getHistory(
-            @RequestParam(value = "userId") Long userId,
-            @RequestParam(value = "type") String type){
+            @Parameter(description = "用户ID") @RequestParam(value = "userId") Long userId,
+            @Parameter(description = "会话类型：rag或chat") @RequestParam(value = "type") String type){
         return saaService.getHistory(userId.toString(), type);
     }
 
     @GetMapping(value = "/get-history-by-sessionId")
+    @Operation(summary = "获取会话历史详情", description = "获取指定会话的聊天记录")
     public Result<Object> getHistoryById(
-            @RequestParam(value = "sessionId") String sessionId,
-            @RequestParam(value = "userId") Long userId,
-            @RequestParam(value = "type") String type){
+            @Parameter(description = "会话ID") @RequestParam(value = "sessionId") String sessionId,
+            @Parameter(description = "用户ID") @RequestParam(value = "userId") Long userId,
+            @Parameter(description = "会话类型") @RequestParam(value = "type") String type){
         return saaService.getHistoryBySessionId(sessionId, userId.toString(), type);
+    }
+
+    /**
+     * 删除指定的聊天会话记录
+     * @param sessionId 会话ID
+     * @param userId 用户ID
+     * @param type 对话类型 rag或者chat
+     * @return 删除结果
+     */
+    @DeleteMapping("/delete-history")
+    @Operation(summary = "删除会话", description = "删除指定的聊天会话记录（AI对话或知识库问答）")
+    public Result<Boolean> deleteHistory(
+            @Parameter(description = "会话ID") @RequestParam String sessionId,
+            @Parameter(description = "用户ID") @RequestParam Long userId,
+            @Parameter(description = "会话类型：rag或chat") @RequestParam String type) {
+        return saaService.deleteHistory(sessionId, userId, type);
+    }
+
+    @GetMapping("/usage")
+    @Operation(summary = "获取使用次数", description = "获取用户今日AI功能使用次数")
+    public Result<Map<String, Object>> getUsage(
+            @Parameter(description = "用户ID") @RequestParam Long userId,
+            @Parameter(description = "功能类型：chat或rag") @RequestParam String type) {
+        Map<String, Object> result = new HashMap<>();
+        
+        boolean shouldLimit = rateLimitService.shouldRateLimit(userId);
+        result.put("hasOwnApiKey", !shouldLimit);
+        
+        if (shouldLimit) {
+            long used = rateLimitService.getTodayUsage(userId, type);
+            int limit = "chat".equals(type) ? 30 : 30;
+            result.put("used", used);
+            result.put("limit", limit);
+            result.put("remaining", Math.max(0, limit - used));
+        } else {
+            result.put("used", 0);
+            result.put("limit", -1);
+            result.put("remaining", -1);
+        }
+        
+        return Result.success(result);
     }
 }

@@ -6,6 +6,7 @@ import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import pkqb.interceptor.JwtInterceptor;
+import pkqb.interceptor.LogInterceptor;
 
 /**
  * Web MVC 配置
@@ -15,6 +16,7 @@ import pkqb.interceptor.JwtInterceptor;
 public class WebConfig implements WebMvcConfigurer {
 
     private final JwtInterceptor jwtInterceptor;
+    private final LogInterceptor logInterceptor;
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
@@ -28,8 +30,33 @@ public class WebConfig implements WebMvcConfigurer {
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
+        // 日志拦截器（最先执行）
+        registry.addInterceptor(logInterceptor)
+                .addPathPatterns("/**")
+                .excludePathPatterns(
+                        "/swagger-ui/**",
+                        "/swagger-ui.html",
+                        "/v3/api-docs/**",
+                        "/swagger-resources/**",
+                        "/webjars/**",
+                        "/doc.html",
+                        "/favicon.ico"
+                );
+
+        // JWT拦截器（在日志之后执行）
         registry.addInterceptor(jwtInterceptor)
                 .addPathPatterns("/**")
-                .excludePathPatterns("/api/auth/**", "/api/ai/query", "/api/ai/rag-query");
+                .excludePathPatterns(
+                        "/api/auth/**", 
+                        "/api/ai/query", 
+                        "/api/ai/rag-query",
+                        "/swagger-ui/**",
+                        "/swagger-ui.html",
+                        "/v3/api-docs/**",
+                        "/swagger-resources/**",
+                        "/webjars/**",
+                        "/doc.html",
+                        "/favicon.ico"
+                );
     }
 }

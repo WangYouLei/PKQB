@@ -19,9 +19,9 @@ spring:
   servlet:
     multipart:
       # 最大文件大小   springboot默认是10mb
-      max-file-size: 15MB
+      max-file-size: 8MB
       # 最大请求大小
-      max-request-size: 15MB
+      max-request-size: 8MB
   ai:
     # 重试配置  失败后，再重试一次（所以是2）
     retry:
@@ -34,6 +34,11 @@ spring:
           model: tongyi-xiaomi-analysis-pro
           # 模型温度越高，灵活性越高，结果越随机
           temperature: 0.7
+          # 系统API输出最大token数（限制较小） 选择范围为：【1,2000】
+          # localhost-max-tokens:本地apikey的限制    personal-max-tokens：个人apikey的限制
+          localhost-max-tokens: 1024
+
+          personal-max-tokens:  2000
       embedding:
         options:
           model: text-embedding-v4
@@ -67,10 +72,23 @@ jwt:
   # 604800000 = 7 * 24 * 60 * 60 * 1000 过期时间为7天
   expiration: 604800000
 
+app:
+  api-key:
+    encrypt-secret: ${API_KEY_ENCRYPT_SECRET:pkqb-api-key-encrypt-secret-32b}
+
 minio:
   endpoint: http://192.168.236.150:9000
   access-key: minioadmin
   secret-key: minioadmin
   bucket-name: pkqb-files
-  # 预签名URL过期时间（秒），默认1小时
-  presigned-url-expiry: 3600
+
+# Swagger配置
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operationsSorter: method
+    tagsSorter: alpha
+    tryItOutEnabled: true

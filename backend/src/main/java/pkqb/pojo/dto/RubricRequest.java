@@ -1,23 +1,37 @@
 package pkqb.pojo.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
 import java.util.List;
 
 @Data
+@Schema(description = "试卷请求")
 public class RubricRequest {
-    //试卷ID (用于更新)
+    
+    @Schema(description = "试卷ID（用于更新）")
     private Long id;
-    //试卷标题
+    
+    @NotBlank(message = "试卷标题不能为空")
+    @Schema(description = "试卷标题", example = "2024年期末考试卷")
     private String title;
-    //班级名称
+    
+    @NotBlank(message = "班级名称不能为空")
+    @Schema(description = "班级名称", example = "计算机1班")
     private String className;
-    //创建者ID
+    
+    @NotNull(message = "创建者ID不能为空")
+    @Schema(description = "创建者ID")
     private Long createId;
-    //创建者学号
+    
+    @Schema(description = "创建者学号")
     private String createStudentNo;
-    //是否私有 (true=公开, false=不公开)
+    
+    @Schema(description = "是否私有：true=私有（仅自己可见），false=公开（班级可见）")
     private Boolean isPrivate;
-    //题目
+    
+    @Schema(description = "题目列表")
     private List<AiRubric> rubrics;
 }

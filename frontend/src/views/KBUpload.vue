@@ -6,39 +6,20 @@
     </div>
 
     <div class="card" style="padding:32px">
-      <h3 style="font-size:18px;margin-bottom:20px">选择输入方式</h3>
-      <div class="nav-bar" style="margin-bottom:24px;justify-content:center;padding:2px">
-        <button :class="['nav-item',{active:inputMode==='text'}]" @click="inputMode='text'">文字输入</button>
-        <button :class="['nav-item',{active:inputMode==='file'}]" @click="inputMode='file'">上传文档</button>
-      </div>
-
-      <!-- 文字输入 -->
-      <div v-if="inputMode==='text'">
-        <div class="form-group">
-          <label class="form-label">输入内容</label>
-          <textarea v-model="textContent" class="form-input" placeholder="请输入文档内容..." rows="10"></textarea>
-        </div>
-        <button class="btn btn-primary" @click="handleTextUpload" :disabled="!textContent.trim() || uploading">
-          <span v-if="uploading" class="spinner"></span><span v-else>上传到知识库</span>
-        </button>
-      </div>
-
       <!-- 文件上传 -->
-      <div v-if="inputMode==='file'">
-        <div class="upload-zone" @click="triggerFileInput" @dragover.prevent="dragOver=true" @dragleave="dragOver=false" @drop.prevent="handleDrop" :class="{'drag-over':dragOver}">
-          <div class="upload-zone-icon">&#128206;</div>
-          <div class="upload-zone-text">点击或拖拽文件到此处</div>
-          <div class="upload-zone-hint">支持 PDF、DOC、DOCX、MD 等格式</div>
-        </div>
-        <input ref="fileInput" type="file" accept=".pdf,.doc,.docx,.md,.txt" style="display:none" @change="handleFileSelect" />
-        <div v-if="selectedFile" style="margin-top:16px;padding:12px 16px;background:var(--accent-light);border-radius:12px;display:flex;justify-content:space-between;align-items:center">
-          <span style="color:var(--accent);font-weight:500">{{ selectedFile.name }}</span>
-          <button class="btn btn-sm btn-ghost" @click="selectedFile=null">移除</button>
-        </div>
-        <button class="btn btn-primary" style="margin-top:16px" @click="handleFileUpload" :disabled="!selectedFile || uploading">
-          <span v-if="uploading" class="spinner"></span><span v-else>上传到知识库</span>
-        </button>
+      <div class="upload-zone" @click="triggerFileInput" @dragover.prevent="dragOver=true" @dragleave="dragOver=false" @drop.prevent="handleDrop" :class="{'drag-over':dragOver}">
+        <div class="upload-zone-icon">&#128206;</div>
+        <div class="upload-zone-text">点击或拖拽文件到此处</div>
+        <div class="upload-zone-hint">支持 PDF、DOC、DOCX、MD 等格式</div>
       </div>
+      <input ref="fileInput" type="file" accept=".pdf,.doc,.docx,.md,.txt" style="display:none" @change="handleFileSelect" />
+      <div v-if="selectedFile" style="margin-top:16px;padding:12px 16px;background:var(--accent-light);border-radius:12px;display:flex;justify-content:space-between;align-items:center">
+        <span style="color:var(--accent);font-weight:500">{{ selectedFile.name }}</span>
+        <button class="btn btn-sm btn-ghost" @click="selectedFile=null">移除</button>
+      </div>
+      <button class="btn btn-primary" style="margin-top:16px" @click="handleFileUpload" :disabled="!selectedFile || uploading">
+        <span v-if="uploading" class="spinner"></span><span v-else>上传到知识库</span>
+      </button>
 
       <!-- 结果提示 -->
       <div v-if="uploadResult" class="upload-result" :class="uploadResult.success ? 'success' : 'error'">
@@ -52,13 +33,11 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { apiAddDocumentsFile, apiAddDocuments } from '@/api'
+import { apiAddDocumentsFile } from '@/api'
 import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
 
-const inputMode = ref<'text'|'file'>('text')
-const textContent = ref('')
 const selectedFile = ref<File|null>(null)
 const dragOver = ref(false)
 const fileInput = ref<HTMLInputElement|null>(null)
@@ -73,18 +52,6 @@ function handleFileSelect(e: Event) {
 function handleDrop(e: DragEvent) {
   dragOver.value = false
   if (e.dataTransfer?.files && e.dataTransfer.files[0]) selectedFile.value = e.dataTransfer.files[0]
-}
-
-async function handleTextUpload() {
-  if (!textContent.value.trim()) return
-  uploading.value = true
-  try {
-    const res = await apiAddDocuments(textContent.value)
-    uploadResult.value = { success: res.code === 200, message: res.message || (res.code === 200 ? '上传成功' : '上传失败') }
-    if (res.code === 200) textContent.value = ''
-  } catch (e: unknown) {
-    uploadResult.value = { success: false, message: (e as Error).message || '上传失败' }
-  } finally { uploading.value = false }
 }
 
 async function handleFileUpload() {

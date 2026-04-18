@@ -5,34 +5,34 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import pkqb.common.Result;
 import pkqb.service.RateLimitService;
+import pkqb.service.UserApiKeyService;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.concurrent.TimeUnit;
 
-/**
- * 速率限制服务实现类
- * 使用 Redis 实现每日次数限制
- */
 @Service
 @Slf4j
 public class RateLimitServiceImpl implements RateLimitService {
 
     private final StringRedisTemplate stringRedisTemplate;
+    private final UserApiKeyService userApiKeyService;
 
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-
-    // Redis key 前缀
     private static final String KEY_PREFIX = "rate_limit:";
 
-    public RateLimitServiceImpl(StringRedisTemplate stringRedisTemplate) {
+    public RateLimitServiceImpl(StringRedisTemplate stringRedisTemplate, UserApiKeyService userApiKeyService) {
         this.stringRedisTemplate = stringRedisTemplate;
+        this.userApiKeyService = userApiKeyService;
     }
 
     @Override
     public Result<?> checkLimit(Long userId, String feature, int limit) {
+        if (!shouldRateLimit(userId)) {
+            return null;
+        }
         Long currentUsage = getTodayUsage(userId, feature);
         if (currentUsage >= limit) {
             return Result.error("今日使用次数已达上限(" + limit + "次)，请明天再试");
@@ -42,12 +42,12 @@ public class RateLimitServiceImpl implements RateLimitService {
 
     @Override
     public void incrementUsage(Long userId, String feature) {
+        if (!shouldRateLimit(userId)) {
+            return;
+        }
         String key = buildKey(userId, feature);
         Long increment = stringRedisTemplate.opsForValue().increment(key);
-        // 设置过期时间为当前日期的23:59:59
-        setExpiryToMidnight(key);
         if (increment != null && increment == 1) {
-            // 首次设置过期时间
             setExpiryToMidnight(key);
         }
     }
@@ -66,31 +66,26 @@ public class RateLimitServiceImpl implements RateLimitService {
         }
     }
 
-    /**
-     * 构建 Redis key: rate_limit:{feature}:{userId}:{date}
-     */
+    @Override
+    public boolean shouldRateLimit(Long userId) {
+        return !userApiKeyService.hasUserOwnApiKey(userId);
+    }
+
     private String buildKey(Long userId, String feature) {
         String today = LocalDate.now().format(DATE_FORMATTER);
         return KEY_PREFIX + feature + ":" + userId + ":" + today;
     }
 
-    /**
-     * 设置过期时间为当天午夜
-     */
     private void setExpiryToMidnight(String key) {
-        // 计算到午夜剩余的秒数
         long secondsUntilMidnight = getSecondsUntilMidnight();
         stringRedisTemplate.expire(key, secondsUntilMidnight, TimeUnit.SECONDS);
     }
 
-    /**
-     * 获取到午夜剩余的秒数
-     */
     private long getSecondsUntilMidnight() {
         LocalDate now = LocalDate.now();
         LocalDateTime nowDateTime = LocalDateTime.now();
         LocalDateTime midnight = now.plusDays(1).atStartOfDay();
-        long seconds = midnight.toEpochSecond(java.time.ZoneOffset.UTC) - nowDateTime.toEpochSecond(java.time.ZoneOffset.UTC);
+        long seconds = midnight.toEpochSecond(ZoneOffset.ofHours(8)) - nowDateTime.toEpochSecond(ZoneOffset.ofHours(8));
         return seconds;
     }
 }

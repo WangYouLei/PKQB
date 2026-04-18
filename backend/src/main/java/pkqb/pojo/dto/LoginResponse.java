@@ -14,13 +14,15 @@ public class LoginResponse {
     private String studentNo;
     private Integer classId;
     private String className;
+    private String avatarUrl;
 
-    public LoginResponse(String token, Long userId, String username, String studentNo, Integer classId, String className) {
+    public LoginResponse(String token, Long userId, String username, String studentNo, Integer classId, String className, String avatarUrl) {
         this.token = token;
         this.userId = userId;
         this.username = username;
         this.studentNo = studentNo;
         this.classId = classId;
         this.className = className;
+        this.avatarUrl = avatarUrl;
     }
 }

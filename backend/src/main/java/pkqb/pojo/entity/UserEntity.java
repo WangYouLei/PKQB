@@ -25,6 +25,10 @@ public class UserEntity {
 
     private Integer classId;
 
+    private String apiKey;
+
+    private String avatarUrl;
+
     private LocalDateTime createTime;
 
     private LocalDateTime updateTime;

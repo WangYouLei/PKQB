@@ -1,65 +1,58 @@
 package pkqb.config;
 
+import com.alibaba.cloud.ai.dashscope.api.DashScopeApi;
+import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatModel;
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
-import com.alibaba.cloud.ai.memory.redis.RedisChatMemoryRepository;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
-import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
+import com.alibaba.cloud.ai.memory.redis.RedisChatMemoryRepository;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.http.client.JdkClientHttpRequestFactory;
-import org.springframework.web.client.RestClient;
+import org.springframework.stereotype.Component;
 
-import java.net.http.HttpClient;
-import java.time.Duration;
+/**
+ * 用户级 ChatClient 配置工厂
+ * 负责创建用户使用自己 API Key 的 ChatClient 实例
+ */
+@Component
+@Slf4j
+public class ChatClientUserConfig {
 
-@Configuration
-public class ChatClientConfig {
+    private final RedisChatMemoryRepository redisChatMemoryRepository;
 
     @Value("${spring.ai.dashscope.chat.options.model}")
     private String qwenModel;
 
-    @Value("${spring.ai.dashscope.chat.options.localhost-max-tokens}")
-    private int maxTokens;
+    @Value("${spring.ai.dashscope.chat.options.personal-max-tokens}")
+    private int personalMaxTokens;
 
-    // 超时配置：3分钟
-    private static final Duration API_TIMEOUT = Duration.ofMinutes(3);
+    public ChatClientUserConfig(RedisChatMemoryRepository redisChatMemoryRepository) {
+        this.redisChatMemoryRepository = redisChatMemoryRepository;
+    }
 
     /**
-     * 配置自定义 HTTP Client（包含超时设置）
-     * 这个配置会对所有使用 RestClient 的 ChatClient 生效
+     * 创建用户级默认 ChatClient
      */
-    @Bean
-    public HttpClient httpClient() {
-        return HttpClient.newBuilder()
-                .connectTimeout(API_TIMEOUT)
-                .build();
-    }
-
-    @Bean
-    public RestClient.Builder restClientBuilder(HttpClient httpClient) {
-        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
-        requestFactory.setReadTimeout(API_TIMEOUT);
-        return RestClient.builder().requestFactory(requestFactory);
-    }
-
-    @Bean("defaultChatClient")
-    public ChatClient defaultChatClient(ChatModel chatModel){
+    public ChatClient createUserDefaultChatClient(String apiKey) {
+        log.info("为用户创建个人 DefaultChatClient");
+        ChatModel chatModel = createChatModel(apiKey);
         return ChatClient.builder(chatModel)
                 .defaultOptions(DashScopeChatOptions.builder()
-                        .withMaxToken(maxTokens)
                         .withModel(qwenModel)
+                        .withMaxToken(personalMaxTokens)
                         .build())
                 .build();
     }
-    @Bean("chatClient")
-    public ChatClient chatClient(ChatModel chatModel,RedisChatMemoryRepository redisChatMemoryRepository) {
+
+    /**
+     * 创建用户级 ChatClient（AI学习助手）
+     */
+    public ChatClient createUserChatClient(String apiKey) {
+        log.info("为用户创建个人 ChatClient");
+        ChatModel chatModel = createChatModel(apiKey);
         return ChatClient.builder(chatModel)
                 .defaultSystem("""
                         你是一个专业、耐心且富有启发性的 AI 学习助手，名字叫小磊。
@@ -74,9 +67,8 @@ public class ChatClientConfig {
                         """)
                 .defaultOptions(DashScopeChatOptions.builder()
                         .withModel(qwenModel)
-                        //指定温度
                         .withTemperature(0.7)
-                        .withMaxToken(maxTokens)
+                        .withMaxToken(personalMaxTokens)
                         .build())
                 .defaultAdvisors(
                         new SimpleLoggerAdvisor(),
@@ -88,11 +80,13 @@ public class ChatClientConfig {
                 )
                 .build();
     }
-    @Bean("milvusChatClient")
-    public ChatClient milvusChatClient(ChatModel chatModel,
-                                       VectorStore vectorStore,
-                                       RedisChatMemoryRepository redisChatMemoryRepository) {
 
+    /**
+     * 创建用户级 Milvus ChatClient（知识库问答）
+     */
+    public ChatClient createUserMilvusChatClient(String apiKey) {
+        log.info("为用户创建个人 MilvusChatClient（暂不支持向量存储）");
+        ChatModel chatModel = createChatModel(apiKey);
         return ChatClient.builder(chatModel)
                 .defaultSystem("""
                         你是一个专业的知识库问答助手，叫小磊。
@@ -109,9 +103,8 @@ public class ChatClientConfig {
                         """)
                 .defaultOptions(DashScopeChatOptions.builder()
                         .withModel(qwenModel)
-                        //指定温度
                         .withTemperature(0.7)
-                        .withMaxToken(maxTokens)
+                        .withMaxToken(personalMaxTokens)
                         .build())
                 .defaultAdvisors(
                         new SimpleLoggerAdvisor(),
@@ -119,15 +112,25 @@ public class ChatClientConfig {
                                 MessageWindowChatMemory.builder()
                                         .chatMemoryRepository(redisChatMemoryRepository)
                                         .maxMessages(20)
-                                        .build()).build(),
-                        QuestionAnswerAdvisor
-                                .builder(vectorStore)
-                                .searchRequest(SearchRequest.builder()
-                                        .topK(5)
-                                        .similarityThreshold(0.7)
-                                        .build())
-                                .build()
+                                        .build()).build()
                 )
+                .build();
+    }
+
+    /**
+     * 创建 ChatModel
+     */
+    private ChatModel createChatModel(String apiKey) {
+        DashScopeApi dashScopeApi = DashScopeApi.builder()
+                .apiKey(apiKey)
+                .build();
+        return DashScopeChatModel.builder()
+                .dashScopeApi(dashScopeApi)
+                .defaultOptions(DashScopeChatOptions.builder()
+                        .withModel(qwenModel)
+                        .withMaxToken(personalMaxTokens)
+                        .withTemperature(0.7)
+                        .build())
                 .build();
     }
 }

@@ -10,7 +10,7 @@ export interface HtmlFileItem {
   id: number
   userId: number
   fileName: string
-  isPublic: boolean
+  isPrivate: boolean  // 是否私有：true=私有（仅自己可见），false=公开（班级可见）
   creatorName?: string
   createTime: string
   updateTime: string
@@ -36,12 +36,7 @@ export interface LoginResponse {
   studentNo: string
   classId: number | null
   className: string | null
-}
-
-export interface PresignedUrlResponse {
-  url: string
-  fileId: number
-  fileName: string
+  avatarUrl: string | null
 }
 
 export interface Result<T = unknown> {
@@ -82,7 +77,7 @@ export interface RubricItem {
   className: string
   createId: number
   createStudentNo: string
-  isPublic: boolean
+  isPrivate: boolean  // 是否私有：true=私有（仅自己可见），false=公开（班级可见）
   createTime: string
   updateTime: string
   questionCount?: number  // 题目总数
@@ -106,4 +101,10 @@ export interface RubricGenerateResponse {
   fileName: string
   downloadUrl: string
   createTime: string
+}
+
+export interface ApiKeyStatus {
+  hasOwnApiKey: boolean
+  currentMode: 'LOCAL' | 'PERSONAL'
+  hasRateLimit: boolean
 }

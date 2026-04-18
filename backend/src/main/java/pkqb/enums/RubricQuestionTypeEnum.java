@@ -9,6 +9,8 @@ public enum RubricQuestionTypeEnum {
     TRUE_FALSE("判断题", "true_false"),
     //简答题
     SHORT_ANSWER("简答题", "short_answer"),
+    //填空题
+    FILL_IN_THE_BLANKS("填空题", "fill_in_the_blanks"),
     //计算题
     CALCULATION("计算题", "calculation");
     

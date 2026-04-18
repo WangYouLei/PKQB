@@ -32,7 +32,7 @@
         <div class="empty-state-hint">班级中还没有同学分享公开文件</div>
       </div>
       <div v-else class="file-grid">
-        <FileCard v-for="file in files" :key="file.id" :file="file" @open="handleOpenFile" />
+        <FileCard v-for="file in files" :key="file.id" :file="file" @preview="handlePreviewFile" @download="handleDownloadFile" />
       </div>
     </div>
 
@@ -118,31 +118,13 @@
                 class="option-item"
                 :class="{ 
                   selected: userAnswers[currentQuestionIndex] === String.fromCharCode(65 + oi),
-                  correct: showAnswer && String.fromCharCode(65 + oi) === getCorrectAnswer(questions[currentQuestionIndex])
+                  correct: showAnswer && (String.fromCharCode(65 + oi) === getCorrectAnswer(questions[currentQuestionIndex]) || opt === getCorrectAnswer(questions[currentQuestionIndex]))
                 }"
                 @click="selectAnswer(String.fromCharCode(65 + oi))"
               >
                 <span class="option-label">{{ String.fromCharCode(65 + oi) }}.</span>
                 <span class="option-text">{{ opt }}</span>
               </div>
-            </div>
-
-            <!-- 判断题选项 -->
-            <div v-if="questions[currentQuestionIndex]?.questionType === 'true_false'" class="true-false-options">
-              <button 
-                class="tf-btn" 
-                :class="{ selected: userAnswers[currentQuestionIndex] === '正确', correct: showAnswer && getCorrectAnswer(questions[currentQuestionIndex]) === '正确' }"
-                @click="selectAnswer('正确')"
-              >
-                正确
-              </button>
-              <button 
-                class="tf-btn" 
-                :class="{ selected: userAnswers[currentQuestionIndex] === '错误', correct: showAnswer && getCorrectAnswer(questions[currentQuestionIndex]) === '错误' }"
-                @click="selectAnswer('错误')"
-              >
-                错误
-              </button>
             </div>
 
             <!-- 简答题/计算题 输入框 -->
@@ -155,8 +137,8 @@
               ></textarea>
             </div>
 
-            <!-- 提交答案按钮 -->
-            <div v-if="!showAnswer && hasAnswer(currentQuestionIndex)" class="submit-answer">
+            <!-- 简答题/计算题 提交答案按钮 -->
+            <div v-if="!showAnswer && isTextQuestion(questions[currentQuestionIndex]) && userTextAnswers[currentQuestionIndex]" class="submit-answer">
               <button class="btn btn-primary" @click="submitAnswer">确认答案</button>
             </div>
 
@@ -183,14 +165,7 @@
                 上一题
               </button>
               <button 
-                v-if="!showAnswer && hasAnswer(currentQuestionIndex)" 
-                class="btn btn-secondary" 
-                @click="submitAnswer"
-              >
-                显示答案
-              </button>
-              <button 
-                v-if="!showAnswer" 
+                v-if="!showAnswer && isTextQuestion(questions[currentQuestionIndex])" 
                 class="btn btn-ghost" 
                 @click="skipQuestion"
               >
@@ -237,7 +212,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { apiGetClassPublicFiles, apiGetPresignedUrl, apiGetPublicRubrics, apiGetQuestionsByRubricId } from '@/api'
+import { apiGetClassPublicFiles, apiGetPublicRubrics, apiGetQuestionsByRubricId } from '@/api'
 import { useUserStore } from '@/stores/user'
 import type { HtmlFileItem, RubricItem, RubricQuestion } from '@/types'
 import FileCard from '@/components/FileCard.vue'
@@ -296,22 +271,63 @@ async function loadRubrics() {
   finally { rubricLoading.value = false }
 }
 
-async function handleOpenFile(file: HtmlFileItem) {
-  currentRubric.value = rubric
-  showRubricDetail.value = true
-  examMode.value = 'practice'
-  currentQuestionIndex.value = 0
-  userAnswers.value = {}
-  userTextAnswers.value = {}
-  showAnswer.value = false
-  questionsLoading.value = true
+// 预览文件 - 在新窗口打开
+async function handlePreviewFile(file: HtmlFileItem) {
   try {
-    const res = await apiGetQuestionsByRubricId(rubric.id)
-    if (res.code === 200) {
-      questions.value = res.data || []
+    const token = localStorage.getItem('token')
+    const response = await fetch(`/api/files/download/${file.id}`, {
+      headers: { 'token': token || '' }
+    })
+    if (!response.ok) {
+      throw new Error('预览失败')
     }
-  } catch (e) { console.error('获取题目列表失败', e) }
-  finally { questionsLoading.value = false }
+    const blob = await response.blob()
+    
+    // 将 blob 转换为 text/html 类型，确保浏览器能正确打开
+    const htmlBlob = new Blob([blob], { type: 'text/html;charset=utf-8' })
+    const blobUrl = URL.createObjectURL(htmlBlob)
+    const newWindow = window.open(blobUrl, '_blank')
+    if (!newWindow) {
+      alert('无法打开新窗口，请允许弹窗')
+    }
+    // 延迟释放 URL，确保新窗口能够加载
+    setTimeout(() => {
+      URL.revokeObjectURL(blobUrl)
+    }, 10000)
+  } catch (e) {
+    console.error('预览文件失败', e)
+    alert('预览文件失败')
+  }
+}
+
+// 下载文件 - 直接触发下载
+async function handleDownloadFile(file: HtmlFileItem) {
+  try {
+    const token = localStorage.getItem('token')
+    const response = await fetch(`/api/files/download/${file.id}`, {
+      headers: { 'token': token || '' }
+    })
+    if (!response.ok) {
+      throw new Error('下载失败')
+    }
+    const blob = await response.blob()
+    
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    let fileName = file.fileName
+    if (!fileName.toLowerCase().endsWith('.html')) {
+      fileName += '.html'
+    }
+    a.download = fileName
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    window.URL.revokeObjectURL(url)
+  } catch (e) {
+    console.error('下载文件失败', e)
+    alert('下载文件失败')
+  }
 }
 
 // 判断题目是否有选项
@@ -363,6 +379,26 @@ function hasAnswer(index: number): boolean {
 function selectAnswer(answer: string) {
   if (showAnswer.value) return
   userAnswers.value[currentQuestionIndex.value] = answer
+  
+  const q = questions.value[currentQuestionIndex.value]
+  if (hasOptions(q)) {
+    const options = getOptions(q)
+    const selectedIndex = answer.charCodeAt(0) - 65
+    const selectedContent = options[selectedIndex]
+    const isCorrect = answer === q.answer || selectedContent === q.answer
+    if (isCorrect) {
+      setTimeout(() => {
+        if (currentQuestionIndex.value < questions.value.length - 1) {
+          currentQuestionIndex.value++
+          showAnswer.value = false
+        } else {
+          showRubricDetail.value = false
+        }
+      }, 300)
+    } else {
+      showAnswer.value = true
+    }
+  }
 }
 
 // 提交答案
@@ -378,7 +414,16 @@ function submitAnswer() {
 function isCurrentAnswerCorrect(): boolean {
   const q = questions.value[currentQuestionIndex.value]
   if (!q) return false
-  return userAnswers.value[currentQuestionIndex.value] === q.answer
+  const userAnswer = userAnswers.value[currentQuestionIndex.value]
+  if (!userAnswer) return false
+  
+  if (hasOptions(q)) {
+    const options = getOptions(q)
+    const selectedIndex = userAnswer.charCodeAt(0) - 65
+    const selectedContent = options[selectedIndex]
+    return userAnswer === q.answer || selectedContent === q.answer
+  }
+  return userAnswer === q.answer
 }
 
 // 上一题
@@ -394,6 +439,8 @@ function nextQuestion() {
   if (currentQuestionIndex.value < questions.value.length - 1) {
     currentQuestionIndex.value++
     showAnswer.value = false
+  } else {
+    showRubricDetail.value = false
   }
 }
 
@@ -442,76 +489,82 @@ function getTypeLabel(type: string): string {
 
 /* 标签切换 */
 .tab-switch { display: flex; gap: 8px; margin-bottom: 24px; }
-.tab-btn { padding: 8px 20px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--card-bg); color: var(--text-muted); cursor: pointer; transition: all 0.2s; }
-.tab-btn:hover { border-color: var(--accent); }
-.tab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.tab-btn { padding: 10px 24px; border: 1px solid var(--border-glass); border-radius: 12px; background: var(--bg-glass); color: var(--text-muted); cursor: pointer; transition: all 0.3s ease; font-size: 14px; font-weight: 500; }
+.tab-btn:hover { border-color: var(--accent); color: var(--text-secondary); }
+.tab-btn.active { background: var(--accent-gradient); color: #fff; border-color: transparent; box-shadow: 0 4px 16px rgba(99,102,241,0.3); }
 
 /* 试卷列表 */
-.rubric-list { display: flex; flex-direction: column; gap: 12px; }
-.rubric-card { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border: 1px solid var(--border-color); border-radius: 12px; cursor: pointer; transition: all 0.2s; }
-.rubric-card:hover { border-color: var(--accent); background: var(--accent-light); }
-.rubric-title { font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
-.rubric-meta { font-size: 13px; color: var(--text-muted); display: flex; gap: 16px; }
-.rubric-arrow { font-size: 24px; color: var(--text-muted); }
+.rubric-list { display: flex; flex-direction: column; gap: 16px; }
+.rubric-card { display: flex; align-items: center; justify-content: space-between; padding: 20px 24px; border: 1px solid var(--border-glass); border-radius: 16px; cursor: pointer; transition: all 0.3s ease; background: var(--card-bg); position: relative; overflow: hidden; }
+.rubric-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--accent-gradient); opacity: 0; transition: opacity 0.3s ease; }
+.rubric-card:hover { border-color: var(--accent-border); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.2); }
+.rubric-card:hover::before { opacity: 1; }
+.rubric-title { font-size: 17px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
+.rubric-meta { font-size: 13px; color: var(--text-muted); display: flex; gap: 20px; }
+.rubric-arrow { font-size: 24px; color: var(--text-muted); transition: transform 0.3s ease; }
+.rubric-card:hover .rubric-arrow { transform: translateX(4px); color: var(--accent); }
 
 /* 全屏试卷详情 */
 .exam-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg-primary); z-index: 1000; overflow-y: auto; }
 .exam-container { max-width: 800px; margin: 0 auto; padding: 24px; }
-.exam-header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color); }
-.back-btn { padding: 8px 16px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--card-bg); cursor: pointer; }
+.exam-header { display: flex; align-items: center; gap: 16px; margin-bottom: 28px; padding-bottom: 20px; border-bottom: 1px solid var(--border-glass); }
+.back-btn { padding: 10px 20px; border: 1px solid var(--border-glass); border-radius: 12px; background: var(--bg-glass); cursor: pointer; color: var(--text-secondary); transition: all 0.3s ease; font-size: 14px; }
+.back-btn:hover { background: var(--accent-light); border-color: var(--accent-border); color: var(--accent); }
 .exam-title { flex: 1; font-size: 20px; font-weight: 600; text-align: center; }
 .mode-switch { display: flex; gap: 8px; }
-.mode-btn { padding: 8px 16px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--card-bg); cursor: pointer; }
-.mode-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.mode-btn { padding: 8px 16px; border: 1px solid var(--border-glass); border-radius: 12px; background: var(--bg-glass); cursor: pointer; color: var(--text-secondary); transition: all 0.3s ease; }
+.mode-btn:hover { color: var(--text-primary); border-color: var(--accent-border); }
+.mode-btn.active { background: var(--accent-gradient); color: #fff; border-color: transparent; box-shadow: 0 4px 16px rgba(99,102,241,0.3); }
 
 /* 做题模式 */
 .practice-mode { display: flex; flex-direction: column; gap: 20px; }
 .progress-bar { text-align: center; }
 .progress-text { font-size: 14px; color: var(--text-muted); margin-bottom: 8px; }
-.progress-track { height: 6px; background: var(--border-color); border-radius: 3px; overflow: hidden; }
-.progress-fill { height: 100%; background: var(--accent); transition: width 0.3s; }
+.progress-track { height: 8px; background: var(--bg-glass); border-radius: 4px; overflow: hidden; }
+.progress-fill { height: 100%; background: var(--accent-gradient); transition: width 0.3s ease; border-radius: 4px; }
 
-.question-card { padding: 24px; border: 1px solid var(--border-color); border-radius: 12px; background: var(--card-bg); }
+.question-card { padding: 28px; border: 1px solid var(--border-glass); border-radius: 20px; background: var(--card-bg); position: relative; }
+.question-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--accent-gradient); border-radius: 20px 20px 0 0; }
 .question-header { display: flex; justify-content: space-between; margin-bottom: 16px; }
 .question-num { font-weight: 600; font-size: 16px; }
-.question-type { font-size: 12px; padding: 4px 12px; background: var(--accent-light); color: var(--accent); border-radius: 12px; }
+.question-type { font-size: 12px; padding: 6px 14px; background: var(--accent-light); color: var(--accent); border-radius: 20px; border: 1px solid var(--accent-border); }
 .question-text { font-size: 18px; line-height: 1.8; margin-bottom: 20px; }
 
 .question-options { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; }
-.option-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer; transition: all 0.2s; }
-.option-item:hover { border-color: var(--accent); }
-.option-item.selected { border-color: var(--accent); background: var(--accent-light); }
-.option-item.correct { border-color: #22c55e; background: rgba(34,197,94,0.1); }
+.option-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border: 1px solid var(--border-glass); border-radius: 14px; cursor: pointer; transition: all 0.3s ease; color: var(--text-primary); }
+.option-item:hover { border-color: var(--accent); background: rgba(99,102,241,0.05); }
+.option-item.selected { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
+.option-item.correct { border-color: var(--success); background: var(--success-light); color: var(--success); }
 .option-label { font-weight: 600; width: 24px; }
 
 .true-false-options { display: flex; gap: 16px; margin-bottom: 20px; }
-.tf-btn { flex: 1; padding: 16px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--card-bg); font-size: 16px; cursor: pointer; transition: all 0.2s; }
-.tf-btn:hover { border-color: var(--accent); }
-.tf-btn.selected { border-color: var(--accent); background: var(--accent-light); }
-.tf-btn.correct { border-color: #22c55e; background: rgba(34,197,94,0.1); }
+.tf-btn { flex: 1; padding: 16px; border: 1px solid var(--border-glass); border-radius: 14px; background: var(--card-bg); font-size: 16px; cursor: pointer; transition: all 0.3s ease; color: var(--text-primary); }
+.tf-btn:hover { border-color: var(--accent); background: rgba(99,102,241,0.05); }
+.tf-btn.selected { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
+.tf-btn.correct { border-color: var(--success); background: var(--success-light); color: var(--success); }
 
-.text-answer-area { margin-bottom: 20px; }
-.text-answer-input { width: 100%; min-height: 150px; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--card-bg); color: var(--text-primary); font-size: 16px; font-family: inherit; resize: vertical; line-height: 1.6; }
-.text-answer-input:focus { outline: none; border-color: var(--accent); }
+.text-answer-area { margin-bottom: 24px; }
+.text-answer-input { width: 100%; min-height: 160px; padding: 16px; border: 1px solid var(--border-glass); border-radius: 14px; background: var(--bg-glass); color: var(--text-primary); font-size: 15px; font-family: inherit; resize: vertical; line-height: 1.7; }
+.text-answer-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
 .text-answer-input:disabled { opacity: 0.7; cursor: not-allowed; }
 
 .submit-answer { text-align: center; margin-bottom: 20px; }
 
-.answer-section { padding: 16px; border-radius: 8px; margin-bottom: 20px; }
+.answer-section { padding: 20px; border-radius: 14px; margin-bottom: 24px; background: var(--bg-glass); border: 1px solid var(--border-glass); }
 .your-answer { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
-.your-answer.correct { color: #22c55e; }
+.your-answer.correct { color: var(--success); }
 .correct-answer { font-size: 14px; color: var(--text-muted); margin-bottom: 12px; }
 
 .nav-buttons { display: flex; gap: 12px; justify-content: center; }
 
 /* 背题模式 */
-.review-mode .questions-list { display: flex; flex-direction: column; gap: 20px; }
-.review-mode .question-item { padding: 20px; border: 1px solid var(--border-color); border-radius: 12px; }
-.review-mode .question-header { margin-bottom: 12px; }
-.review-mode .question-text { margin-bottom: 16px; }
-.review-mode .question-options { margin-bottom: 12px; }
-.review-mode .option { padding: 6px 0; }
-.review-mode .question-answer { padding: 8px; background: rgba(34,197,94,0.1); border-radius: 6px; margin-bottom: 8px; color: #16a34a; }
-.review-mode .question-explanation { padding: 8px; background: rgba(59,130,246,0.1); border-radius: 6px; color: #2563eb; margin-bottom: 8px; }
-.review-mode .question-steps { padding: 8px; background: rgba(236,72,153,0.1); border-radius: 6px; color: #ec4899; }
+.review-mode .questions-list { display: flex; flex-direction: column; gap: 24px; }
+.review-mode .question-item { padding: 24px; border: 1px solid var(--border-glass); border-radius: 16px; background: var(--card-bg); }
+.review-mode .question-header { margin-bottom: 16px; }
+.review-mode .question-text { margin-bottom: 20px; }
+.review-mode .question-options { margin-bottom: 16px; }
+.review-mode .option { padding: 8px 0; }
+.review-mode .question-answer { padding: 12px 16px; background: var(--success-light); border-radius: 10px; margin-bottom: 10px; color: var(--success); border: 1px solid rgba(16,185,129,0.2); }
+.review-mode .question-explanation { padding: 12px 16px; background: rgba(59,130,246,0.08); border-radius: 10px; color: #3b82f6; margin-bottom: 10px; border: 1px solid rgba(59,130,246,0.15); }
+.review-mode .question-steps { padding: 12px 16px; background: rgba(236,72,153,0.08); border-radius: 10px; color: var(--secondary); border: 1px solid rgba(236,72,153,0.15); }
 </style>

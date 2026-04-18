@@ -16,6 +16,7 @@ const router = createRouter({
         { path: 'rag-chat', name: 'RAGChat', component: () => import('@/views/RAGChat.vue') },
         { path: 'kb-upload', name: 'KBUpload', component: () => import('@/views/KBUpload.vue') },
         { path: 'rubric-upload', name: 'RubricUpload', component: () => import('@/views/RubricUpload.vue') },
+        { path: 'settings', name: 'Settings', component: () => import('@/views/Settings.vue') },
       ],
     },
   ],

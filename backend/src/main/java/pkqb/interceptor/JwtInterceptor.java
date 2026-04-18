@@ -3,6 +3,7 @@ package pkqb.interceptor;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 import pkqb.util.JwtUtil;
@@ -12,6 +13,7 @@ import pkqb.util.JwtUtil;
  */
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class JwtInterceptor implements HandlerInterceptor {
 
     private final JwtUtil jwtUtil;
@@ -28,6 +30,7 @@ public class JwtInterceptor implements HandlerInterceptor {
         if (token == null) {
             response.setStatus(401);
             response.setContentType("application/json;charset=UTF-8");
+            log.info("未登录或token已过期");
             response.getWriter().write("{\"code\":401,\"message\":\"未登录或token已过期\"}");
             return false;
         }
@@ -36,6 +39,7 @@ public class JwtInterceptor implements HandlerInterceptor {
         if (!jwtUtil.validateToken(token)) {
             response.setStatus(401);
             response.setContentType("application/json;charset=UTF-8");
+            log.info("未登录或token已过期");
             response.getWriter().write("{\"code\":401,\"message\":\"未登录或token已过期\"}");
             return false;
         }

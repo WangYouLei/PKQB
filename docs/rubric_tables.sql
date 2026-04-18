@@ -9,7 +9,7 @@ CREATE TABLE rubric (
     
     create_id BIGINT NOT NULL COMMENT '创建者ID',
     create_student_no VARCHAR(50) COMMENT '创建者学号',
-    is_public BOOLEAN DEFAULT FALSE COMMENT '是否公开',
+    is_private BOOLEAN DEFAULT TRUE COMMENT '是否私有：true=私有（仅自己可见），false=公开（班级可见）',
     question_count INT DEFAULT 0 COMMENT '题目数量',
     
     create_time DATETIME DEFAULT CURRENT_TIMESTAMP,

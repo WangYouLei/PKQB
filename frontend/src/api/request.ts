@@ -27,14 +27,13 @@ request.interceptors.response.use(
   }
 )
 
-// Wrapper functions that return Result<T>
 async function get<T = unknown>(url: string, params?: Record<string, unknown>) {
   const res = await request.get<any, AxiosResponse<Result<T>>>(url, { params })
   return res.data
 }
 
-async function post<T = unknown>(url: string, data?: unknown) {
-  const res = await request.post<any, AxiosResponse<Result<T>>>(url, data)
+async function post<T = unknown>(url: string, data?: unknown, params?: Record<string, unknown>) {
+  const res = await request.post<any, AxiosResponse<Result<T>>>(url, data, { params })
   return res.data
 }
 
@@ -43,8 +42,8 @@ async function put<T = unknown>(url: string, data?: unknown) {
   return res.data
 }
 
-async function del<T = unknown>(url: string) {
-  const res = await request.delete<any, AxiosResponse<Result<T>>>(url)
+async function del<T = unknown>(url: string, params?: Record<string, unknown>) {
+  const res = await request.delete<any, AxiosResponse<Result<T>>>(url, { params })
   return res.data
 }
 

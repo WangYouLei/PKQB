@@ -1,79 +1,100 @@
 package pkqb.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import pkqb.common.Result;
 import pkqb.pojo.dto.FileResponse;
-import pkqb.pojo.dto.PresignedUrlResponse;
+import pkqb.pojo.entity.FileEntity;
 import pkqb.service.FileService;
 
 import java.util.List;
 
-/**
- * 文件控制器
- */
 @RestController
 @RequestMapping("/api/files")
-//添加构造函数(为使用的final添加上构造函数，让Bean可以注入)
 @RequiredArgsConstructor
+@Tag(name = "文件管理", description = "文件上传、下载、删除等接口")
 public class FileController {
 
     private final FileService fileService;
 
-    /**
-     * 上传文件
-     */
     @PostMapping("/upload")
+    @Operation(summary = "上传文件", description = "上传文件到MinIO存储")
     public Result<FileResponse> upload(
-            @RequestParam("file") MultipartFile file,
-            @RequestAttribute("userId") Long userId,
-            @RequestParam("file_name") String fileName,
-            @RequestParam("is_private") boolean isPrivate
+            @Parameter(description = "文件") @RequestParam("file") MultipartFile file,
+            @Parameter(description = "用户ID") @RequestAttribute("userId") Long userId,
+            @Parameter(description = "文件名") @RequestParam("file_name") String fileName,
+            @Parameter(description = "是否私有") @RequestParam("is_private") boolean isPrivate
     ) {
         FileResponse response = fileService.uploadFile(file, userId,fileName,isPrivate);
         return Result.success("上传成功", response);
     }
 
-    /**
-     * 获取文件预签名下载 URL
-     */
-    @GetMapping("/presigned/{fileId}")
-    public Result<PresignedUrlResponse> getPresignedUrl(
-            @PathVariable Long fileId,
-            @RequestAttribute("userId") Long userId) {
-        PresignedUrlResponse response = fileService.getPresignedUrl(fileId, userId);
-        return Result.success(response);
+    @GetMapping("/public-url/{fileId}")
+    @Operation(summary = "获取文件公开URL", description = "获取文件的公开访问URL")
+    public Result<String> getPublicUrl(
+            @Parameter(description = "文件ID") @PathVariable Long fileId,
+            @Parameter(description = "用户ID") @RequestAttribute("userId") Long userId) {
+        String publicUrl = fileService.getPublicUrl(fileId, userId);
+        return Result.success(publicUrl);
     }
 
-    /**
-     * 获取当前用户的文件列表
-     */
     @GetMapping("/my")
+    @Operation(summary = "获取我的文件列表", description = "获取当前用户上传的文件列表")
     public Result<List<FileResponse>> getMyFiles(
-            @RequestAttribute("userId") Long userId) {
+            @Parameter(description = "用户ID") @RequestAttribute("userId") Long userId) {
         List<FileResponse> files = fileService.getUserFiles(userId);
         return Result.success(files);
     }
 
-    /**
-     * 删除文件
-     */
     @DeleteMapping("/{fileId}")
+    @Operation(summary = "删除文件", description = "删除指定文件")
     public Result<Void> deleteFile(
-            @PathVariable Long fileId,
-            @RequestAttribute("userId") Long userId) {
+            @Parameter(description = "文件ID") @PathVariable Long fileId,
+            @Parameter(description = "用户ID") @RequestAttribute("userId") Long userId) {
         fileService.deleteFile(fileId, userId);
         return Result.success("删除成功", null);
     }
 
-    /**
-     * 获取班级公开文件列表
-     */
     @GetMapping("/class/public")
+    @Operation(summary = "获取班级公开文件", description = "获取班级公开的文件列表")
     public Result<List<FileResponse>> getClassPublicFiles(
-            @RequestAttribute("userId") Long userId) {
+            @Parameter(description = "用户ID") @RequestAttribute("userId") Long userId) {
         List<FileResponse> files = fileService.getClassPublicFiles(userId);
         return Result.success(files);
+    }
+
+    @GetMapping("/download/{fileId}")
+    @Operation(summary = "下载文件", description = "通过后端代理下载文件")
+    public ResponseEntity<Resource> downloadFile(
+            @Parameter(description = "文件ID") @PathVariable Long fileId,
+            @Parameter(description = "用户ID") @RequestAttribute("userId") Long userId) {
+        FileEntity entity = fileService.getFileEntity(fileId, userId);
+        byte[] data = fileService.downloadFile(fileId, userId);
+        
+        ByteArrayResource resource = new ByteArrayResource(data);
+        
+        HttpHeaders headers = new HttpHeaders();
+        String fileName = entity.getFileName();
+        String encodedFileName;
+        try {
+            encodedFileName = java.net.URLEncoder.encode(fileName, "UTF-8");
+        } catch (Exception e) {
+            encodedFileName = fileName;
+        }
+        headers.add("Content-Disposition", "attachment; filename=\"" + encodedFileName + "\"; filename*=UTF-8''" + encodedFileName);
+        
+        return ResponseEntity.ok()
+                .headers(headers)
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .body(resource);
     }
 }

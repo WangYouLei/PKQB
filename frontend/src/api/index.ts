@@ -1,21 +1,21 @@
 import { post, get, del, put } from './request'
-import type { Result, RegisterRequest, LoginRequest, LoginResponse, HtmlFileItem, PresignedUrlResponse, QuestionItem, RubricItem, RubricQuestion, RubricGenerateResponse } from '@/types'
+import type { Result, RegisterRequest, LoginRequest, LoginResponse, HtmlFileItem, QuestionItem, RubricItem, RubricQuestion, RubricGenerateResponse, ApiKeyStatus } from '@/types'
 
 export const apiRegister = async (data: RegisterRequest) => {
-  const res = await post<Result<void>>('/auth/register', data)
+  const res = await post<void>('/auth/register', data)
   return res
 }
 
 export const apiLogin = async (data: LoginRequest) => {
-  const res = await post<Result<LoginResponse>>('/auth/login', data)
+  const res = await post<LoginResponse>('/auth/login', data)
   return res
 }
 
-export const apiUploadFile = async (file: File, fileName: string, isPublic: boolean) => {
+export const apiUploadFile = async (file: File, fileName: string, isPrivate: boolean) => {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('file_name', fileName)
-  formData.append('is_public', String(isPublic))
+  formData.append('is_private', String(isPrivate))
   const { default: request } = await import('./request')
   const res = await request.post('/files/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
@@ -24,22 +24,23 @@ export const apiUploadFile = async (file: File, fileName: string, isPublic: bool
 }
 
 export const apiGetMyFiles = async () => {
-  const res = await get<Result<HtmlFileItem[]>>('/files/my')
+  const res = await get<HtmlFileItem[]>('/files/my')
   return res
 }
 
-export const apiGetPresignedUrl = async (fileId: number) => {
-  const res = await get<Result<PresignedUrlResponse>>(`/files/presigned/${fileId}`)
+/** 代理下载文件 */
+export const apiDownloadFile = async (fileId: number) => {
+  const res = await get<string>(`/files/download/${fileId}`)
   return res
 }
 
 export const apiDeleteFile = async (fileId: number) => {
-  const res = await del<Result<void>>(`/files/${fileId}`)
+  const res = await del<void>(`/files/${fileId}`)
   return res
 }
 
 export const apiGetClassPublicFiles = async () => {
-  const res = await get<Result<HtmlFileItem[]>>('/files/class/public')
+  const res = await get<HtmlFileItem[]>('/files/class/public')
   return res
 }
 
@@ -68,13 +69,26 @@ export const apiAddDocuments = async (content: string) => {
   return res.data as Result<string>
 }
 
-/** 上传题目文件解析 */
+/** 上传题目文件解析（AI） */
 export const apiAddRubricFile = async (file: File, userId: number) => {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('userId', String(userId))
   const { default: request } = await import('./request')
   const res = await request.post('/ai/handle-rubricFile', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 300000 // 5分钟超时，文档解析需要较长时间
+  })
+  return res.data as Result<QuestionItem[]>
+}
+
+/** 上传题目文件解析（本地） */
+export const apiAddRubricFileLocal = async (file: File, userId: number) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('userId', String(userId))
+  const { default: request } = await import('./request')
+  const res = await request.post('/ai/handle-rubricFile-local', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 300000 // 5分钟超时，文档解析需要较长时间
   })
@@ -104,6 +118,18 @@ export const apiGetHistoryBySessionId = async (sessionId: string, userId: string
   return res
 }
 
+/** 删除会话历史 */
+export const apiDeleteHistory = async (sessionId: string, userId: string, type: 'rag' | 'chat') => {
+  const res = await del<Result<boolean>>('/ai/delete-history', { sessionId, userId, type })
+  return res
+}
+
+/** 获取使用次数 */
+export const apiGetUsage = async (userId: string, type: 'rag' | 'chat') => {
+  const res = await get<Result<{ hasOwnApiKey: boolean; used: number; limit: number; remaining: number }>>('/ai/usage', { userId, type })
+  return res
+}
+
 // ========== 试卷相关 API ==========
 
 /** 获取我的试卷列表 */
@@ -120,34 +146,76 @@ export const apiGetPublicRubrics = async () => {
 
 /** 根据试卷ID获取题目列表 */
 export const apiGetQuestionsByRubricId = async (rubricId: number) => {
-  const res = await get<Result<any[]>>(`/rubric/${rubricId}/questions`)
-  // 转换 JSON 字段为数组
-  if (res.code === 200 && res.data) {
-    res.data = res.data.map((q: any) => ({
-      ...q,
-      question: q.questionText,
-      questionType: q.questionType,
-      answer: q.answer,
-      explanation: q.explanation || '',
-      options: q.optionsJson ? JSON.parse(q.optionsJson) : [],
-      calculationSteps: q.calculationStepsJson ? JSON.parse(q.calculationStepsJson) : []
-    }))
-  }
+  const res = await get<RubricQuestion[]>(`/rubric/${rubricId}/questions`)
   return res
 }
 
 /** 修改试卷 */
-export const apiUpdateRubric = async (data: { id: number; title: string; isPublic: boolean }) => {
+export const apiUpdateRubric = async (data: { id: number; title: string; isPrivate: boolean }) => {
   const res = await put<Result<void>>('/rubric/update', data)
   return res
 }
 
+/** 删除试卷 */
+export const apiDeleteRubric = async (rubricId: number) => {
+  const res = await del<Result<void>>(`/rubric/${rubricId}`)
+  return res
+}
+
 /** 根据Rubric生成HTML文件 */
-export const apiGenerateRubricHtml = async (rubricId: number, fileName?: string, isPublic?: boolean) => {
+export const apiGenerateRubricHtml = async (rubricId: number, fileName?: string, isPrivate?: boolean) => {
   const res = await post<Result<RubricGenerateResponse>>('/rubric/generate-html', {
     rubricId,
     fileName,
-    isPublic
+    isPrivate
   })
+  return res
+}
+
+// ========== API Key 管理 ==========
+
+/** 保存用户 API Key */
+export const apiSaveApiKey = async (userId: number, apiKey: string) => {
+  const res = await post<Result<string>>('/apikey', null, { userId, apiKey })
+  return res
+}
+
+/** 删除用户 API Key */
+export const apiDeleteApiKey = async (userId: number) => {
+  const res = await del<Result<string>>('/apikey', { userId })
+  return res
+}
+
+/** 获取用户 API Key 状态 */
+export const apiGetApiKeyStatus = async (userId: number) => {
+  const res = await get<ApiKeyStatus>('/apikey/status', { userId })
+  return res
+}
+
+// ========== 用户头像管理 ==========
+
+/** 获取头像上传路径 */
+export const apiGetAvatarUploadPath = async () => {
+  const res = await get<{ objectKey: string; uploadUrl: string }>('/user/avatar/upload-path')
+  return res
+}
+
+/** 更新用户头像 */
+export const apiUpdateAvatar = async (objectKey: string) => {
+  const res = await put<string>('/user/avatar', { objectKey })
+  return res
+}
+
+// ========== 用户信息管理 ==========
+
+/** 修改用户名 */
+export const apiUpdateUsername = async (username: string) => {
+  const res = await put<void>('/user/username', null, { username })
+  return res
+}
+
+/** 修改密码 */
+export const apiUpdatePassword = async (oldPassword: string, newPassword: string) => {
+  const res = await put<void>('/user/password', null, { oldPassword, newPassword })
   return res
 }

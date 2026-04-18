@@ -68,11 +68,30 @@ public interface SpringAiAlibabaService {
     Result<Object> getHistoryBySessionId(String sessionId, String userId, String type);
 
     /**
-     * 上传题库文件
+     * 上传题库文件（AI解析）
      *
      * @param file 文件
      * @param userId 用户ID
      * @return 添加结果
      */
     Result<List<AiRubric>> handleRubricFile(MultipartFile file, Long userId);
+
+    /**
+     * 上传题库文件（本地解析）
+     *
+     * @param file 文件
+     * @param userId 用户ID
+     * @return 添加结果
+     */
+    Result<List<AiRubric>> handleRubricFileLocal(MultipartFile file, Long userId);
+
+    /**
+     * 删除指定的聊天会话记录
+     *
+     * @param sessionId 会话ID
+     * @param userId    用户ID
+     * @param type      对话类型   rag或者chat
+     * @return 删除结果
+     */
+    Result<Boolean> deleteHistory(String sessionId, Long userId, String type);
 }
