@@ -139,6 +139,24 @@ public class SpringAiAlibabaController {
         return saaService.deleteHistory(sessionId, userId, type);
     }
 
+    /**
+     * 删除会话中的指定消息
+     * @param sessionId 会话ID
+     * @param userId 用户ID
+     * @param type 对话类型 rag或者chat
+     * @param messageIndices 消息索引列表（从0开始）
+     * @return 删除结果
+     */
+    @DeleteMapping("/delete-messages")
+    @Operation(summary = "删除消息", description = "删除会话中的指定消息")
+    public Result<Boolean> deleteMessages(
+            @Parameter(description = "会话ID") @RequestParam String sessionId,
+            @Parameter(description = "用户ID") @RequestParam Long userId,
+            @Parameter(description = "会话类型：rag或chat") @RequestParam String type,
+            @Parameter(description = "消息索引列表") @RequestParam List<Integer> messageIndices) {
+        return saaService.deleteMessages(sessionId, userId, type, messageIndices);
+    }
+
     @GetMapping("/usage")
     @Operation(summary = "获取使用次数", description = "获取用户今日AI功能使用次数")
     public Result<Map<String, Object>> getUsage(

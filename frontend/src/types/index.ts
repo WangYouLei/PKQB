@@ -108,4 +108,5 @@ export interface ApiKeyStatus {
   hasOwnApiKey: boolean
   currentMode: 'LOCAL' | 'PERSONAL'
   hasRateLimit: boolean
+  model?: string
 }

@@ -293,39 +293,79 @@
             <div v-for="(q, idx) in questions" :key="q.id" class="question-item editable">
               <div class="question-header">
                 <span class="question-num">第 {{ idx + 1 }} 题</span>
-                <span class="question-type">{{ getTypeLabel(q.questionType) }}</span>
+                <select v-model="q.questionType" class="form-select type-select">
+                  <option value="single_choice">单选题</option>
+                  <option value="multiple_choice">多选题</option>
+                  <option value="true_false">判断题</option>
+                  <option value="short_answer">简答题</option>
+                  <option value="calculation">计算题</option>
+                </select>
               </div>
-              <div class="question-text">{{ q.questionText }}</div>
-              <div v-if="getOptions(q).length" class="question-options">
-                <div v-for="(opt, oi) in getOptions(q)" :key="oi" class="option">
-                  {{ String.fromCharCode(65 + oi) }}. {{ opt }}
+              <div class="edit-field">
+                <label>题目内容：</label>
+                <textarea v-model="q.questionText" class="edit-textarea" rows="3"></textarea>
+              </div>
+              <div v-if="hasOptions(q)" class="edit-field">
+                <label>选项：</label>
+                <div v-for="(opt, oi) in getOptions(q)" :key="oi" class="option-edit-row">
+                  <span class="option-label">{{ String.fromCharCode(65 + oi) }}.</span>
+                  <input v-model="getOptions(q)[oi]" class="edit-input" />
                 </div>
               </div>
-              <div class="question-answer">答案: {{ q.answer }}</div>
-              <div v-if="q.explanation" class="question-explanation">解析: {{ q.explanation }}</div>
-              <div v-if="q.calculationStepsJson" class="question-steps">
-                <div>计算步骤:</div>
-                <div v-for="(step, si) in parseJson(q.calculationStepsJson)" :key="si">{{ si + 1 }}. {{ step }}</div>
+              <div class="edit-field">
+                <label>答案：</label>
+                <input v-model="q.answer" class="edit-input" />
+              </div>
+              <div v-if="aiResults[idx]?.answer" class="ai-result-box">
+                <label>AI生成答案：</label>
+                <textarea v-model="aiResults[idx].answer" class="edit-textarea ai-textarea" rows="2"></textarea>
+                <div class="ai-btn-row">
+                  <button class="btn-use" @click="useAiAnswer(idx)">使用此答案</button>
+                  <button class="btn-delete" @click="clearAiAnswer(idx)">删除</button>
+                </div>
+              </div>
+              <div class="edit-field">
+                <label>解析：</label>
+                <textarea v-model="q.explanation" class="edit-textarea" rows="2"></textarea>
+              </div>
+              <div v-if="aiResults[idx]?.explanation" class="ai-result-box">
+                <label>AI生成解析：</label>
+                <textarea v-model="aiResults[idx].explanation" class="edit-textarea ai-textarea" rows="3"></textarea>
+                <div class="ai-btn-row">
+                  <button class="btn-use" @click="useAiExplanation(idx)">使用此解析</button>
+                  <button class="btn-delete" @click="clearAiExplanation(idx)">删除</button>
+                </div>
+              </div>
+              <div v-if="q.questionType === 'calculation'" class="edit-field">
+                <label>计算步骤：</label>
+                <textarea v-model="q.calculationStepsJson" class="edit-textarea" rows="3" placeholder="每行一个步骤"></textarea>
+              </div>
+              <div v-if="aiResults[idx]?.steps" class="ai-result-box">
+                <label>AI生成步骤：</label>
+                <textarea v-model="aiResults[idx].steps" class="edit-textarea ai-textarea" rows="4"></textarea>
+                <div class="ai-btn-row">
+                  <button class="btn-use" @click="useAiSteps(idx)">使用此步骤</button>
+                  <button class="btn-delete" @click="clearAiSteps(idx)">删除</button>
+                </div>
               </div>
               
               <!-- AI解答按钮 -->
               <div class="ai-actions">
-                <button class="ai-btn" @click="generateAiAnswer(idx)" :disabled="aiLoading[idx]">
-                  {{ aiLoading[idx] ? '生成中...' : 'AI生成答案' }}
+                <button class="ai-btn primary" @click="generateAiAll(idx)" :disabled="aiLoading[idx]">
+                  {{ aiLoading[idx] ? 'AI解答中...' : 'AI解答' }}
                 </button>
-                <button class="ai-btn" @click="generateAiExplanation(idx)" :disabled="aiLoading[idx]">
-                  {{ aiLoading[idx] ? '生成中...' : 'AI生成解析' }}
-                </button>
-                <button 
-                  v-if="q.questionType === 'calculation'" 
-                  class="ai-btn" 
-                  @click="generateAiSteps(idx)" 
-                  :disabled="aiLoading[idx]"
-                >
-                  {{ aiLoading[idx] ? '生成中...' : 'AI生成步骤' }}
-                </button>
+                <button class="ai-btn success" @click="addQuestionAfter(idx)">此后添加题目</button>
+                <button class="ai-btn danger" @click="deleteQuestion(idx)">删除题目</button>
               </div>
             </div>
+          </div>
+          
+          <!-- 底部统一保存按钮 -->
+          <div class="save-all-actions">
+            <button class="btn btn-primary btn-lg" @click="saveAllQuestions" :disabled="saveAllLoading">
+              <span v-if="saveAllLoading" class="spinner"></span>
+              <span v-else>保存所有修改</span>
+            </button>
           </div>
         </div>
       </div>
@@ -335,7 +375,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, reactive } from 'vue'
-import { apiGetMyFiles, apiGetMyRubrics, apiGetQuestionsByRubricId, apiUpdateRubric, apiDeleteRubric, apiGenerateRubricHtml, apiDownloadFile, apiDeleteFile, apiAiSolveQuestion } from '@/api'
+import { apiGetMyFiles, apiGetMyRubrics, apiGetQuestionsByRubricId, apiUpdateRubric, apiDeleteRubric, apiGenerateRubricHtml, apiDownloadFile, apiDeleteFile, apiAiSolveQuestion, apiBatchSaveQuestions } from '@/api'
 import { useUserStore } from '@/stores/user'
 import type { HtmlFileItem, RubricItem, RubricQuestion } from '@/types'
 import FileCard from '@/components/FileCard.vue'
@@ -388,6 +428,8 @@ const showAnswer = ref(false)
 
 // AI解答加载状态
 const aiLoading = reactive<Record<number, boolean>>({})
+const aiResults = reactive<Record<number, { answer?: string; explanation?: string; steps?: string }>>({})
+const saveAllLoading = ref(false)
 
 onMounted(async () => {
   await Promise.all([loadFiles(), loadRubrics()])
@@ -588,7 +630,7 @@ async function handleOpenRubric(rubric: RubricItem) {
   finally { questionsLoading.value = false }
 }
 
-async function generateAiAnswer(idx: number) {
+async function generateAiAll(idx: number) {
   const q = questions.value[idx]
   if (!q) return
   
@@ -598,66 +640,122 @@ async function generateAiAnswer(idx: number) {
       questionText: q.questionText,
       questionType: q.questionType,
       optionsJson: q.optionsJson,
-      generateType: 'answer',
+      generateType: 'all',
       userId: userStore.userId
     })
     if (res.code === 200) {
-      questions.value[idx].answer = res.data
+      const data = JSON.parse(res.data)
+      aiResults[idx] = {
+        answer: data.answer || '',
+        explanation: data.explanation || '',
+        steps: data.steps || ''
+      }
+      showToastMsg('成功', 'AI解答完成，请查看下方生成结果')
+    } else {
+      const errorMsg = res.message || ''
+      if (errorMsg.includes('API') || errorMsg.includes('key') || errorMsg.includes('Key') || errorMsg.includes('model') || errorMsg.includes('Model')) {
+        showToastMsg('错误', '上传的API Key或模型名称有误，请核验')
+      } else {
+        showToastMsg('错误', res.message || 'AI解答失败')
+      }
     }
-  } catch (e) {
-    console.error('AI生成答案失败', e)
-    showToastMsg('错误', 'AI生成答案失败')
+  } catch (e: any) {
+    console.error('AI解答失败', e)
+    const errorMsg = e?.message || e?.response?.data?.message || ''
+    if (errorMsg.includes('API') || errorMsg.includes('key') || errorMsg.includes('Key') || errorMsg.includes('model') || errorMsg.includes('Model') || errorMsg.includes('401') || errorMsg.includes('403') || errorMsg.includes('invalid')) {
+      showToastMsg('错误', '上传的API Key或模型名称有误，请核验')
+    } else {
+      showToastMsg('错误', 'AI解答失败')
+    }
   } finally {
     aiLoading[idx] = false
   }
 }
 
-async function generateAiExplanation(idx: number) {
-  const q = questions.value[idx]
-  if (!q) return
-  
-  aiLoading[idx] = true
-  try {
-    const res = await apiAiSolveQuestion({
-      questionText: q.questionText,
-      questionType: q.questionType,
-      optionsJson: q.optionsJson,
-      generateType: 'explanation',
-      userId: userStore.userId
-    })
-    if (res.code === 200) {
-      questions.value[idx].explanation = res.data
-    }
-  } catch (e) {
-    console.error('AI生成解析失败', e)
-    showToastMsg('错误', 'AI生成解析失败')
-  } finally {
-    aiLoading[idx] = false
+function useAiAnswer(idx: number) {
+  if (aiResults[idx]?.answer) {
+    questions.value[idx].answer = aiResults[idx].answer
   }
 }
 
-async function generateAiSteps(idx: number) {
-  const q = questions.value[idx]
-  if (!q || q.questionType !== 'calculation') return
+function useAiExplanation(idx: number) {
+  if (aiResults[idx]?.explanation) {
+    questions.value[idx].explanation = aiResults[idx].explanation
+  }
+}
+
+function useAiSteps(idx: number) {
+  if (aiResults[idx]?.steps) {
+    const steps = aiResults[idx].steps.split('\n').filter((s: string) => s.trim())
+    questions.value[idx].calculationStepsJson = JSON.stringify(steps)
+  }
+}
+
+function clearAiAnswer(idx: number) {
+  if (aiResults[idx]) {
+    aiResults[idx].answer = ''
+  }
+}
+
+function clearAiExplanation(idx: number) {
+  if (aiResults[idx]) {
+    aiResults[idx].explanation = ''
+  }
+}
+
+function clearAiSteps(idx: number) {
+  if (aiResults[idx]) {
+    aiResults[idx].steps = ''
+  }
+}
+
+function addQuestionAfter(idx: number) {
+  const newQuestion: RubricQuestion = {
+    id: -Date.now(),
+    rubricId: currentRubric.value?.id || 0,
+    questionType: 'single_choice',
+    questionText: '',
+    optionsJson: '[]',
+    answer: '',
+    explanation: '',
+    calculationStepsJson: '',
+    orderIndex: idx + 2
+  }
+  questions.value.splice(idx + 1, 0, newQuestion)
+}
+
+function deleteQuestion(idx: number) {
+  if (confirm('确定要删除这道题目吗？')) {
+    questions.value.splice(idx, 1)
+  }
+}
+
+async function saveAllQuestions() {
+  if (!currentRubric.value) return
   
-  aiLoading[idx] = true
+  saveAllLoading.value = true
   try {
-    const res = await apiAiSolveQuestion({
-      questionText: q.questionText,
+    const questionsData = questions.value.map((q, idx) => ({
       questionType: q.questionType,
+      questionText: q.questionText,
       optionsJson: q.optionsJson,
-      generateType: 'steps',
-      userId: userStore.userId
-    })
+      answer: q.answer,
+      explanation: q.explanation,
+      calculationStepsJson: q.calculationStepsJson,
+      orderIndex: idx + 1
+    }))
+    
+    const res = await apiBatchSaveQuestions(currentRubric.value.id, questionsData)
     if (res.code === 200) {
-      const steps = res.data?.split('\n').filter((s: string) => s.trim()) || []
-      questions.value[idx].calculationStepsJson = JSON.stringify(steps)
+      showToastMsg('成功', '保存成功')
+    } else {
+      showToastMsg('错误', res.message || '保存失败')
     }
   } catch (e) {
-    console.error('AI生成步骤失败', e)
-    showToastMsg('错误', 'AI生成步骤失败')
+    console.error('保存题目失败', e)
+    showToastMsg('错误', '保存失败')
   } finally {
-    aiLoading[idx] = false
+    saveAllLoading.value = false
   }
 }
 
@@ -934,6 +1032,32 @@ function getTypeLabel(type: string): string {
 .ai-btn { padding: 10px 20px; border: 1px solid var(--accent-border); border-radius: 10px; background: var(--accent-light); color: var(--accent); cursor: pointer; transition: all 0.3s ease; font-size: 13px; font-weight: 500; }
 .ai-btn:hover:not(:disabled) { background: var(--accent-gradient); color: #fff; border-color: transparent; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(99,102,241,0.3); }
 .ai-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.ai-btn.primary { background: var(--accent-gradient); color: #fff; border-color: transparent; }
+.ai-btn.success { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #fff; border-color: transparent; }
+.ai-btn.danger { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: #fff; border-color: transparent; }
+
+.save-all-actions { display: flex; justify-content: center; padding: 24px 0; margin-top: 16px; border-top: 1px solid var(--border-glass); }
+.btn-lg { padding: 14px 40px; font-size: 16px; font-weight: 600; }
+
+.type-select { padding: 6px 12px; border: 1px solid var(--border-glass); border-radius: 8px; background: var(--card-bg); color: var(--text-primary); font-size: 12px; cursor: pointer; }
+.type-select option { background: var(--card-bg); color: var(--text-primary); }
+.edit-field { margin-bottom: 16px; }
+.edit-field label { display: block; font-size: 13px; color: var(--text-muted); margin-bottom: 6px; font-weight: 500; }
+.edit-textarea { width: 100%; padding: 12px; border: 1px solid var(--border-glass); border-radius: 10px; background: var(--bg-glass); color: var(--text-primary); font-size: 14px; font-family: inherit; resize: vertical; line-height: 1.6; }
+.edit-textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
+.edit-input { width: 100%; padding: 10px 12px; border: 1px solid var(--border-glass); border-radius: 10px; background: var(--bg-glass); color: var(--text-primary); font-size: 14px; }
+.edit-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
+.option-edit-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.option-edit-row .option-label { font-weight: 600; color: var(--text-secondary); min-width: 24px; }
+
+.ai-result-box { margin-bottom: 16px; padding: 12px; border: 1px dashed var(--accent-border); border-radius: 10px; background: rgba(99,102,241,0.05); }
+.ai-result-box label { display: block; font-size: 13px; color: var(--accent); margin-bottom: 6px; font-weight: 600; }
+.ai-textarea { border-color: var(--accent-border) !important; background: rgba(255,255,255,0.5) !important; }
+.ai-btn-row { display: flex; gap: 8px; margin-top: 8px; }
+.btn-use { padding: 6px 16px; border: none; border-radius: 8px; background: var(--accent-gradient); color: #fff; font-size: 12px; cursor: pointer; transition: all 0.3s ease; }
+.btn-use:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(99,102,241,0.3); }
+.btn-delete { padding: 6px 16px; border: 1px solid #ef4444; border-radius: 8px; background: transparent; color: #ef4444; font-size: 12px; cursor: pointer; transition: all 0.3s ease; }
+.btn-delete:hover { background: #ef4444; color: #fff; }
 
 .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(4px); }
 .confirm-overlay { z-index: 1100; }

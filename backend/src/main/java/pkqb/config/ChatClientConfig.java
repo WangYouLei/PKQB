@@ -1,11 +1,11 @@
 package pkqb.config;
 
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
-import com.alibaba.cloud.ai.memory.redis.RedisChatMemoryRepository;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
 import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
+import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.vectorstore.SearchRequest;
@@ -28,13 +28,8 @@ public class ChatClientConfig {
     @Value("${spring.ai.dashscope.chat.options.localhost-max-tokens}")
     private int maxTokens;
 
-    // 超时配置：3分钟
     private static final Duration API_TIMEOUT = Duration.ofMinutes(3);
 
-    /**
-     * 配置自定义 HTTP Client（包含超时设置）
-     * 这个配置会对所有使用 RestClient 的 ChatClient 生效
-     */
     @Bean
     public HttpClient httpClient() {
         return HttpClient.newBuilder()
@@ -49,6 +44,11 @@ public class ChatClientConfig {
         return RestClient.builder().requestFactory(requestFactory);
     }
 
+    @Bean
+    public InMemoryChatMemoryRepository chatMemoryRepository() {
+        return new InMemoryChatMemoryRepository();
+    }
+
     @Bean("defaultChatClient")
     public ChatClient defaultChatClient(ChatModel chatModel){
         return ChatClient.builder(chatModel)
@@ -58,8 +58,9 @@ public class ChatClientConfig {
                         .build())
                 .build();
     }
+
     @Bean("chatClient")
-    public ChatClient chatClient(ChatModel chatModel,RedisChatMemoryRepository redisChatMemoryRepository) {
+    public ChatClient chatClient(ChatModel chatModel, InMemoryChatMemoryRepository chatMemoryRepository) {
         return ChatClient.builder(chatModel)
                 .defaultSystem("""
                         你是一个专业、耐心且富有启发性的 AI 学习助手，名字叫小磊。
@@ -74,7 +75,6 @@ public class ChatClientConfig {
                         """)
                 .defaultOptions(DashScopeChatOptions.builder()
                         .withModel(qwenModel)
-                        //指定温度
                         .withTemperature(0.7)
                         .withMaxToken(maxTokens)
                         .build())
@@ -82,17 +82,17 @@ public class ChatClientConfig {
                         new SimpleLoggerAdvisor(),
                         MessageChatMemoryAdvisor.builder(
                                 MessageWindowChatMemory.builder()
-                                        .chatMemoryRepository(redisChatMemoryRepository)
+                                        .chatMemoryRepository(chatMemoryRepository)
                                         .maxMessages(20)
                                         .build()).build()
                 )
                 .build();
     }
+
     @Bean("milvusChatClient")
     public ChatClient milvusChatClient(ChatModel chatModel,
                                        VectorStore vectorStore,
-                                       RedisChatMemoryRepository redisChatMemoryRepository) {
-
+                                       InMemoryChatMemoryRepository chatMemoryRepository) {
         return ChatClient.builder(chatModel)
                 .defaultSystem("""
                         你是一个专业的知识库问答助手，叫小磊。
@@ -109,7 +109,6 @@ public class ChatClientConfig {
                         """)
                 .defaultOptions(DashScopeChatOptions.builder()
                         .withModel(qwenModel)
-                        //指定温度
                         .withTemperature(0.7)
                         .withMaxToken(maxTokens)
                         .build())
@@ -117,7 +116,7 @@ public class ChatClientConfig {
                         new SimpleLoggerAdvisor(),
                         MessageChatMemoryAdvisor.builder(
                                 MessageWindowChatMemory.builder()
-                                        .chatMemoryRepository(redisChatMemoryRepository)
+                                        .chatMemoryRepository(chatMemoryRepository)
                                         .maxMessages(20)
                                         .build()).build(),
                         QuestionAnswerAdvisor

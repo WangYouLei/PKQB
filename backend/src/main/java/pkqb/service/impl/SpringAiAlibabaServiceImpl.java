@@ -1,15 +1,17 @@
 package pkqb.service.impl;
 
+import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.alibaba.cloud.ai.graph.RunnableConfig;
+import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.reader.pdf.PagePdfDocumentReader;
 import org.springframework.ai.reader.tika.TikaDocumentReader;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
-import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.core.io.InputStreamResource;
@@ -21,7 +23,6 @@ import org.springframework.web.multipart.MultipartFile;
 import pkqb.common.Result;
 import pkqb.common.RateLimitConstants;
 import pkqb.config.ChatClientFactory;
-import pkqb.enums.RubricEnum;
 import pkqb.enums.RubricQuestionTypeEnum;
 import pkqb.pojo.dto.AiRubric;
 import pkqb.service.RateLimitService;
@@ -29,13 +30,11 @@ import pkqb.service.ChatMemoryService;
 import pkqb.service.SpringAiAlibabaService;
 import pkqb.service.strategy.QuestionExtractContext;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import java.io.ByteArrayInputStream;
 import java.util.*;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-
-import static org.springframework.ai.chat.memory.ChatMemory.CONVERSATION_ID;
 
 @Service
 @Slf4j
@@ -46,8 +45,9 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
     private final RateLimitService rateLimitService;
-    private final ChatMemoryService chatMemoryService;
     private final QuestionExtractContext questionExtractContext;
+    private final ReactAgent chatReactAgent;
+    private final ReactAgent ragReactAgent;
 
     private static final StringBuilder TYPE_DESC = new StringBuilder();
     static {
@@ -125,16 +125,18 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                                       StringRedisTemplate stringRedisTemplate,
                                       ObjectMapper objectMapper,
                                       RateLimitService rateLimitService,
-                                      ChatMemoryService chatMemoryService,
-                                      QuestionExtractContext questionExtractContext) {
+                                      QuestionExtractContext questionExtractContext,
+                                      ReactAgent chatReactAgent,
+                                      ReactAgent ragReactAgent) {
         this.vectorStore = vectorStore;
         this.chatClientFactory = chatClientFactory;
         this.redisTemplate = redisTemplate;
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
         this.rateLimitService = rateLimitService;
-        this.chatMemoryService = chatMemoryService;
         this.questionExtractContext = questionExtractContext;
+        this.chatReactAgent = chatReactAgent;
+        this.ragReactAgent = ragReactAgent;
     }
 
     @Override
@@ -203,36 +205,73 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             return Flux.error(new RuntimeException(limitCheck.getMessage()));
         }
         
-        chatMemoryService.compressIfNeeded(userId.toString(), sessionId, "rag");
-        
         recordSessionId(userId.toString(), sessionId, "rag");
+        
+        String historyKey = "spring_ai_alibaba_chat_memory:history:rag:" + userId + ":" + sessionId;
         try {
-            log.info("[RAG查询] 开始流式查询，conversationId={}", "spring_ai_alibaba_chat_memory" + "history:rag:" + userId + ":" + sessionId);
-            ChatClient milvusChatClient = chatClientFactory.getMilvusChatClient(userId);
-            return milvusChatClient
-                    .prompt()
-                    .advisors(
-                            a -> a.param(CONVERSATION_ID, "history:rag:" + userId + ":" + sessionId)
-                    )
-                    .user(query)
-                    .advisors(QuestionAnswerAdvisor.builder(vectorStore)
-                            .searchRequest(SearchRequest.builder().query(query).build())
-                            .build()
-                    )
-                    .stream()
-                    .content()
-                    .map(content -> {
-                        try {
-                            return objectMapper.writeValueAsString(content);
-                        } catch (Exception e) {
-                            return content.replace("\n", "\\n").replace("\r", "\\r");
+            String userMsgJson = objectMapper.writeValueAsString(Map.of(
+                    "messageType", "USER",
+                    "text", query,
+                    "timestamp", System.currentTimeMillis()
+            ));
+            stringRedisTemplate.opsForList().rightPush(historyKey, userMsgJson);
+            log.info("[RAG查询] 保存用户消息到历史记录, key={}", historyKey);
+        } catch (Exception e) {
+            log.warn("[RAG查询] 保存用户消息失败", e);
+        }
+        
+        StringBuilder aiResponse = new StringBuilder();
+        
+        try {
+            log.info("[RAG查询] 开始ReactAgent流式查询，sessionId={}", sessionId);
+            
+            String threadId = "rag:" + userId + ":" + sessionId;
+            RunnableConfig config = RunnableConfig.builder()
+                    .threadId(threadId)
+                    .build();
+            
+            return ragReactAgent.stream(query, config)
+                    .filter(output -> output instanceof StreamingOutput<?>)
+                    .map(output -> (StreamingOutput<?>) output)
+                    .flatMap(streamingOutput -> {
+                        Message message = streamingOutput.message();
+                        if (message != null) {
+                            String text = message.getText();
+                            if (text != null && !text.isEmpty()) {
+                                aiResponse.append(text);
+                                try {
+                                    return Mono.just(objectMapper.writeValueAsString(text));
+                                } catch (Exception e) {
+                                    return Mono.just(text.replace("\n", "\\n").replace("\r", "\\r"));
+                                }
+                            }
                         }
+                        return Mono.empty();
                     })
                     .doOnComplete(() -> {
                         log.info("[RAG查询] 流式查询完成，sessionId={}", sessionId);
                         rateLimitService.incrementUsage(userId, RateLimitConstants.FEATURE_RAG);
+                        
+                        if (aiResponse.length() > 0) {
+                            try {
+                                String aiMsgJson = objectMapper.writeValueAsString(Map.of(
+                                        "messageType", "ASSISTANT",
+                                        "text", aiResponse.toString(),
+                                        "timestamp", System.currentTimeMillis()
+                                ));
+                                stringRedisTemplate.opsForList().rightPush(historyKey, aiMsgJson);
+                                log.info("[RAG查询] 保存AI回复到历史记录, key={}, length={}", historyKey, aiResponse.length());
+                            } catch (Exception e) {
+                                log.warn("[RAG查询] 保存AI回复失败", e);
+                            }
+                        }
                     })
-                    .doOnError(e -> log.error("[RAG查询] 流式查询异常，sessionId={}", sessionId, e));
+                    .doOnError(e -> {
+                        log.error("[RAG查询] 流式查询异常，sessionId={}", sessionId, e);
+                        if (isApiKeyOrModelError(e)) {
+                            throw new RuntimeException("API Key或模型名称有误，请核验");
+                        }
+                    });
         } catch (Exception e) {
             log.error("[RAG查询] RAG查询时发生错误: ", e);
             return Flux.error(e);
@@ -262,32 +301,73 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             return Flux.error(new RuntimeException(limitCheck.getMessage()));
         }
         
-        chatMemoryService.compressIfNeeded(userId.toString(), sessionId, "chat");
-        
         recordSessionId(userId.toString(), sessionId, "chat");
+        
+        String historyKey = "spring_ai_alibaba_chat_memory:history:chat:" + userId + ":" + sessionId;
         try {
-            log.info("[AI对话] 开始流式查询，conversationId={}", "spring_ai_alibaba_chat_memory:history:chat:" + userId + ":" + sessionId);
-            ChatClient chatClient = chatClientFactory.getChatClient(userId);
-            return chatClient
-                    .prompt()
-                    .advisors(
-                            a -> a.param(CONVERSATION_ID, "history:chat:" + userId + ":" + sessionId)
-                    )
-                    .user(query)
-                    .stream()
-                    .content()
-                    .map(content -> {
-                        try {
-                            return objectMapper.writeValueAsString(content);
-                        } catch (Exception e) {
-                            return content.replace("\n", "\\n").replace("\r", "\\r");
+            String userMsgJson = objectMapper.writeValueAsString(Map.of(
+                    "messageType", "USER",
+                    "text", query,
+                    "timestamp", System.currentTimeMillis()
+            ));
+            stringRedisTemplate.opsForList().rightPush(historyKey, userMsgJson);
+            log.info("[AI对话] 保存用户消息到历史记录, key={}", historyKey);
+        } catch (Exception e) {
+            log.warn("[AI对话] 保存用户消息失败", e);
+        }
+        
+        StringBuilder aiResponse = new StringBuilder();
+        
+        try {
+            String threadId = "chat:" + userId + ":" + sessionId;
+            RunnableConfig config = RunnableConfig.builder()
+                    .threadId(threadId)
+                    .build();
+            
+            log.info("[AI对话] 开始ReactAgent流式查询，sessionId={}, threadId={}", sessionId, threadId);
+            
+            return chatReactAgent.stream(query, config)
+                    .filter(output -> output instanceof StreamingOutput<?>)
+                    .map(output -> (StreamingOutput<?>) output)
+                    .flatMap(streamingOutput -> {
+                        Message message = streamingOutput.message();
+                        if (message != null) {
+                            String text = message.getText();
+                            if (text != null && !text.isEmpty()) {
+                                aiResponse.append(text);
+                                try {
+                                    return Mono.just(objectMapper.writeValueAsString(text));
+                                } catch (Exception e) {
+                                    return Mono.just(text.replace("\n", "\\n").replace("\r", "\\r"));
+                                }
+                            }
                         }
+                        return Mono.empty();
                     })
                     .doOnComplete(() -> {
                         log.info("[AI对话] 流式查询完成，sessionId={}", sessionId);
                         rateLimitService.incrementUsage(userId, RateLimitConstants.FEATURE_CHAT);
+                        
+                        if (aiResponse.length() > 0) {
+                            try {
+                                String aiMsgJson = objectMapper.writeValueAsString(Map.of(
+                                        "messageType", "ASSISTANT",
+                                        "text", aiResponse.toString(),
+                                        "timestamp", System.currentTimeMillis()
+                                ));
+                                stringRedisTemplate.opsForList().rightPush(historyKey, aiMsgJson);
+                                log.info("[AI对话] 保存AI回复到历史记录, key={}, length={}", historyKey, aiResponse.length());
+                            } catch (Exception e) {
+                                log.warn("[AI对话] 保存AI回复失败", e);
+                            }
+                        }
                     })
-                    .doOnError(e -> log.error("[AI对话] 流式查询异常，sessionId={}", sessionId, e));
+                    .doOnError(e -> {
+                        log.error("[AI对话] 流式查询异常，sessionId={}", sessionId, e);
+                        if (isApiKeyOrModelError(e)) {
+                            throw new RuntimeException("API Key或模型名称有误，请核验");
+                        }
+                    });
         } catch (Exception e) {
             log.error("[AI对话] 查询时发生错误", e);
             return Flux.error(e);
@@ -376,19 +456,22 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                 return Result.success(Collections.emptyList());
             }
             log.info("[历史记录] 读取到{}条消息", messageList.size());
-            List<Map<String, String>> messages = new ArrayList<>();
+            List<Map<String, Object>> messages = new ArrayList<>();
             for (String json : messageList) {
-                Map<String, String> msg = new HashMap<>();
+                Map<String, Object> msg = new HashMap<>();
                 try {
                     JsonNode node = objectMapper.readTree(json);
                     String messageType = node.has("messageType") ? node.get("messageType").asText() : "";
                     String content = node.has("text") ? node.get("text").asText() : "";
+                    long timestamp = node.has("timestamp") ? node.get("timestamp").asLong() : System.currentTimeMillis();
                     msg.put("role", "USER".equals(messageType) ? "user" : "assistant");
                     msg.put("content", content);
+                    msg.put("timestamp", timestamp);
                 } catch (Exception e) {
                     log.warn("[历史记录] 解析消息 JSON 失败: {}", json);
                     msg.put("role", "unknown");
                     msg.put("content", json);
+                    msg.put("timestamp", System.currentTimeMillis());
                 }
                 messages.add(msg);
             }
@@ -534,11 +617,56 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     }
 
     @Override
+    public Result<Boolean> deleteMessages(String sessionId, Long userId, String type, List<Integer> messageIndices) {
+        log.info("[删除消息] 删除消息, userId={}, sessionId={}, type={}, indices={}", userId, sessionId, type, messageIndices);
+        
+        if (type == null || (!type.equals("chat") && !type.equals("rag"))) {
+            return Result.error("无效的会话类型");
+        }
+        
+        if (sessionId == null || sessionId.isEmpty() || userId == null || messageIndices == null || messageIndices.isEmpty()) {
+            return Result.error("参数不能为空");
+        }
+        
+        try {
+            String sessionKey = "spring_ai_alibaba_chat_memory:history:" + type + ":" + userId + ":" + sessionId;
+            
+            List<String> messages = stringRedisTemplate.opsForList().range(sessionKey, 0, -1);
+            if (messages == null || messages.isEmpty()) {
+                return Result.error("会话不存在或没有消息");
+            }
+            
+            List<Integer> sortedIndices = messageIndices.stream()
+                    .sorted(java.util.Collections.reverseOrder())
+                    .collect(Collectors.toList());
+            
+            for (Integer index : sortedIndices) {
+                if (index < 0 || index >= messages.size()) {
+                    log.warn("[删除消息] 索引超出范围: {}", index);
+                    continue;
+                }
+                String messageToDelete = messages.get(index);
+                stringRedisTemplate.opsForList().remove(sessionKey, 1, messageToDelete);
+            }
+            
+            log.info("[删除消息] 成功删除 {} 条消息", messageIndices.size());
+            return Result.success(true);
+        } catch (Exception e) {
+            log.error("[删除消息] 删除消息时发生错误: ", e);
+            return Result.error("删除消息失败: " + e.getMessage());
+        }
+    }
+
+    @Override
     public Result<String> aiSolveQuestion(String questionText, String questionType, String optionsJson, String generateType, Long userId) {
         log.info("[AI解答] 开始生成，userId={}, questionType={}, generateType={}", userId, questionType, generateType);
         
         if (questionText == null || questionText.trim().isEmpty()) {
             return Result.error("题目内容不能为空");
+        }
+        
+        if ("all".equals(generateType)) {
+            return aiSolveAll(questionText, questionType, optionsJson, userId);
         }
         
         String prompt = buildAiSolvePrompt(questionText, questionType, optionsJson, generateType);
@@ -557,6 +685,46 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             return Result.success(result);
         } catch (Exception e) {
             log.error("[AI解答] 生成失败: ", e);
+            if (isApiKeyOrModelError(e)) {
+                return Result.error("API Key或模型名称有误，请核验");
+            }
+            return Result.error("AI解答失败: " + e.getMessage());
+        }
+    }
+    
+    private Result<String> aiSolveAll(String questionText, String questionType, String optionsJson, Long userId) {
+        try {
+            ChatClient chatClient = chatClientFactory.getMilvusChatClient(userId);
+            Map<String, String> results = new HashMap<>();
+            
+            String answerPrompt = buildAiSolvePrompt(questionText, questionType, optionsJson, "answer");
+            if (answerPrompt != null) {
+                String answer = chatClient.prompt().user(answerPrompt).call().content();
+                results.put("answer", answer != null ? answer.trim() : "");
+            }
+            
+            String explanationPrompt = buildAiSolvePrompt(questionText, questionType, optionsJson, "explanation");
+            if (explanationPrompt != null) {
+                String explanation = chatClient.prompt().user(explanationPrompt).call().content();
+                results.put("explanation", explanation != null ? explanation.trim() : "");
+            }
+            
+            if ("calculation".equals(questionType)) {
+                String stepsPrompt = buildAiSolvePrompt(questionText, questionType, optionsJson, "steps");
+                if (stepsPrompt != null) {
+                    String steps = chatClient.prompt().user(stepsPrompt).call().content();
+                    results.put("steps", steps != null ? steps.trim() : "");
+                }
+            }
+            
+            String jsonResult = new ObjectMapper().writeValueAsString(results);
+            log.info("[AI解答] 全部生成完成");
+            return Result.success(jsonResult);
+        } catch (Exception e) {
+            log.error("[AI解答] 全部生成失败: ", e);
+            if (isApiKeyOrModelError(e)) {
+                return Result.error("API Key或模型名称有误，请核验");
+            }
             return Result.error("AI解答失败: " + e.getMessage());
         }
     }
@@ -741,5 +909,24 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         int count = 0;
         while (matcher.find()) count++;
         return count;
+    }
+
+    private boolean isApiKeyOrModelError(Throwable e) {
+        if (e == null) return false;
+        String message = e.getMessage();
+        if (message == null) {
+            message = e.getClass().getSimpleName();
+        }
+        String lowerMessage = message.toLowerCase();
+        return lowerMessage.contains("api key") ||
+               lowerMessage.contains("apikey") ||
+               lowerMessage.contains("invalid") ||
+               lowerMessage.contains("unauthorized") ||
+               lowerMessage.contains("401") ||
+               lowerMessage.contains("403") ||
+               lowerMessage.contains("model") && lowerMessage.contains("not found") ||
+               lowerMessage.contains("model") && lowerMessage.contains("invalid") ||
+               lowerMessage.contains("access denied") ||
+               lowerMessage.contains("authentication");
     }
 }

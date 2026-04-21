@@ -386,6 +386,9 @@ async function sendMessage() {
       if (errorText.includes('今日使用次数已达上限')) {
         throw new Error('今日免费问答次数已用完，请切换使用您自己的模型或明天再试')
       }
+      if (errorText.includes('API') || errorText.includes('key') || errorText.includes('Key') || errorText.includes('model') || errorText.includes('Model') || errorText.includes('401') || errorText.includes('403') || errorText.includes('invalid')) {
+        throw new Error('上传的API Key或模型名称有误，请核验')
+      }
       throw new Error('请求失败')
     }
 

@@ -146,6 +146,23 @@ public class RubricController {
     }
 
     /**
+     * 批量保存题目（先删除原有题目，再添加新题目）
+     * @param rubricId 试卷ID
+     * @param questions 题目列表
+     * @param request HttpServletRequest
+     * @return 结果
+     */
+    @PostMapping("/{rubricId}/questions/batch")
+    @Operation(summary = "批量保存题目", description = "批量保存试卷题目（先删除再添加）")
+    public Result<?> batchSaveQuestions(
+            @Parameter(description = "试卷ID") @PathVariable Long rubricId,
+            @RequestBody List<QuestionEntity> questions,
+            HttpServletRequest request) {
+        Long userId = (Long) request.getAttribute("userId");
+        return rubricService.batchSaveQuestions(rubricId, questions, userId);
+    }
+
+    /**
      * 根据Rubric生成HTML文件
      * @param request 生成请求
      * @param httpRequest HttpServletRequest

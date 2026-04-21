@@ -342,6 +342,43 @@ public class RubricServiceImpl implements RubricService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public Result<?> batchSaveQuestions(Long rubricId, List<QuestionEntity> questions, Long userId) {
+        try {
+            RubricEntity rubric = rubricMapper.selectById(rubricId);
+            if (rubric == null) {
+                return Result.error("试卷不存在");
+            }
+            if (!rubric.getCreateId().equals(userId)) {
+                return Result.error("只有创建者可以修改题目");
+            }
+            
+            LambdaQueryWrapper<QuestionEntity> deleteWrapper = new LambdaQueryWrapper<>();
+            deleteWrapper.eq(QuestionEntity::getRubricId, rubricId);
+            questionMapper.delete(deleteWrapper);
+            
+            int orderIndex = 1;
+            for (QuestionEntity q : questions) {
+                q.setId(null);
+                q.setRubricId(rubricId);
+                q.setDeleted(0);
+                q.setOrderIndex(orderIndex++);
+                questionMapper.insert(q);
+            }
+            
+            rubric.setQuestionCount(questions.size());
+            rubric.setUpdateTime(LocalDateTime.now());
+            rubricMapper.updateById(rubric);
+            
+            log.info("[批量保存题目] 保存成功，rubricId={}, count={}", rubricId, questions.size());
+            return Result.success("保存成功");
+        } catch (Exception e) {
+            log.error("[批量保存题目] 保存失败", e);
+            return Result.error("保存失败");
+        }
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public Result<RubricGenerateResponse> generateHtml(RubricGenerateRequest request, Long userId) {
         try {
             // 1. 获取Rubric

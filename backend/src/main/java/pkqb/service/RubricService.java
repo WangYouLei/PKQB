@@ -86,4 +86,13 @@ public interface RubricService {
      * @return 结果（包含文件信息）
      */
     Result<RubricGenerateResponse> generateHtml(RubricGenerateRequest request, Long userId);
+
+    /**
+     * 批量保存题目（先删除原有题目，再添加新题目）
+     * @param rubricId 试卷ID
+     * @param questions 题目列表
+     * @param userId 当前用户ID
+     * @return 结果
+     */
+    Result<?> batchSaveQuestions(Long rubricId, List<QuestionEntity> questions, Long userId);
 }

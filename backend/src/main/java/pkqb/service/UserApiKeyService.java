@@ -13,4 +13,8 @@ public interface UserApiKeyService {
     ApiKeyMode getApiKeyMode(Long userId);
 
     boolean hasUserOwnApiKey(Long userId);
+
+    void saveModel(Long userId, String model);
+
+    String getModel(Long userId);
 }

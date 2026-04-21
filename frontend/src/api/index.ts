@@ -132,6 +132,12 @@ export const apiDeleteHistory = async (sessionId: string, userId: string, type: 
   return res
 }
 
+/** 删除会话中的指定消息 */
+export const apiDeleteMessages = async (sessionId: string, userId: string, type: 'rag' | 'chat', messageIndices: number[]) => {
+  const res = await del<Result<boolean>>('/ai/delete-messages', { sessionId, userId, type, messageIndices: messageIndices.join(',') })
+  return res
+}
+
 /** 获取使用次数 */
 export const apiGetUsage = async (userId: string, type: 'rag' | 'chat') => {
   const res = await get<Result<{ hasOwnApiKey: boolean; used: number; limit: number; remaining: number }>>('/ai/usage', { userId, type })
@@ -200,6 +206,12 @@ export const apiGetApiKeyStatus = async (userId: number) => {
   return res
 }
 
+/** 保存用户模型 */
+export const apiSaveModel = async (userId: number, model: string) => {
+  const res = await post<Result<string>>('/apikey/model', null, { userId, model })
+  return res
+}
+
 // ========== 用户头像管理 ==========
 
 /** 获取头像上传路径 */
@@ -235,9 +247,29 @@ export const apiAiSolveQuestion = async (params: {
   questionText: string
   questionType: string
   optionsJson?: string
-  generateType: 'answer' | 'explanation' | 'steps'
+  generateType: 'answer' | 'explanation' | 'steps' | 'all'
   userId: number
 }) => {
   const res = await post<string>('/ai/ai-solve', null, params)
+  return res
+}
+
+/** 更新题目 */
+export const apiUpdateQuestion = async (data: {
+  id: number
+  questionType?: string
+  questionText?: string
+  optionsJson?: string
+  answer?: string
+  explanation?: string
+  calculationStepsJson?: string
+}) => {
+  const res = await put<Result<void>>('/rubric/question/update', data)
+  return res
+}
+
+/** 批量保存题目 */
+export const apiBatchSaveQuestions = async (rubricId: number, questions: any[]) => {
+  const res = await post<Result<void>>(`/rubric/${rubricId}/questions/batch`, questions)
   return res
 }

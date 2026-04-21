@@ -24,6 +24,7 @@ public class ChatMemoryServiceImpl implements ChatMemoryService {
     private final ObjectMapper objectMapper;
 
     private static final String MEMORY_KEY_PREFIX = "spring_ai_alibaba_chat_memory:history:";
+    private static final String LOCK_KEY_PREFIX = "chat_memory:compress:lock:";
     private static final String SUMMARY_PROMPT = """
             请将以下对话历史压缩成简洁的摘要，要求：
             1. 保留关键信息、重要结论和决策
@@ -41,6 +42,14 @@ public class ChatMemoryServiceImpl implements ChatMemoryService {
     @Override
     public void compressIfNeeded(String userId, String sessionId, String type) {
         String memoryKey = MEMORY_KEY_PREFIX + type + ":" + userId + ":" + sessionId;
+        String lockKey = LOCK_KEY_PREFIX + type + ":" + userId + ":" + sessionId;
+        
+        Boolean locked = stringRedisTemplate.opsForValue()
+                .setIfAbsent(lockKey, "1", 30, TimeUnit.SECONDS);
+        if (locked == null || !locked) {
+            log.debug("[上下文压缩] 获取锁失败，跳过压缩，userId={}, sessionId={}", userId, sessionId);
+            return;
+        }
         
         try {
             Long messageCount = stringRedisTemplate.opsForList().size(memoryKey);
@@ -52,11 +61,14 @@ public class ChatMemoryServiceImpl implements ChatMemoryService {
                     userId, sessionId, messageCount);
             
             List<String> allMessages = stringRedisTemplate.opsForList().range(memoryKey, 0, -1);
-            if (allMessages == null || allMessages.size() <= WINDOW_SIZE) {
+            if (allMessages == null || allMessages.size() <= COMPRESS_THRESHOLD) {
                 return;
             }
             
             int messagesToCompress = allMessages.size() - WINDOW_SIZE;
+            if (messagesToCompress <= 0) {
+                return;
+            }
             List<String> messagesToKeep = new ArrayList<>();
             List<String> messagesForSummary = new ArrayList<>();
             
@@ -80,7 +92,14 @@ public class ChatMemoryServiceImpl implements ChatMemoryService {
                     JsonNode node = objectMapper.readTree(msgJson);
                     String messageType = node.has("messageType") ? node.get("messageType").asText() : "";
                     String content = node.has("text") ? node.get("text").asText() : "";
-                    String role = "USER".equals(messageType) ? "用户" : "AI";
+                    String role;
+                    if ("USER".equals(messageType)) {
+                        role = "用户";
+                    } else if ("SYSTEM".equals(messageType)) {
+                        role = "系统";
+                    } else {
+                        role = "AI";
+                    }
                     contentForSummary.append(role).append(": ").append(content).append("\n");
                 } catch (Exception e) {
                     contentForSummary.append(msgJson).append("\n");
@@ -89,28 +108,35 @@ public class ChatMemoryServiceImpl implements ChatMemoryService {
             
             String newSummary = generateSummary(contentForSummary.toString(), userId);
             
+            if (newSummary == null || newSummary.isEmpty()) {
+                log.warn("[上下文压缩] 摘要生成失败，保留原始消息，userId={}, sessionId={}", userId, sessionId);
+                return;
+            }
+            
             stringRedisTemplate.delete(memoryKey);
             
-            if (newSummary != null && !newSummary.isEmpty()) {
-                String summaryKey = SUMMARY_PREFIX + type + ":" + userId + ":" + sessionId;
-                stringRedisTemplate.opsForValue().set(summaryKey, newSummary, 7, TimeUnit.DAYS);
-                log.info("[上下文压缩] 摘要已保存，key={}", summaryKey);
-                
-                String summaryMessage = String.format(
-                        "{\"messageType\":\"USER\",\"text\":\"【历史对话摘要】%s\"}", 
-                        newSummary.replace("\"", "\\\"").replace("\n", "\\n"));
-                stringRedisTemplate.opsForList().rightPush(memoryKey, summaryMessage);
-            }
+            String summaryKey = SUMMARY_PREFIX + type + ":" + userId + ":" + sessionId;
+            stringRedisTemplate.opsForValue().set(summaryKey, newSummary, 14, TimeUnit.DAYS);
+            log.info("[上下文压缩] 摘要已保存，key={}", summaryKey);
+            
+            String summaryMessage = String.format(
+                    "{\"messageType\":\"SYSTEM\",\"text\":\"【历史对话摘要】%s\"}", 
+                    newSummary.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n"));
+            stringRedisTemplate.opsForList().rightPush(memoryKey, summaryMessage);
             
             for (String msg : messagesToKeep) {
                 stringRedisTemplate.opsForList().rightPush(memoryKey, msg);
             }
             
-            log.info("[上下文压缩] 压缩完成，原始消息数={}, 压缩后保留={}, 压缩了={}条",
+            stringRedisTemplate.expire(memoryKey, 14, TimeUnit.DAYS);
+            
+            log.info("[上下文压缩] 压缩完成，原始消息数={}, 压缩后=1条摘要+{}条消息, 压缩了={}条",
                     allMessages.size(), messagesToKeep.size(), messagesToCompress);
                     
         } catch (Exception e) {
             log.error("[上下文压缩] 压缩失败，userId={}, sessionId={}", userId, sessionId, e);
+        } finally {
+            stringRedisTemplate.delete(lockKey);
         }
     }
 

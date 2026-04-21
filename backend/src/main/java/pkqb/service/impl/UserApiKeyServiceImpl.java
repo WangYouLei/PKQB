@@ -83,4 +83,28 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
         UserEntity user = userMapper.selectOne(queryWrapper);
         return user != null && user.getApiKey() != null && !user.getApiKey().isEmpty();
     }
+
+    @Override
+    public void saveModel(Long userId, String model) {
+        LambdaUpdateWrapper<UserEntity> updateWrapper = new LambdaUpdateWrapper<>();
+        updateWrapper.eq(UserEntity::getId, userId)
+                .set(UserEntity::getModel, model);
+        
+        int updated = userMapper.update(null, updateWrapper);
+        if (updated > 0) {
+            log.info("用户 {} 保存模型成功: {}", userId, model);
+        } else {
+            log.warn("用户 {} 保存模型失败，用户不存在", userId);
+        }
+    }
+
+    @Override
+    public String getModel(Long userId) {
+        LambdaQueryWrapper<UserEntity> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(UserEntity::getId, userId)
+                .select(UserEntity::getModel);
+        
+        UserEntity user = userMapper.selectOne(queryWrapper);
+        return user != null ? user.getModel() : null;
+    }
 }

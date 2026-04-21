@@ -75,33 +75,36 @@ public class ChatClientFactory {
     private ChatClient getOrCreateUserDefaultChatClient(Long userId) {
         return userChatClientCache.computeIfAbsent(userId, id -> {
             String apiKey = userApiKeyService.getPlainApiKey(id);
+            String model = userApiKeyService.getModel(id);
             if (apiKey == null) {
                 log.warn("用户 {} 没有个人 API Key，使用默认 ChatClient", id);
                 return defaultChatClient;
             }
-            return chatClientUserConfig.createUserDefaultChatClient(apiKey);
+            return chatClientUserConfig.createUserDefaultChatClient(apiKey, model);
         });
     }
 
     private ChatClient getOrCreateUserChatClient(Long userId) {
         return userChatClientCache.computeIfAbsent(userId, id -> {
             String apiKey = userApiKeyService.getPlainApiKey(id);
+            String model = userApiKeyService.getModel(id);
             if (apiKey == null) {
                 log.warn("用户 {} 没有个人 API Key，使用默认 ChatClient", id);
                 return chatClient;
             }
-            return chatClientUserConfig.createUserChatClient(apiKey);
+            return chatClientUserConfig.createUserChatClient(apiKey, model);
         });
     }
 
     private ChatClient getOrCreateUserMilvusChatClient(Long userId) {
         return userChatClientCache.computeIfAbsent(userId, id -> {
             String apiKey = userApiKeyService.getPlainApiKey(id);
+            String model = userApiKeyService.getModel(id);
             if (apiKey == null) {
                 log.warn("用户 {} 没有个人 API Key，使用默认 MilvusChatClient", id);
                 return milvusChatClient;
             }
-            return chatClientUserConfig.createUserMilvusChatClient(apiKey);
+            return chatClientUserConfig.createUserMilvusChatClient(apiKey, model);
         });
     }
 

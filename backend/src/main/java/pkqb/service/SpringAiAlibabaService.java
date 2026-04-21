@@ -96,6 +96,17 @@ public interface SpringAiAlibabaService {
     Result<Boolean> deleteHistory(String sessionId, Long userId, String type);
 
     /**
+     * 删除会话中的指定消息
+     *
+     * @param sessionId 会话ID
+     * @param userId    用户ID
+     * @param type      对话类型 rag或chat
+     * @param messageIndices 消息索引列表（从0开始）
+     * @return 删除结果
+     */
+    Result<Boolean> deleteMessages(String sessionId, Long userId, String type, List<Integer> messageIndices);
+
+    /**
      * AI解答题目 - 生成答案、解析或计算步骤
      *
      * @param questionText 题目内容

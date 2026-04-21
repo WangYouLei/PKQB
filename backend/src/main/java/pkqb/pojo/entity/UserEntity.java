@@ -27,6 +27,8 @@ public class UserEntity {
 
     private String apiKey;
 
+    private String model;
+
     private String avatarUrl;
 
     private LocalDateTime createTime;

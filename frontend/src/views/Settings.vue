@@ -208,6 +208,30 @@
             {{ deleting ? '删除中...' : '删除 API Key' }}
           </button>
         </div>
+
+        <!-- 模型选择 -->
+        <div class="model-section" v-if="status?.hasOwnApiKey">
+          <label class="input-label">模型</label>
+          <div class="input-group">
+            <input 
+              v-model="modelInput" 
+              type="text" 
+              class="api-key-input" 
+              placeholder="请输入模型名称，如 qwen-plus"
+            />
+          </div>
+          <p class="input-hint">
+            您可以在 <a href="https://bailian.console.aliyun.com/" target="_blank" rel="noopener">阿里云百炼控制台</a> 获取模型名称
+          </p>
+          <div class="action-buttons">
+            <button class="btn btn-primary" @click="handleSaveModel" :disabled="savingModel || !modelInput.trim()">
+              <svg v-if="savingModel" class="spinner" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31.4 31.4" stroke-linecap="round"/>
+              </svg>
+              {{ savingModel ? '保存中...' : '保存模型' }}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -235,7 +259,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useUserStore } from '@/stores/user'
-import { apiGetApiKeyStatus, apiSaveApiKey, apiDeleteApiKey, apiGetAvatarUploadPath, apiUpdateAvatar, apiUpdateUsername, apiUpdatePassword } from '@/api'
+import { apiGetApiKeyStatus, apiSaveApiKey, apiDeleteApiKey, apiSaveModel, apiGetAvatarUploadPath, apiUpdateAvatar, apiUpdateUsername, apiUpdatePassword } from '@/api'
 import type { ApiKeyStatus } from '@/types'
 
 const userStore = useUserStore()
@@ -246,6 +270,9 @@ const saving = ref(false)
 const deleting = ref(false)
 const uploading = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
+
+const modelInput = ref('')
+const savingModel = ref(false)
 
 const usernameInput = ref('')
 const savingUsername = ref(false)
@@ -265,9 +292,29 @@ async function loadStatus() {
     const res = await apiGetApiKeyStatus(userStore.userId)
     if (res.code === 200) {
       status.value = res.data
+      modelInput.value = res.data?.model || ''
     }
   } catch (error) {
     console.error('获取 API Key 状态失败:', error)
+  }
+}
+
+async function handleSaveModel() {
+  if (!modelInput.value.trim() || !userStore.userId) return
+  
+  savingModel.value = true
+  try {
+    const res = await apiSaveModel(userStore.userId, modelInput.value.trim())
+    if (res.code === 200) {
+      alert('模型保存成功')
+    } else {
+      alert(res.message || '模型保存失败')
+    }
+  } catch (error) {
+    console.error('保存模型失败:', error)
+    alert('模型保存失败')
+  } finally {
+    savingModel.value = false
   }
 }
 
@@ -629,6 +676,8 @@ async function handleUpdatePassword() {
 .api-key-section {
   margin-bottom: 24px;
 }
+
+.model-section { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--border-glass); }
 
 .input-label {
   display: block;

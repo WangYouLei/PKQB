@@ -71,11 +71,36 @@ public class UserApiKeyController {
         boolean hasOwnKey = userApiKeyService.hasUserOwnApiKey(userId);
         ApiKeyMode mode = userApiKeyService.getApiKeyMode(userId);
         boolean shouldLimit = rateLimitService.shouldRateLimit(userId);
+        String model = userApiKeyService.getModel(userId);
         
         status.put("hasOwnApiKey", hasOwnKey);
         status.put("currentMode", mode.name());
         status.put("hasRateLimit", shouldLimit);
+        status.put("model", model);
         
         return Result.success(status);
+    }
+
+    @PostMapping("/model")
+    @Operation(summary = "保存模型", description = "保存用户的阿里云百炼模型名称")
+    public Result<String> saveModel(
+            @Parameter(description = "用户ID") @RequestParam Long userId,
+            @Parameter(description = "模型名称") @RequestParam String model) {
+        if (model == null || model.trim().isEmpty()) {
+            return Result.error("模型名称不能为空");
+        }
+        
+        if (!userApiKeyService.hasUserOwnApiKey(userId)) {
+            return Result.error("请先保存 API Key 后再设置模型");
+        }
+        
+        try {
+            userApiKeyService.saveModel(userId, model.trim());
+            chatClientFactory.clearUserCache(userId);
+            return Result.success("模型保存成功");
+        } catch (Exception e) {
+            log.error("保存模型失败: {}", e.getMessage());
+            return Result.error("保存模型失败: " + e.getMessage());
+        }
     }
 }
