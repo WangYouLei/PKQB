@@ -22,6 +22,10 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+/**
+ * 文件服务实现类
+ * 实现文件上传、下载、删除、更新等核心业务逻辑
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -70,20 +74,6 @@ public class FileServiceImpl implements FileService {
         fileMapper.insert(entity);
 
         return toResponse(entity);
-    }
-
-    @Override
-    public String getPublicUrl(Long fileId, Long userId) {
-        FileEntity entity = fileMapper.selectById(fileId);
-        if (entity == null) {
-            throw new ResourceNotFoundException("文件不存在");
-        }
-
-        if (!entity.getUserId().equals(userId) && Boolean.TRUE.equals(entity.getIsPrivate())) {
-            throw new PermissionDeniedException("无权访问该文件");
-        }
-        log.info("用户{}: 获取了文件 {} 的地址" , userId, fileId);
-        return minioEndpoint + "/" + bucketName + "/" + entity.getMinioKey();
     }
 
     @Override

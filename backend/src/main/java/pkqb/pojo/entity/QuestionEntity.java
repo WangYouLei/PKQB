@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
 
 /**
  * 题目实体类
+ * 对应数据库question表，存储题目详细信息
  */
 @Data
 @TableName("question")
@@ -39,4 +40,3 @@ public class QuestionEntity {
 
     private Integer deleted;
 }
-

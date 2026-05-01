@@ -11,9 +11,6 @@ import pkqb.common.Result;
 import pkqb.pojo.dto.AvatarUpdateRequest;
 import pkqb.service.UserService;
 
-/**
- * 用户头像控制器
- */
 @Slf4j
 @RestController
 @RequestMapping("/api/user/avatar")
@@ -29,9 +26,6 @@ public class AvatarController {
     @Value("${minio.bucket-name}")
     private String bucketName;
 
-    /**
-     * 获取头像上传路径
-     */
     @GetMapping("/upload-path")
     @Operation(summary = "获取头像上传路径", description = "获取头像上传的objectKey和公开URL")
     public Result<AvatarUploadInfo> getUploadPath(
@@ -41,9 +35,6 @@ public class AvatarController {
         return Result.success(new AvatarUploadInfo(objectKey, publicUrl));
     }
 
-    /**
-     * 更新用户头像
-     */
     @PutMapping
     @Operation(summary = "更新头像", description = "更新用户头像（上传后调用，传入MinIO对象路径）")
     public Result<String> updateAvatar(
@@ -53,9 +44,6 @@ public class AvatarController {
         return Result.success("头像更新成功", avatarUrl);
     }
 
-    /**
-     * 头像上传信息
-     */
     @lombok.Data
     @lombok.AllArgsConstructor
     public static class AvatarUploadInfo {

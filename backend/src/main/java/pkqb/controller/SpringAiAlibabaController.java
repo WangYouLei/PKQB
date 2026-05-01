@@ -17,9 +17,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Spring AI Alibaba 控制器
- */
 @RestController
 @Slf4j
 @RequestMapping("/api/ai")
@@ -34,12 +31,6 @@ public class SpringAiAlibabaController {
         this.rateLimitService = rateLimitService;
     }
 
-    /**
-     * 添加文档（知识库）
-     * @param file 文档文件
-     * @param userId 用户ID
-     * @return 添加结果
-     */
     @PostMapping(value = "/add-documentsFile")
     @Operation(summary = "上传知识库文档", description = "上传文档到向量知识库")
     public Result<String> addDocumentsFile(
@@ -48,13 +39,6 @@ public class SpringAiAlibabaController {
         return saaService.addDocuments(file, userId);
     }
 
-
-    /**
-     * 处理上传的"问题"文件
-     * @param file 上传的文件
-     * @param userId 用户ID
-     * @return 解析结果
-     */
     @PostMapping("/handle-rubricFile")
     @Operation(summary = "解析题目文件（AI）", description = "上传题目文件并使用AI解析为结构化题目数据")
     public Result<List<AiRubric>> handleRubricFile(
@@ -71,12 +55,6 @@ public class SpringAiAlibabaController {
         return saaService.handleRubricFileLocal(file, userId);
     }
 
-    /**
-     * 使用ChatClient回答问题
-     * @param request 问题以及会话ID
-     * @param userId 用户ID
-     * @return 回答结果
-     */
     @PostMapping(value = "/query", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @Operation(summary = "AI对话", description = "普通AI对话（流式返回）")
     public Flux<String> query(
@@ -86,12 +64,6 @@ public class SpringAiAlibabaController {
         return saaService.query(request.getQuery(), request.getSessionId(), userId);
     }
 
-    /**
-     * 使用RAG从Milvus检索信息并回答问题
-     * @param request 问题以及会话ID
-     * @param userId 用户ID
-     * @return 回答结果
-     */
     @PostMapping(value = "/rag-query", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @Operation(summary = "知识库问答", description = "基于RAG的向量知识库问答（流式返回）")
     public Flux<String> ragQuery(
@@ -100,12 +72,6 @@ public class SpringAiAlibabaController {
         return saaService.ragQuery(request.getQuery(), request.getSessionId(), userId);
     }
 
-    /**
-     * 获取历史对话列表
-     * @param userId 用户ID
-     * @param type 获取历史对话类型  rag或者chat
-     * @return
-     */
     @GetMapping(value = "/get-historyList")
     @Operation(summary = "获取历史会话列表", description = "获取用户的历史会话列表")
     public Result<List<Object>> getHistory(
@@ -123,13 +89,6 @@ public class SpringAiAlibabaController {
         return saaService.getHistoryBySessionId(sessionId, userId.toString(), type);
     }
 
-    /**
-     * 删除指定的聊天会话记录
-     * @param sessionId 会话ID
-     * @param userId 用户ID
-     * @param type 对话类型 rag或者chat
-     * @return 删除结果
-     */
     @DeleteMapping("/delete-history")
     @Operation(summary = "删除会话", description = "删除指定的聊天会话记录（AI对话或知识库问答）")
     public Result<Boolean> deleteHistory(
@@ -139,14 +98,6 @@ public class SpringAiAlibabaController {
         return saaService.deleteHistory(sessionId, userId, type);
     }
 
-    /**
-     * 删除会话中的指定消息
-     * @param sessionId 会话ID
-     * @param userId 用户ID
-     * @param type 对话类型 rag或者chat
-     * @param messageIndices 消息索引列表（从0开始）
-     * @return 删除结果
-     */
     @DeleteMapping("/delete-messages")
     @Operation(summary = "删除消息", description = "删除会话中的指定消息")
     public Result<Boolean> deleteMessages(

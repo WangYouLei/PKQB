@@ -8,7 +8,8 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 /**
- * HTML文件实体类
+ * 文件实体类
+ * 对应数据库file表，存储文件元数据信息
  */
 @Data
 @TableName("file")

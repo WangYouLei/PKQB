@@ -19,7 +19,7 @@ public interface SpringAiAlibabaService {
 
 
     /**
-     * 使用RAG从Milvus检索信息并回答问题
+     * 使用RAG从Redis向量数据库检索信息并回答问题
      *
      * @param query     问题
      * @param sessionId 会话ID
@@ -38,7 +38,7 @@ public interface SpringAiAlibabaService {
     Result<List<Object>> getHistory(String userId,String type);
 
     /**
-     * 使用ChatClient回答问题
+     * 使用ReactAgent回答问题
      *
      * @param query     问题
      * @param sessionId 会话ID

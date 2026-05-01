@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
 
 /**
  * 班级实体类
+ * 对应数据库class表，存储班级信息
  */
 @Data
 @TableName("class")

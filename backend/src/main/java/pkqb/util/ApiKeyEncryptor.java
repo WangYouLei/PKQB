@@ -12,6 +12,10 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Base64;
 
+/**
+ * API Key加密工具类
+ * 使用AES-GCM算法对用户的API Key进行加密存储
+ */
 @Component
 @Slf4j
 public class ApiKeyEncryptor {
@@ -23,6 +27,12 @@ public class ApiKeyEncryptor {
     @Value("${app.api-key.encrypt-secret:default-32-byte-secret-key}")
     private String encryptSecret;
 
+    /**
+     * 加密API Key
+     *
+     * @param plainApiKey 明文API Key
+     * @return 加密后的Base64编码字符串
+     */
     public String encrypt(String plainApiKey) {
         if (plainApiKey == null || plainApiKey.isEmpty()) {
             return null;
@@ -51,6 +61,12 @@ public class ApiKeyEncryptor {
         }
     }
 
+    /**
+     * 解密API Key
+     *
+     * @param encryptedApiKey 加密后的Base64编码字符串
+     * @return 解密后的明文API Key
+     */
     public String decrypt(String encryptedApiKey) {
         if (encryptedApiKey == null || encryptedApiKey.isEmpty()) {
             return null;

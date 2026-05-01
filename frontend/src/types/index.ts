@@ -85,8 +85,8 @@ export interface RubricItem {
 }
 
 export interface RubricQuestion {
-  id: number
-  rubricId: number
+  id?: number
+  rubricId?: number
   questionText: string
   questionType: string
   optionsJson?: string
@@ -108,5 +108,54 @@ export interface ApiKeyStatus {
   hasOwnApiKey: boolean
   currentMode: 'LOCAL' | 'PERSONAL'
   hasRateLimit: boolean
-  model?: string
+  mainModel?: string
+  assistantModels: ModelsEntity[]
+  allModels: ModelsEntity[]
+  modelCount: number
+  maxModelCount: number
+  canAddModel: boolean
+  supportsMultiModel: boolean
+}
+
+export interface ModelsEntity {
+  id: number
+  userId: number
+  modelName: string
+  isMain: number
+  createTime: string
+  updateTime: string
+}
+
+export interface ApiError {
+  code: number
+  message: string
+}
+
+export interface HistoryMessage {
+  messageType: 'USER' | 'ASSISTANT'
+  text: string
+  timestamp: number
+}
+
+export type QuestionType = 'single_choice' | 'multiple_choice' | 'true_false' | 'short_answer' | 'calculation'
+
+export interface AiSolveResult {
+  answer?: string
+  explanation?: string
+  steps?: string
+}
+
+export interface HistorySessionData {
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: number
+}
+
+export interface ParsedQuestion {
+  question: string
+  questionType: QuestionType
+  options?: string[]
+  answer: string
+  explanation?: string
+  calculationSteps?: string[]
 }

@@ -4,7 +4,7 @@ server:
 spring:
   data:
     redis:
-      host: localhost
+      host: 192.168.236.200
       port: 6379
       database: 0
       timeout: 3000
@@ -35,7 +35,7 @@ spring:
           # 模型温度越高，灵活性越高，结果越随机
           temperature: 0.7
           # 系统API输出最大token数（限制较小） 选择范围为：【1,2000】
-          # localhost-max-tokens:本地apikey的限制    personal-max-tokens：个人apikey的限制
+          # 自定义：localhost-max-tokens:本地apikey的限制    personal-max-tokens：个人apikey的限制
           localhost-max-tokens: 1024
           personal-max-tokens:  2000
       embedding:
@@ -43,19 +43,12 @@ spring:
           model: text-embedding-v4
           # 模型返回的向量的维度大小
           dimensions: 1024
-    # Milvus Vector Store 配置
+    # Redis Vector Store 配置 (Redis 8 向量搜索)
     vectorstore:
-      milvus:
-        enabled: true  # 启用Milvus配置   这个不是官方设置
-        initialize-schema: true  # 启用schema初始化，自动创建集合
-        client:
-          host: 192.168.236.150  # 服务器地址
-          port: 19530
-          username: "minioadmin"
-          password: "minioadmin"
-        databaseName: "default"
-        collectionName: "PKQB"
-        embeddingDimension: 1024 # 默认是：1536
+      redis:
+        initialize-schema: true
+        index-name: pkqb_vector_index
+        prefix: "pkqb:"
 
 
 mybatis-plus:
@@ -73,10 +66,10 @@ jwt:
 
 app:
   api-key:
-    encrypt-secret: ${API_KEY_ENCRYPT_SECRET:pkqb-api-key-encrypt-secret-32b}
+    encrypt-secret: pkqb-api-key-encrypt-secret-32b
 
 minio:
-  endpoint: http://192.168.236.150:9000
+  endpoint: http://192.168.236.200:9000
   access-key: minioadmin
   secret-key: minioadmin
   bucket-name: pkqb-files

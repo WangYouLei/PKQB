@@ -5,6 +5,10 @@ import lombok.Data;
 
 import java.util.List;
 
+/**
+ * AI解析题目 DTO
+ * 用于存储AI解析后的题目信息
+ */
 @Data
 @Schema(description = "AI解析的题目")
 public class AiRubric {

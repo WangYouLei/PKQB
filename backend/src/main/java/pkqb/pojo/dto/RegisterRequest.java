@@ -7,6 +7,7 @@ import lombok.Data;
 
 /**
  * 注册请求 DTO
+ * 用于用户注册的请求参数
  */
 @Data
 @Schema(description = "注册请求")

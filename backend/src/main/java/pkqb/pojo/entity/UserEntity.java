@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
 
 /**
  * 用户实体类
+ * 对应数据库user表，存储用户基本信息
  */
 @Data
 @TableName("user")
@@ -26,8 +27,6 @@ public class UserEntity {
     private Integer classId;
 
     private String apiKey;
-
-    private String model;
 
     private String avatarUrl;
 

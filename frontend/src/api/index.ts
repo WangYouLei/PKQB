@@ -1,5 +1,5 @@
 import { post, get, del, put } from './request'
-import type { Result, RegisterRequest, LoginRequest, LoginResponse, HtmlFileItem, QuestionItem, RubricItem, RubricQuestion, RubricGenerateResponse, ApiKeyStatus } from '@/types'
+import type { Result, RegisterRequest, LoginRequest, LoginResponse, HtmlFileItem, QuestionItem, RubricItem, RubricQuestion, RubricGenerateResponse, ApiKeyStatus, HistorySessionData } from '@/types'
 
 export const apiRegister = async (data: RegisterRequest) => {
   const res = await post<void>('/auth/register', data)
@@ -8,6 +8,11 @@ export const apiRegister = async (data: RegisterRequest) => {
 
 export const apiLogin = async (data: LoginRequest) => {
   const res = await post<LoginResponse>('/auth/login', data)
+  return res
+}
+
+export const apiLogout = async () => {
+  const res = await post<void>('/auth/logout')
   return res
 }
 
@@ -25,12 +30,6 @@ export const apiUploadFile = async (file: File, fileName: string, isPrivate: boo
 
 export const apiGetMyFiles = async () => {
   const res = await get<HtmlFileItem[]>('/files/my')
-  return res
-}
-
-/** 代理下载文件 */
-export const apiDownloadFile = async (fileId: number) => {
-  const res = await get<string>(`/files/download/${fileId}`)
   return res
 }
 
@@ -66,17 +65,6 @@ export const apiAddDocumentsFile = async (file: File, userId: number) => {
   return res.data as Result<string>
 }
 
-/** 上传文档到知识库（文本） */
-export const apiAddDocuments = async (content: string) => {
-  const formData = new FormData()
-  formData.append('content', content)
-  const { default: request } = await import('./request')
-  const res = await request.post('/ai/add-documents', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
-  })
-  return res.data as Result<string>
-}
-
 /** 上传题目文件解析（AI） */
 export const apiAddRubricFile = async (file: File, userId: number) => {
   const formData = new FormData()
@@ -85,7 +73,7 @@ export const apiAddRubricFile = async (file: File, userId: number) => {
   const { default: request } = await import('./request')
   const res = await request.post('/ai/handle-rubricFile', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 300000 // 5分钟超时，文档解析需要较长时间
+    timeout: 300000
   })
   return res.data as Result<QuestionItem[]>
 }
@@ -98,49 +86,38 @@ export const apiAddRubricFileLocal = async (file: File, userId: number) => {
   const { default: request } = await import('./request')
   const res = await request.post('/ai/handle-rubricFile-local', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 300000 // 5分钟超时，文档解析需要较长时间
+    timeout: 300000
   })
   return res.data as Result<QuestionItem[]>
 }
 
-/** 上传题目文本解析 */
-export const apiAddRubric = async (content: string) => {
-  const formData = new FormData()
-  formData.append('content', content)
-  const { default: request } = await import('./request')
-  const res = await request.post('/ai/add-Rubric', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
-  })
-  return res.data as Result<string>
-}
-
 /** 获取历史会话列表 */
 export const apiGetHistoryList = async (userId: string, type: 'rag' | 'chat') => {
-  const res = await get<Result<Object[]>>('/ai/get-historyList', { userId, type })
+  const res = await get<string[]>('/ai/get-historyList', { userId, type })
   return res
 }
 
 /** 根据 sessionId 获取具体对话历史 */
 export const apiGetHistoryBySessionId = async (sessionId: string, userId: string, type: 'rag' | 'chat') => {
-  const res = await get<Result<Object[]>>('/ai/get-history-by-sessionId', { sessionId, userId, type })
+  const res = await get<HistorySessionData[]>('/ai/get-history-by-sessionId', { sessionId, userId, type })
   return res
 }
 
 /** 删除会话历史 */
 export const apiDeleteHistory = async (sessionId: string, userId: string, type: 'rag' | 'chat') => {
-  const res = await del<Result<boolean>>('/ai/delete-history', { sessionId, userId, type })
+  const res = await del<boolean>('/ai/delete-history', { sessionId, userId, type })
   return res
 }
 
 /** 删除会话中的指定消息 */
 export const apiDeleteMessages = async (sessionId: string, userId: string, type: 'rag' | 'chat', messageIndices: number[]) => {
-  const res = await del<Result<boolean>>('/ai/delete-messages', { sessionId, userId, type, messageIndices: messageIndices.join(',') })
+  const res = await del<boolean>('/ai/delete-messages', { sessionId, userId, type, messageIndices: messageIndices.join(',') })
   return res
 }
 
 /** 获取使用次数 */
 export const apiGetUsage = async (userId: string, type: 'rag' | 'chat') => {
-  const res = await get<Result<{ hasOwnApiKey: boolean; used: number; limit: number; remaining: number }>>('/ai/usage', { userId, type })
+  const res = await get<{ hasOwnApiKey: boolean; used: number; limit: number; remaining: number }>('/ai/usage', { userId, type })
   return res
 }
 
@@ -148,13 +125,13 @@ export const apiGetUsage = async (userId: string, type: 'rag' | 'chat') => {
 
 /** 获取我的试卷列表 */
 export const apiGetMyRubrics = async () => {
-  const res = await get<Result<RubricItem[]>>('/rubric/my')
+  const res = await get<RubricItem[]>('/rubric/my')
   return res
 }
 
 /** 获取班级公开试卷列表 */
 export const apiGetPublicRubrics = async () => {
-  const res = await get<Result<RubricItem[]>>('/rubric/public')
+  const res = await get<RubricItem[]>('/rubric/public')
   return res
 }
 
@@ -190,13 +167,13 @@ export const apiGenerateRubricHtml = async (rubricId: number, fileName?: string,
 
 /** 保存用户 API Key */
 export const apiSaveApiKey = async (userId: number, apiKey: string) => {
-  const res = await post<Result<string>>('/apikey', null, { userId, apiKey })
+  const res = await post<string>('/apikey', null, { userId, apiKey })
   return res
 }
 
 /** 删除用户 API Key */
 export const apiDeleteApiKey = async (userId: number) => {
-  const res = await del<Result<string>>('/apikey', { userId })
+  const res = await del<string>('/apikey', { userId })
   return res
 }
 
@@ -206,9 +183,21 @@ export const apiGetApiKeyStatus = async (userId: number) => {
   return res
 }
 
-/** 保存用户模型 */
-export const apiSaveModel = async (userId: number, model: string) => {
-  const res = await post<Result<string>>('/apikey/model', null, { userId, model })
+/** 添加用户模型 */
+export const apiAddModel = async (userId: number, modelName: string, isMain: boolean = false) => {
+  const res = await post<string>('/apikey/model', null, { userId, modelName, isMain })
+  return res
+}
+
+/** 删除用户模型 */
+export const apiDeleteModel = async (userId: number, modelId: number) => {
+  const res = await del<string>('/apikey/model', { userId, modelId })
+  return res
+}
+
+/** 设置主模型 */
+export const apiSetMainModel = async (userId: number, modelId: number) => {
+  const res = await put<string>('/apikey/model/main', null, { userId, modelId })
   return res
 }
 
@@ -264,12 +253,12 @@ export const apiUpdateQuestion = async (data: {
   explanation?: string
   calculationStepsJson?: string
 }) => {
-  const res = await put<Result<void>>('/rubric/question/update', data)
+  const res = await put<void>('/rubric/question/update', data)
   return res
 }
 
 /** 批量保存题目 */
-export const apiBatchSaveQuestions = async (rubricId: number, questions: any[]) => {
-  const res = await post<Result<void>>(`/rubric/${rubricId}/questions/batch`, questions)
+export const apiBatchSaveQuestions = async (rubricId: number, questions: RubricQuestion[]) => {
+  const res = await post<void>(`/rubric/${rubricId}/questions/batch`, questions)
   return res
 }

@@ -165,15 +165,10 @@
             </exclusions>
         </dependency>
         
-        <!--  Milvus Vector Store for Spring AI  -->
+        <!--  Redis Vector Store Starter for Spring AI  -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-milvus-store</artifactId>
-        </dependency>
-        <!--  Autoconfigure Vector Store Milvus  -->
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-autoconfigure-vector-store-milvus</artifactId>
+            <artifactId>spring-ai-starter-vector-store-redis</artifactId>
         </dependency>
         <!--  Spring AI Advisors Vector Store  -->
         <dependency>
@@ -268,6 +263,12 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- AOP -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
         </dependency>
 
         <!-- Swagger API Documentation -->

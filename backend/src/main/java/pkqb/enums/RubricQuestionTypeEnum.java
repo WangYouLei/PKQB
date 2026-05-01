@@ -1,17 +1,15 @@
 package pkqb.enums;
 
+/**
+ * 题目类型枚举
+ * 定义系统支持的题目类型
+ */
 public enum RubricQuestionTypeEnum {
-    //单选题
     SINGLE_CHOICE("单选题", "single_choice"),
-    //多选题
     MULTIPLE_CHOICE("多选题", "multiple_choice"),
-    //判断题
     TRUE_FALSE("判断题", "true_false"),
-    //简答题
     SHORT_ANSWER("简答题", "short_answer"),
-    //填空题
     FILL_IN_THE_BLANKS("填空题", "fill_in_the_blanks"),
-    //计算题
     CALCULATION("计算题", "calculation");
     
     private String value;

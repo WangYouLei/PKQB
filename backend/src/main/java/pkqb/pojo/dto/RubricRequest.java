@@ -7,6 +7,10 @@ import lombok.Data;
 
 import java.util.List;
 
+/**
+ * 试卷请求 DTO
+ * 用于创建或更新试卷的请求参数
+ */
 @Data
 @Schema(description = "试卷请求")
 public class RubricRequest {

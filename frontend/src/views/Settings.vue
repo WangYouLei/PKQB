@@ -168,8 +168,10 @@
             <input
               :type="showApiKey ? 'text' : 'password'"
               v-model="apiKeyInput"
-              placeholder="请输入您的阿里云百炼 API Key"
+              :placeholder="isMaskedKey ? '' : '请输入您的阿里云百炼 API Key'"
               class="api-key-input"
+              @focus="handleApiKeyFocus"
+              @blur="handleApiKeyBlur"
             />
             <button class="toggle-visibility-btn" @click="showApiKey = !showApiKey">
               <svg v-if="showApiKey" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -190,7 +192,7 @@
         </div>
 
         <div class="action-buttons">
-          <button class="btn btn-primary" @click="handleSave" :disabled="saving || !apiKeyInput.trim()">
+          <button class="btn btn-primary" @click="handleSave" :disabled="saving || !apiKeyInput.trim() || (isMaskedKey && apiKeyInput === MASKED_KEY)">
             <svg v-if="saving" class="spinner" viewBox="0 0 24 24">
               <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31.4 31.4" stroke-linecap="round"/>
             </svg>
@@ -209,27 +211,98 @@
           </button>
         </div>
 
-        <!-- 模型选择 -->
+        <!-- 模型管理 -->
         <div class="model-section" v-if="status?.hasOwnApiKey">
-          <label class="input-label">模型</label>
-          <div class="input-group">
-            <input 
-              v-model="modelInput" 
-              type="text" 
-              class="api-key-input" 
-              placeholder="请输入模型名称，如 qwen-plus"
-            />
+          <div class="model-header">
+            <label class="input-label">模型管理</label>
+            <span class="model-count">已添加 {{ modelCount }}/{{ maxModelCount }} 个模型</span>
           </div>
-          <p class="input-hint">
-            您可以在 <a href="https://bailian.console.aliyun.com/" target="_blank" rel="noopener">阿里云百炼控制台</a> 获取模型名称
-          </p>
-          <div class="action-buttons">
-            <button class="btn btn-primary" @click="handleSaveModel" :disabled="savingModel || !modelInput.trim()">
-              <svg v-if="savingModel" class="spinner" viewBox="0 0 24 24">
-                <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31.4 31.4" stroke-linecap="round"/>
+          
+          <!-- 多模型说明 -->
+          <div class="model-info-card">
+            <div class="model-info-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="16" x2="12" y2="12"/>
+                <line x1="12" y1="8" x2="12.01" y2="8"/>
               </svg>
-              {{ savingModel ? '保存中...' : '保存模型' }}
-            </button>
+            </div>
+            <div class="model-info-content">
+              <h4>多模型协作说明</h4>
+              <ul>
+                <li><strong>主模型</strong>：用于所有单模型操作（如AI对话、知识库问答等），并负责整合辅助模型的回答</li>
+                <li><strong>辅助模型</strong>：在AI解答功能中，辅助模型会并行回答问题，然后由主模型综合判断并输出最优答案</li>
+                <li><strong>设计原因</strong>：不同模型有各自的优势领域，多模型协作可以获得更全面、更准确的答案</li>
+              </ul>
+            </div>
+          </div>
+          
+          <!-- 模型列表 -->
+          <div class="model-list" v-if="status?.allModels && status.allModels.length > 0">
+            <!-- 主模型 -->
+            <div class="model-item main-model" v-if="mainModel">
+              <div class="model-badge main">主模型</div>
+              <div class="model-name">{{ mainModel.modelName }}</div>
+              <div class="model-actions">
+                <span class="model-status">用于所有单模型操作</span>
+              </div>
+            </div>
+            
+            <!-- 辅助模型 -->
+            <div class="model-item assistant-model" v-for="model in assistantModels" :key="model.id">
+              <div class="model-badge assistant">辅助模型</div>
+              <div class="model-name">{{ model.modelName }}</div>
+              <div class="model-actions">
+                <button class="btn btn-sm btn-outline" @click="handleSetMainModel(model.id)" title="设为主模型">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                  </svg>
+                  设为主模型
+                </button>
+                <button class="btn btn-sm btn-danger-outline" @click="handleDeleteModel(model.id)" :disabled="deletingModelId === model.id" title="删除模型">
+                  <svg v-if="deletingModelId === model.id" class="spinner" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31.4 31.4" stroke-linecap="round"/>
+                  </svg>
+                  <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                  </svg>
+                  删除
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- 添加模型 -->
+          <div class="add-model-section" v-if="canAddModel">
+            <div class="add-model-form">
+              <input 
+                v-model="newModelName" 
+                type="text" 
+                class="form-input" 
+                placeholder="请输入模型名称，如 qwen-plus、qwen-turbo"
+              />
+              <label class="checkbox-label">
+                <input type="checkbox" v-model="newModelIsMain" />
+                <span>设为主模型</span>
+              </label>
+              <button class="btn btn-primary btn-sm" @click="handleAddModel" :disabled="savingModel || !newModelName.trim()">
+                <svg v-if="savingModel" class="spinner" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31.4 31.4" stroke-linecap="round"/>
+                </svg>
+                {{ savingModel ? '添加中...' : '添加模型' }}
+              </button>
+            </div>
+            <p class="input-hint">
+              您可以在 <a href="https://bailian.console.aliyun.com/" target="_blank" rel="noopener">阿里云百炼控制台</a> 获取模型名称
+            </p>
+          </div>
+          
+          <!-- 多模型状态提示 -->
+          <div class="multi-model-status" v-if="status?.allModels && status.allModels.length > 0">
+            <div class="status-badge" :class="{ active: supportsMultiModel }">
+              {{ supportsMultiModel ? '✓ 多模型协作已启用' : '○ 需要至少1个辅助模型才能启用多模型协作' }}
+            </div>
           </div>
         </div>
       </div>
@@ -246,8 +319,8 @@
       <div class="info-content">
         <h3>使用说明</h3>
         <ul>
-          <li><strong>平台 API Key</strong>：使用项目提供的 API Key，每日有使用次数限制（对话10次、知识库问答10次、上传知识库5次、上传题目5次）</li>
-          <li><strong>个人 API Key</strong>：使用您自己的 API Key，无使用次数限制，费用由您自己承担</li>
+          <li><strong>平台 API Key</strong>：使用项目提供的 API Key，每日有使用次数限制（对话10次、知识库问答10次、上传知识库5次、上传题目5次）。不提供Multi-agent功能。</li>
+          <li><strong>个人 API Key</strong>：使用您自己的 API Key，无使用次数限制，费用由您自己承担。此方式可以使用<strong>Multi-agent</strong>从而提高AI回答的准确度。<span class="recommend-badge">【推荐使用此方式】</span></li>
           <li>API Key 会加密存储，确保安全性</li>
           <li>删除 API Key 后将自动切换回平台 API Key</li>
         </ul>
@@ -257,9 +330,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useUserStore } from '@/stores/user'
-import { apiGetApiKeyStatus, apiSaveApiKey, apiDeleteApiKey, apiSaveModel, apiGetAvatarUploadPath, apiUpdateAvatar, apiUpdateUsername, apiUpdatePassword } from '@/api'
+import { apiGetApiKeyStatus, apiSaveApiKey, apiDeleteApiKey, apiAddModel, apiDeleteModel, apiSetMainModel, apiGetAvatarUploadPath, apiUpdateAvatar, apiUpdateUsername, apiUpdatePassword } from '@/api'
 import type { ApiKeyStatus } from '@/types'
 
 const userStore = useUserStore()
@@ -271,8 +344,13 @@ const deleting = ref(false)
 const uploading = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 
-const modelInput = ref('')
+const newModelName = ref('')
+const newModelIsMain = ref(false)
 const savingModel = ref(false)
+const deletingModelId = ref<number | null>(null)
+
+const MASKED_KEY = '***************'
+const isMaskedKey = ref(false)
 
 const usernameInput = ref('')
 const savingUsername = ref(false)
@@ -281,6 +359,13 @@ const newPasswordInput = ref('')
 const showOldPassword = ref(false)
 const showNewPassword = ref(false)
 const savingPassword = ref(false)
+
+const mainModel = computed(() => status.value?.allModels?.find(m => m.isMain === 1))
+const assistantModels = computed(() => status.value?.allModels?.filter(m => m.isMain === 0) || [])
+const canAddModel = computed(() => status.value?.canAddModel ?? false)
+const modelCount = computed(() => status.value?.modelCount ?? 0)
+const maxModelCount = computed(() => status.value?.maxModelCount ?? 3)
+const supportsMultiModel = computed(() => status.value?.supportsMultiModel ?? false)
 
 onMounted(async () => {
   await loadStatus()
@@ -292,46 +377,117 @@ async function loadStatus() {
     const res = await apiGetApiKeyStatus(userStore.userId)
     if (res.code === 200) {
       status.value = res.data
-      modelInput.value = res.data?.model || ''
+      if (res.data?.hasOwnApiKey) {
+        apiKeyInput.value = MASKED_KEY
+        isMaskedKey.value = true
+      } else {
+        apiKeyInput.value = ''
+        isMaskedKey.value = false
+      }
     }
   } catch (error) {
     console.error('获取 API Key 状态失败:', error)
   }
 }
 
-async function handleSaveModel() {
-  if (!modelInput.value.trim() || !userStore.userId) return
+function handleApiKeyFocus() {
+  if (isMaskedKey.value && apiKeyInput.value === MASKED_KEY) {
+    apiKeyInput.value = ''
+    isMaskedKey.value = false
+  }
+}
+
+function handleApiKeyBlur() {
+  if (!apiKeyInput.value.trim() && status.value?.hasOwnApiKey) {
+    apiKeyInput.value = MASKED_KEY
+    isMaskedKey.value = true
+  }
+}
+
+async function handleAddModel() {
+  if (!newModelName.value.trim() || !userStore.userId) return
+  if (!canAddModel.value) {
+    alert(`最多只能添加 ${maxModelCount.value} 个模型`)
+    return
+  }
   
   savingModel.value = true
   try {
-    const res = await apiSaveModel(userStore.userId, modelInput.value.trim())
+    const res = await apiAddModel(userStore.userId, newModelName.value.trim(), newModelIsMain.value)
     if (res.code === 200) {
-      alert('模型保存成功')
+      alert('模型添加成功')
+      newModelName.value = ''
+      newModelIsMain.value = false
+      await loadStatus()
     } else {
-      alert(res.message || '模型保存失败')
+      alert(res.message || '模型添加失败')
     }
   } catch (error) {
-    console.error('保存模型失败:', error)
-    alert('模型保存失败')
+    console.error('添加模型失败:', error)
+    alert('模型添加失败')
   } finally {
     savingModel.value = false
   }
 }
 
+async function handleDeleteModel(modelId: number) {
+  if (!userStore.userId) return
+  if (!confirm('确定要删除这个模型吗？')) return
+  
+  deletingModelId.value = modelId
+  try {
+    const res = await apiDeleteModel(userStore.userId, modelId)
+    if (res.code === 200) {
+      alert('模型删除成功')
+      await loadStatus()
+    } else {
+      alert(res.message || '模型删除失败')
+    }
+  } catch (error) {
+    console.error('删除模型失败:', error)
+    alert('模型删除失败')
+  } finally {
+    deletingModelId.value = null
+  }
+}
+
+async function handleSetMainModel(modelId: number) {
+  if (!userStore.userId) return
+  if (!confirm('确定要将此模型设为主模型吗？')) return
+  
+  try {
+    const res = await apiSetMainModel(userStore.userId, modelId)
+    if (res.code === 200) {
+      alert('主模型设置成功')
+      await loadStatus()
+    } else {
+      alert(res.message || '设置主模型失败')
+    }
+  } catch (error) {
+    console.error('设置主模型失败:', error)
+    alert('设置主模型失败')
+  }
+}
+
 async function handleSave() {
   if (!userStore.userId || !apiKeyInput.value.trim()) return
+  if (isMaskedKey.value && apiKeyInput.value === MASKED_KEY) {
+    alert('请输入新的 API Key')
+    return
+  }
   saving.value = true
   try {
     const res = await apiSaveApiKey(userStore.userId, apiKeyInput.value.trim())
     if (res.code === 200) {
       alert('API Key 保存成功！')
-      apiKeyInput.value = ''
+      apiKeyInput.value = MASKED_KEY
+      isMaskedKey.value = true
       await loadStatus()
     } else {
       alert(res.message || '保存失败')
     }
-  } catch (error: any) {
-    alert(error.message || '保存失败')
+  } catch (error: unknown) {
+    alert((error as Error).message || '保存失败')
   } finally {
     saving.value = false
   }
@@ -346,12 +502,14 @@ async function handleDelete() {
     const res = await apiDeleteApiKey(userStore.userId)
     if (res.code === 200) {
       alert('API Key 已删除')
+      apiKeyInput.value = ''
+      isMaskedKey.value = false
       await loadStatus()
     } else {
       alert(res.message || '删除失败')
     }
-  } catch (error: any) {
-    alert(error.message || '删除失败')
+  } catch (error: unknown) {
+    alert((error as Error).message || '删除失败')
   } finally {
     deleting.value = false
   }
@@ -400,17 +558,15 @@ async function handleFileSelect(event: Event) {
     }
 
     const updateRes = await apiUpdateAvatar(objectKey)
-    console.log('更新头像响应:', updateRes)
     if (updateRes.code === 200 && updateRes.data) {
-      console.log('新头像URL:', updateRes.data)
       userStore.updateAvatar(updateRes.data)
       alert('头像上传成功！')
     } else {
       alert(updateRes.message || '更新头像失败')
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('上传头像失败:', error)
-    alert(error.message || '上传失败')
+    alert((error as Error).message || '上传失败')
   } finally {
     uploading.value = false
     if (fileInput.value) {
@@ -438,8 +594,8 @@ async function handleUpdateUsername() {
     } else {
       alert(res.message || '修改失败')
     }
-  } catch (error: any) {
-    alert(error.message || '修改失败')
+  } catch (error: unknown) {
+    alert((error as Error).message || '修改失败')
   } finally {
     savingUsername.value = false
   }
@@ -463,8 +619,8 @@ async function handleUpdatePassword() {
     } else {
       alert(res.message || '修改失败')
     }
-  } catch (error: any) {
-    alert(error.message || '修改失败')
+  } catch (error: unknown) {
+    alert((error as Error).message || '修改失败')
   } finally {
     savingPassword.value = false
   }
@@ -679,6 +835,214 @@ async function handleUpdatePassword() {
 
 .model-section { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--border-glass); }
 
+.model-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.model-count {
+  font-size: 13px;
+  color: var(--text-muted);
+  background: rgba(99, 102, 241, 0.1);
+  padding: 4px 12px;
+  border-radius: 20px;
+}
+
+.model-info-card {
+  display: flex;
+  gap: 12px;
+  padding: 16px;
+  background: rgba(99, 102, 241, 0.05);
+  border: 1px solid rgba(99, 102, 241, 0.15);
+  border-radius: 12px;
+  margin-bottom: 20px;
+}
+
+.model-info-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(99, 102, 241, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.model-info-icon svg {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+
+.model-info-content h4 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.model-info-content ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.model-info-content li {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  padding-left: 12px;
+  position: relative;
+}
+
+.model-info-content li::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+}
+
+.model-info-content li strong {
+  color: var(--text-primary);
+}
+
+.model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.model-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  border-radius: 12px;
+  transition: all 0.3s ease;
+}
+
+.model-item.main-model {
+  background: rgba(99, 102, 241, 0.08);
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+.model-item.assistant-model:hover {
+  border-color: var(--accent);
+}
+
+.model-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 20px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.model-badge.main {
+  background: var(--accent-gradient);
+  color: #fff;
+}
+
+.model-badge.assistant {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+
+.model-name {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.model-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-status {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.btn-outline {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.btn-outline:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn-danger-outline {
+  background: transparent;
+  color: var(--error);
+  border: 1px solid var(--error);
+}
+
+.btn-danger-outline:hover:not(:disabled) {
+  background: var(--error);
+  color: #fff;
+}
+
+.add-model-section {
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed var(--border-glass);
+  border-radius: 12px;
+}
+
+.add-model-form {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.multi-model-status {
+  margin-top: 16px;
+}
+
+.status-badge {
+  font-size: 13px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-muted);
+  border: 1px solid var(--border-glass);
+}
+
+.status-badge.active {
+  background: rgba(16, 185, 129, 0.1);
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
 .input-label {
   display: block;
   font-size: 14px;
@@ -866,6 +1230,27 @@ async function handleUpdatePassword() {
 
 .info-content li strong {
   color: var(--text-primary);
+}
+
+.recommend-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.8;
+  }
 }
 
 @media (max-width: 640px) {

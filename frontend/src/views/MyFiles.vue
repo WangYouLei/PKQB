@@ -115,7 +115,7 @@
         <div class="form-group" style="display:flex;align-items:center;justify-content:space-between">
           <label class="form-label" style="margin-bottom:0">是否公开（班级可见）</label>
           <label class="toggle">
-            <input :checked="!editRubricForm.isPrivate" @change="editRubricForm.isPrivate = !$event.target.checked" type="checkbox" />
+            <input :checked="!editRubricForm.isPrivate" @change="editRubricForm.isPrivate = !($event?.target as HTMLInputElement)?.checked" type="checkbox" />
             <span class="toggle-slider"></span>
           </label>
         </div>
@@ -277,7 +277,7 @@
                   {{ String.fromCharCode(65 + oi) }}. {{ opt }}
                 </div>
               </div>
-              <div class="question-answer">答案: {{ q.answer }}</div>
+              <div class="question-answer">答案: {{ formatAnswer(q) }}</div>
               <div v-if="q.explanation" class="question-explanation">解析: {{ q.explanation }}</div>
               <div v-if="q.calculationStepsJson" class="question-steps">
                 <div>计算步骤:</div>
@@ -305,16 +305,32 @@
                 <label>题目内容：</label>
                 <textarea v-model="q.questionText" class="edit-textarea" rows="3"></textarea>
               </div>
-              <div v-if="hasOptions(q)" class="edit-field">
+              <div v-if="needsOptions(q.questionType)" class="edit-field">
                 <label>选项：</label>
-                <div v-for="(opt, oi) in getOptions(q)" :key="oi" class="option-edit-row">
+                <div v-for="(_, oi) in getOptionsForEdit(q)" :key="oi" class="option-edit-row">
                   <span class="option-label">{{ String.fromCharCode(65 + oi) }}.</span>
-                  <input v-model="getOptions(q)[oi]" class="edit-input" />
+                  <input v-model="getOptionsForEdit(q)[oi]" class="edit-input" :disabled="q.questionType === 'true_false'" />
+                  <button 
+                    v-if="q.questionType !== 'true_false' && getOptionsForEdit(q).length > 2" 
+                    class="option-action-btn delete" 
+                    @click="removeOption(q, oi)"
+                    title="删除选项"
+                  >×</button>
                 </div>
+                <button 
+                  v-if="q.questionType !== 'true_false'" 
+                  class="add-option-btn" 
+                  @click="addOption(q)"
+                >+ 添加选项</button>
               </div>
               <div class="edit-field">
                 <label>答案：</label>
-                <input v-model="q.answer" class="edit-input" />
+                <select v-if="q.questionType === 'true_false'" v-model="q.answer" class="edit-input">
+                  <option value="">请选择答案</option>
+                  <option value="正确">正确</option>
+                  <option value="错误">错误</option>
+                </select>
+                <input v-else v-model="q.answer" class="edit-input" />
               </div>
               <div v-if="aiResults[idx]?.answer" class="ai-result-box">
                 <label>AI生成答案：</label>
@@ -374,8 +390,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, reactive } from 'vue'
-import { apiGetMyFiles, apiGetMyRubrics, apiGetQuestionsByRubricId, apiUpdateRubric, apiDeleteRubric, apiGenerateRubricHtml, apiDownloadFile, apiDeleteFile, apiAiSolveQuestion, apiBatchSaveQuestions } from '@/api'
+import { ref, onMounted, reactive, watch } from 'vue'
+import { apiGetMyFiles, apiGetMyRubrics, apiGetQuestionsByRubricId, apiUpdateRubric, apiDeleteRubric, apiGenerateRubricHtml, apiDeleteFile, apiAiSolveQuestion, apiBatchSaveQuestions } from '@/api'
 import { useUserStore } from '@/stores/user'
 import type { HtmlFileItem, RubricItem, RubricQuestion } from '@/types'
 import FileCard from '@/components/FileCard.vue'
@@ -396,6 +412,12 @@ const showRubricDetail = ref(false)
 const currentRubric = ref<RubricItem | null>(null)
 const questions = ref<RubricQuestion[]>([])
 const questionsLoading = ref(false)
+
+watch(questions, (newQuestions) => {
+  newQuestions.forEach(q => {
+    initQuestionOptions(q)
+  })
+}, { deep: true })
 
 // 修改试卷弹窗
 const showEditModal = ref(false)
@@ -473,14 +495,12 @@ async function submitEditRubric() {
     return
   }
   editLoading.value = true
-  console.log('提交修改，参数:', editRubricForm.value)
   try {
     const res = await apiUpdateRubric({
       id: editRubricForm.value.id,
       title: editRubricForm.value.title,
       isPrivate: editRubricForm.value.isPrivate
     })
-    console.log('修改响应:', res)
     if (res.code === 200) {
       const idx = rubrics.value.findIndex(r => r.id === editRubricForm.value.id)
       if (idx !== -1) {
@@ -641,7 +661,7 @@ async function generateAiAll(idx: number) {
       questionType: q.questionType,
       optionsJson: q.optionsJson,
       generateType: 'all',
-      userId: userStore.userId
+      userId: userStore.userId!
     })
     if (res.code === 200) {
       const data = JSON.parse(res.data)
@@ -659,9 +679,9 @@ async function generateAiAll(idx: number) {
         showToastMsg('错误', res.message || 'AI解答失败')
       }
     }
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error('AI解答失败', e)
-    const errorMsg = e?.message || e?.response?.data?.message || ''
+    const errorMsg = (e as Error)?.message || ''
     if (errorMsg.includes('API') || errorMsg.includes('key') || errorMsg.includes('Key') || errorMsg.includes('model') || errorMsg.includes('Model') || errorMsg.includes('401') || errorMsg.includes('403') || errorMsg.includes('invalid')) {
       showToastMsg('错误', '上传的API Key或模型名称有误，请核验')
     } else {
@@ -674,7 +694,12 @@ async function generateAiAll(idx: number) {
 
 function useAiAnswer(idx: number) {
   if (aiResults[idx]?.answer) {
-    questions.value[idx].answer = aiResults[idx].answer
+    const q = questions.value[idx]
+    if (q.questionType === 'true_false') {
+      q.answer = normalizeAnswerText(aiResults[idx].answer!)
+    } else {
+      q.answer = aiResults[idx].answer
+    }
   }
 }
 
@@ -784,6 +809,82 @@ function hasOptions(q: RubricQuestion): boolean {
   } catch { return false }
 }
 
+function needsOptions(questionType: string): boolean {
+  return questionType === 'single_choice' || questionType === 'multiple_choice' || questionType === 'true_false'
+}
+
+function getOptionsForEdit(q: RubricQuestion): string[] {
+  if (q.questionType === 'true_false') {
+    return ['正确', '错误']
+  }
+  if (!q.optionsJson) {
+    return ['', '', '', '']
+  }
+  try {
+    const opts = JSON.parse(q.optionsJson)
+    return Array.isArray(opts) && opts.length > 0 ? opts : ['', '', '', '']
+  } catch { 
+    return ['', '', '', '']
+  }
+}
+
+function addOption(q: RubricQuestion) {
+  const options = getOptionsForEdit(q)
+  options.push('')
+  q.optionsJson = JSON.stringify(options)
+}
+
+function removeOption(q: RubricQuestion, index: number) {
+  const options = getOptionsForEdit(q)
+  if (options.length > 2) {
+    options.splice(index, 1)
+    q.optionsJson = JSON.stringify(options)
+  }
+}
+
+function initQuestionOptions(q: RubricQuestion) {
+  if (q.questionType === 'true_false') {
+    q.optionsJson = JSON.stringify(['正确', '错误'])
+    normalizeTrueFalseAnswer(q)
+  } else if ((q.questionType === 'single_choice' || q.questionType === 'multiple_choice') && !q.optionsJson) {
+    q.optionsJson = JSON.stringify(['', '', '', ''])
+  }
+}
+
+function normalizeTrueFalseAnswer(q: RubricQuestion) {
+  if (q.questionType !== 'true_false' || !q.answer) return
+  const answer = q.answer.trim()
+  const positiveKeywords = ['√', '正确', '对', '是', 'yes', 'YES', 'Yes', 'true', 'TRUE', 'True', '1', 'A', 'a']
+  const negativeKeywords = ['×', '错误', '错', '否', 'no', 'NO', 'No', 'false', 'FALSE', 'False', '0', 'B', 'b']
+  
+  if (positiveKeywords.includes(answer)) {
+    q.answer = '正确'
+  } else if (negativeKeywords.includes(answer)) {
+    q.answer = '错误'
+  }
+}
+
+function normalizeAnswerText(answer: string): string {
+  if (!answer) return ''
+  const trimmed = answer.trim()
+  const positiveKeywords = ['√', '正确', '对', '是', 'yes', 'YES', 'Yes', 'true', 'TRUE', 'True', '1', 'A', 'a']
+  const negativeKeywords = ['×', '错误', '错', '否', 'no', 'NO', 'No', 'false', 'FALSE', 'False', '0', 'B', 'b']
+  
+  if (positiveKeywords.includes(trimmed)) {
+    return '正确'
+  } else if (negativeKeywords.includes(trimmed)) {
+    return '错误'
+  }
+  return answer
+}
+
+function formatAnswer(q: RubricQuestion): string {
+  if (q.questionType === 'true_false') {
+    return normalizeAnswerText(q.answer || '')
+  }
+  return q.answer || ''
+}
+
 // 获取选项数组
 function getOptions(q: RubricQuestion): string[] {
   if (!q.optionsJson) return []
@@ -809,17 +910,6 @@ function getCorrectAnswer(q: RubricQuestion): string {
 function isTextQuestion(q: RubricQuestion): boolean {
   if (!q) return false
   return q.questionType === 'short_answer' || q.questionType === 'calculation'
-}
-
-// 判断当前题目是否已有答案（选择题或简答题）
-function hasAnswer(index: number): boolean {
-  const q = questions.value[index]
-  if (!q) return false
-  // 选择题/判断题
-  if (userAnswers.value[index]) return true
-  // 简答题/计算题
-  if (userTextAnswers.value[index]?.trim()) return true
-  return false
 }
 
 // 选择答案
@@ -1049,6 +1139,12 @@ function getTypeLabel(type: string): string {
 .edit-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
 .option-edit-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .option-edit-row .option-label { font-weight: 600; color: var(--text-secondary); min-width: 24px; }
+.option-edit-row input:disabled { background: var(--bg-glass); color: var(--text-muted); cursor: not-allowed; }
+.option-action-btn { width: 28px; height: 28px; border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; transition: all 0.2s; }
+.option-action-btn.delete { background: rgba(239,68,68,0.1); color: #ef4444; }
+.option-action-btn.delete:hover { background: rgba(239,68,68,0.2); }
+.add-option-btn { margin-top: 8px; padding: 8px 16px; border: 1px dashed var(--border-glass); border-radius: 8px; background: transparent; color: var(--accent); font-size: 13px; cursor: pointer; transition: all 0.2s; }
+.add-option-btn:hover { background: var(--accent-light); border-color: var(--accent); }
 
 .ai-result-box { margin-bottom: 16px; padding: 12px; border: 1px dashed var(--accent-border); border-radius: 10px; background: rgba(99,102,241,0.05); }
 .ai-result-box label { display: block; font-size: 13px; color: var(--accent); margin-bottom: 6px; font-weight: 600; }

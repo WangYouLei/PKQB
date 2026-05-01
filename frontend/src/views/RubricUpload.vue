@@ -81,7 +81,7 @@
             </div>
           </template>
           <template v-else>
-            <div v-for="(opt, oi) in q.options" :key="oi" class="option-edit-item">
+            <div v-for="(_, oi) in q.options" :key="oi" class="option-edit-item">
               <span class="option-label">{{ String.fromCharCode(65 + oi) }}.</span>
               <input v-model="q.options![oi]" class="option-input" />
             </div>
@@ -323,7 +323,7 @@ async function handleFileParse() {
     if (res.code === 200 && res.data) {
       // 后端直接返回数组对象，不需要再 JSON.parse
       const questionsArr = Array.isArray(res.data) ? res.data : []
-      questions.value = questionsArr.map((q: any) => ({
+      questions.value = questionsArr.map((q) => ({
         ...q,
         // 处理 calculationStepsText
         calculationStepsText: q.calculationSteps?.join('\n') || ''
@@ -350,7 +350,7 @@ async function handleFileParseLocal() {
     if (res.code === 200 && res.data) {
       // 后端直接返回数组对象，不需要再 JSON.parse
       const questionsArr = Array.isArray(res.data) ? res.data : []
-      questions.value = questionsArr.map((q: any) => ({
+      questions.value = questionsArr.map((q) => ({
         ...q,
         // 处理 calculationStepsText
         calculationStepsText: q.calculationSteps?.join('\n') || ''

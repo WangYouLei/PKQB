@@ -13,6 +13,10 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * 速率限制服务实现类
+ * 基于Redis实现用户AI功能调用次数限制
+ */
 @Service
 @Slf4j
 public class RateLimitServiceImpl implements RateLimitService {

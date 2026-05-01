@@ -38,15 +38,6 @@ public class FileController {
         return Result.success("上传成功", response);
     }
 
-    @GetMapping("/public-url/{fileId}")
-    @Operation(summary = "获取文件公开URL", description = "获取文件的公开访问URL")
-    public Result<String> getPublicUrl(
-            @Parameter(description = "文件ID") @PathVariable Long fileId,
-            @Parameter(description = "用户ID") @RequestAttribute("userId") Long userId) {
-        String publicUrl = fileService.getPublicUrl(fileId, userId);
-        return Result.success(publicUrl);
-    }
-
     @GetMapping("/my")
     @Operation(summary = "获取我的文件列表", description = "获取当前用户上传的文件列表")
     public Result<List<FileResponse>> getMyFiles(

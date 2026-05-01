@@ -79,7 +79,7 @@
           <div class="form-group" style="display:flex;align-items:center;justify-content:space-between">
             <label class="form-label" style="margin-bottom:0">是否公开（班级可见）</label>
             <label class="toggle">
-              <input :checked="!editForm.isPrivate" @change="editForm.isPrivate = !$event.target.checked" type="checkbox" />
+              <input :checked="!editForm.isPrivate" @change="editForm.isPrivate = !($event?.target as HTMLInputElement)?.checked" type="checkbox" />
               <span class="toggle-slider"></span>
             </label>
           </div>

@@ -12,6 +12,18 @@
       </div>
     </div>
 
+    <!-- 删除消息确认弹窗 -->
+    <div v-if="showDeleteMessagesConfirm" class="modal-overlay" @click.self="showDeleteMessagesConfirm = false">
+      <div class="confirm-modal">
+        <h3>确认删除消息</h3>
+        <p>确定删除选中的 {{ selectedMessageIndices.size }} 条消息吗？删除后无法恢复。</p>
+        <div class="confirm-btns">
+          <button class="btn btn-secondary" @click="showDeleteMessagesConfirm = false">取消</button>
+          <button class="btn btn-danger" @click="confirmDeleteMessages">确定删除</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 超限提示弹窗 -->
     <div v-if="showLimitModal" class="modal-overlay" @click.self="showLimitModal = false">
       <div class="confirm-modal">
@@ -23,6 +35,17 @@
         </div>
       </div>
     </div>
+
+    <!-- Toast 提示 -->
+    <Transition name="toast">
+      <div v-if="showToast" class="toast" :class="toastType">
+        <svg v-if="toastType === 'success'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+          <polyline points="22 4 12 14.01 9 11.01"></polyline>
+        </svg>
+        <span>{{ toastMessage }}</span>
+      </div>
+    </Transition>
 
     <aside class="chat-sidebar">
       <div class="sidebar-header">
@@ -98,7 +121,34 @@
         </div>
 
         <template v-if="currentSessionId">
-          <div v-for="(msg, idx) in messages" :key="idx" class="message" :class="msg.role">
+          <!-- 选择模式操作栏 -->
+          <div v-if="selectMode && messages.length > 0" class="message-actions-bar">
+            <span class="select-hint">已选择 {{ selectedMessageIndices.size }} 条消息</span>
+            <button class="action-btn cancel-btn" @click="cancelSelectMode">取消</button>
+            <button 
+              class="action-btn confirm-delete-btn" 
+              :disabled="selectedMessageIndices.size === 0"
+              @click="requestDeleteMessages"
+            >
+              确认删除
+            </button>
+          </div>
+
+          <div 
+            v-for="(msg, idx) in messages" 
+            :key="idx" 
+            class="message" 
+            :class="[msg.role, { selected: selectedMessageIndices.has(idx), 'select-mode': selectMode }]"
+          >
+            <!-- 选择模式下的复选框 -->
+            <div v-if="selectMode" class="message-checkbox" @click="toggleMessageSelection(idx)">
+              <div class="checkbox" :class="{ checked: selectedMessageIndices.has(idx) }">
+                <svg v-if="selectedMessageIndices.has(idx)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+              </div>
+            </div>
+            
             <div v-if="msg.role === 'assistant'" class="message-avatar ai">
               <img src="/ai-avatar.jpg" alt="AI" />
             </div>
@@ -109,9 +159,50 @@
                 <circle cx="12" cy="7" r="4"/>
               </svg>
             </div>
-            <div class="message-bubble">
+            <div 
+              class="message-bubble" 
+              :class="{ selected: selectedMessageIndices.has(idx) }"
+              @mouseenter="hoveredMessageIdx = idx"
+              @mouseleave="hoveredMessageIdx = -1"
+            >
               <div class="message-content" v-html="formatContent(msg.content)"></div>
               <div class="message-time">{{ formatTime(msg.timestamp) }}</div>
+              <!-- 用户消息操作按钮 -->
+              <div 
+                v-if="!selectMode && hoveredMessageIdx === idx && msg.role === 'user'" 
+                class="message-actions"
+              >
+                <button class="msg-action-btn" @click="copyMessage(msg.content)" title="复制">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                </button>
+                <button class="msg-action-btn delete" @click="enterSelectModeFromMessage(idx)" title="删除">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                  </svg>
+                </button>
+              </div>
+              <!-- AI消息操作按钮 -->
+              <div 
+                v-if="!selectMode && hoveredMessageIdx === idx && msg.role === 'assistant'" 
+                class="message-actions"
+              >
+                <button class="msg-action-btn" @click="copyMessage(msg.content)" title="复制">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                </button>
+                <button class="msg-action-btn" @click="regenerateMessage(idx)" title="重新生成">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 4v6h6"></path>
+                    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
         </template>
@@ -162,7 +253,7 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, watch } from 'vue'
 import { useUserStore } from '@/stores/user'
-import { apiGetHistoryList, apiGetHistoryBySessionId, apiDeleteHistory, apiGetUsage } from '@/api'
+import { apiGetHistoryList, apiGetHistoryBySessionId, apiDeleteHistory, apiGetUsage, apiDeleteMessages } from '@/api'
 
 interface ChatMessage {
   role: 'user' | 'assistant'
@@ -187,6 +278,26 @@ const showLimitModal = ref(false)
 const limitMessage = ref('')
 const remainingUsage = ref<number>(-1)
 const hasOwnApiKey = ref(false)
+
+// 选择模式相关
+const selectMode = ref(false)
+const selectedMessageIndices = ref<Set<number>>(new Set())
+const showDeleteMessagesConfirm = ref(false)
+const hoveredMessageIdx = ref(-1)
+
+// Toast 提示
+const showToast = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
+
+function showToastMessage(message: string, type: 'success' | 'error' = 'success') {
+  toastMessage.value = message
+  toastType.value = type
+  showToast.value = true
+  setTimeout(() => {
+    showToast.value = false
+  }, 2000)
+}
 
 function scrollToBottom() {
   nextTick(() => {
@@ -271,15 +382,16 @@ async function loadSessions() {
 async function selectSession(sessionId: string) {
   currentSessionId.value = sessionId
   messages.value = []
+  cancelSelectMode()
   try {
     const userId = String(userStore.userId || localStorage.getItem('userId') || '')
     const res = await apiGetHistoryBySessionId(sessionId, userId, 'rag')
     if (res.code === 200 && res.data) {
       const list = Array.isArray(res.data) ? res.data : []
-      messages.value = list.map((m: any) => ({
+      messages.value = list.map((m) => ({
         role: m.role === 'user' ? 'user' : 'assistant',
         content: m.content || '',
-        timestamp: Date.now()
+        timestamp: m.timestamp || Date.now()
       }))
       scrollToBottom()
     }
@@ -296,6 +408,7 @@ function newSession() {
   }
   currentSessionId.value = null
   messages.value = []
+  cancelSelectMode()
 }
 
 function newSessionFromLimit() {
@@ -334,12 +447,178 @@ async function confirmDelete() {
       if (currentSessionId.value === sessionId) {
         currentSessionId.value = null
         messages.value = []
+        cancelSelectMode()
       }
     }
   } catch (e) {
     console.error('删除会话失败', e)
   } finally {
     pendingDeleteSessionId.value = null
+  }
+}
+
+// 选择模式相关方法
+function enterSelectModeFromMessage(userMsgIdx: number) {
+  selectMode.value = true
+  selectedMessageIndices.value = new Set()
+  toggleMessageSelection(userMsgIdx)
+}
+
+function cancelSelectMode() {
+  selectMode.value = false
+  selectedMessageIndices.value = new Set()
+}
+
+function toggleMessageSelection(idx: number) {
+  const newSet = new Set(selectedMessageIndices.value)
+  const msg = messages.value[idx]
+  
+  if (msg.role === 'user') {
+    if (newSet.has(idx)) {
+      newSet.delete(idx)
+      if (idx + 1 < messages.value.length && messages.value[idx + 1].role === 'assistant') {
+        newSet.delete(idx + 1)
+      }
+    } else {
+      newSet.add(idx)
+      if (idx + 1 < messages.value.length && messages.value[idx + 1].role === 'assistant') {
+        newSet.add(idx + 1)
+      }
+    }
+  } else {
+    if (newSet.has(idx)) {
+      newSet.delete(idx)
+      if (idx - 1 >= 0 && messages.value[idx - 1].role === 'user') {
+        newSet.delete(idx - 1)
+      }
+    } else {
+      newSet.add(idx)
+      if (idx - 1 >= 0 && messages.value[idx - 1].role === 'user') {
+        newSet.add(idx - 1)
+      }
+    }
+  }
+  
+  selectedMessageIndices.value = newSet
+}
+
+function requestDeleteMessages() {
+  if (selectedMessageIndices.value.size === 0) return
+  showDeleteMessagesConfirm.value = true
+}
+
+function copyMessage(content: string) {
+  navigator.clipboard.writeText(content).then(() => {
+    showToastMessage('复制成功')
+  }).catch(err => {
+    console.error('复制失败', err)
+    showToastMessage('复制失败', 'error')
+  })
+}
+
+async function regenerateMessage(aiMsgIdx: number) {
+  if (streaming.value) return
+  
+  const userMsgIdx = aiMsgIdx - 1
+  if (userMsgIdx < 0 || messages.value[userMsgIdx].role !== 'user') {
+    showToastMessage('无法重新生成', 'error')
+    return
+  }
+  
+  const userMsg = messages.value[userMsgIdx]
+  
+  messages.value.splice(aiMsgIdx, 1)
+  
+  const text = userMsg.content
+  streaming.value = true
+  scrollToBottom()
+
+  const assistantMsg: ChatMessage = { role: 'assistant', content: '', timestamp: Date.now() }
+  messages.value.push(assistantMsg)
+
+  try {
+    const token = localStorage.getItem('token') || ''
+    const userId = String(userStore.userId || localStorage.getItem('userId') || '')
+
+    const response = await fetch(`/api/ai/rag-query?userId=${userId}`, {
+      method: 'POST',
+      headers: {
+        'token': token,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        query: text,
+        sessionId: currentSessionId.value
+      })
+    })
+
+    if (!response.ok) {
+      throw new Error('请求失败')
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('无法读取响应流')
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        if (line.startsWith('data:')) {
+          const jsonStr = line.substring(5).trim()
+          if (jsonStr === '[DONE]') continue
+          if (!jsonStr) continue
+          try {
+            const content = JSON.parse(jsonStr)
+            assistantMsg.content += content
+          } catch (e) {
+            assistantMsg.content += jsonStr
+          }
+          messages.value = [...messages.value]
+          scrollToBottom()
+        }
+      }
+    }
+
+    if (!assistantMsg.content.trim()) {
+      assistantMsg.content = '根据现有知识库信息，无法回答该问题。'
+    }
+    
+    showToastMessage('重新生成成功')
+  } catch (e: unknown) {
+    const index = messages.value.indexOf(assistantMsg)
+    if (index !== -1) {
+      messages.value[index] = { ...assistantMsg, content: `请求出错：${(e as Error).message}` }
+    }
+    showToastMessage('重新生成失败', 'error')
+  } finally {
+    streaming.value = false
+    scrollToBottom()
+  }
+}
+
+async function confirmDeleteMessages() {
+  if (selectedMessageIndices.value.size === 0) return
+  
+  try {
+    const userId = String(userStore.userId || localStorage.getItem('userId') || '')
+    const indices = Array.from(selectedMessageIndices.value)
+    const res = await apiDeleteMessages(currentSessionId.value!, userId, 'rag', indices)
+    
+    if (res.code === 200) {
+      messages.value = messages.value.filter((_, idx) => !selectedMessageIndices.value.has(idx))
+      cancelSelectMode()
+      showToastMessage('删除成功')
+    }
+  } catch (e) {
+    console.error('删除消息失败', e)
+    showToastMessage('删除失败', 'error')
+  } finally {
+    showDeleteMessagesConfirm.value = false
   }
 }
 
@@ -357,6 +636,9 @@ async function sendMessage() {
   if (!currentSessionId.value) {
     currentSessionId.value = `rag_${Date.now()}`
   }
+
+  // 退出选择模式
+  cancelSelectMode()
 
   messages.value.push({ role: 'user', content: text, timestamp: Date.now() })
   inputText.value = ''
@@ -488,7 +770,53 @@ onMounted(() => {
 .suggestion-item { padding: 14px 18px; background: var(--bg-glass); border: 1px solid var(--border-glass); border-radius: 12px; cursor: pointer; transition: all 0.3s ease; font-size: 14px; color: var(--text-secondary); }
 .suggestion-item:hover { background: var(--tertiary-light); border-color: rgba(6,182,212,0.3); color: var(--tertiary); transform: translateX(4px); }
 
-.message { display: flex; gap: 14px; margin-bottom: 24px; max-width: 85%; }
+/* 消息操作栏 */
+.message-actions-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 8px 12px; background: var(--bg-glass); border-radius: 12px; border: 1px solid var(--border-glass); }
+.action-btn { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 8px; border: none; font-size: 13px; cursor: pointer; transition: all 0.2s; }
+.action-btn svg { width: 16px; height: 16px; }
+.cancel-btn { background: var(--bg-glass); color: var(--text-secondary); border: 1px solid var(--border-glass); }
+.cancel-btn:hover { background: rgba(255,255,255,0.1); }
+.confirm-delete-btn { background: #ef4444; color: #fff; }
+.confirm-delete-btn:hover:not(:disabled) { background: #dc2626; }
+.confirm-delete-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.select-hint { flex: 1; font-size: 13px; color: var(--text-muted); }
+
+/* 消息选择复选框 */
+.message-checkbox { display: flex; align-items: center; padding-right: 8px; cursor: pointer; }
+.checkbox { width: 20px; height: 20px; border: 2px solid var(--border-glass); border-radius: 6px; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+.checkbox.checked { background: var(--tertiary); border-color: var(--tertiary); }
+.checkbox svg { width: 14px; height: 14px; color: #fff; }
+
+/* 消息操作按钮栏 */
+.message-actions { 
+  display: flex; 
+  gap: 4px; 
+  margin-top: 8px; 
+  justify-content: flex-end;
+}
+.msg-action-btn { 
+  width: 28px; 
+  height: 28px; 
+  border: none; 
+  background: transparent; 
+  border-radius: 6px; 
+  cursor: pointer; 
+  display: flex; 
+  align-items: center; 
+  justify-content: center; 
+  transition: all 0.2s; 
+  opacity: 0.6;
+}
+.msg-action-btn svg { width: 16px; height: 16px; color: var(--text-muted); }
+.msg-action-btn:hover { background: var(--bg-glass); opacity: 1; }
+.msg-action-btn:hover svg { color: var(--text-primary); }
+.msg-action-btn.delete:hover { background: rgba(239,68,68,0.1); }
+.msg-action-btn.delete:hover svg { color: #ef4444; }
+.message.user .msg-action-btn svg { color: rgba(255,255,255,0.7); }
+.message.user .msg-action-btn:hover { background: rgba(255,255,255,0.2); }
+.message.user .msg-action-btn:hover svg { color: #fff; }
+
+.message { display: flex; gap: 14px; margin-bottom: 24px; max-width: 85%; position: relative; }
 .message.user { margin-left: auto; flex-direction: row-reverse; }
 .message-avatar { width: 38px; height: 38px; border-radius: 12px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .message-avatar.ai { padding: 2px; background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%); }
@@ -496,7 +824,8 @@ onMounted(() => {
 .message-avatar.user { background: var(--secondary); }
 .message-avatar.user svg { width: 20px; height: 20px; color: #fff; }
 .message-avatar.user img.user-avatar-img { width: 100%; height: 100%; object-fit: cover; border-radius: 12px; }
-.message-bubble { padding: 14px 18px; border-radius: 18px; max-width: 100%; }
+.message-bubble { padding: 14px 18px; border-radius: 18px; max-width: 100%; transition: all 0.2s; }
+.message-bubble.selected { box-shadow: 0 0 0 2px var(--tertiary); }
 .message.assistant .message-bubble { background: var(--card-bg); border: 1px solid var(--border-glass); border-radius: 18px 18px 18px 4px; }
 .message.user .message-bubble { background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%); color: #fff; border-radius: 18px 18px 4px 18px; }
 .message-content { font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
@@ -504,6 +833,8 @@ onMounted(() => {
 .message-content code { background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px; font-size: 13px; }
 .message-time { font-size: 11px; color: var(--text-muted); margin-top: 6px; }
 .message.user .message-time { color: rgba(255,255,255,0.6); }
+
+.message.select-mode { cursor: pointer; }
 
 .typing-indicator { display: flex; gap: 4px; padding: 4px 0; }
 .typing-indicator .dot { width: 8px; height: 8px; background: var(--tertiary); border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both; }
@@ -526,6 +857,42 @@ onMounted(() => {
 .confirm-modal h3 { margin: 0 0 12px; font-size: 18px; color: var(--text-primary); }
 .confirm-modal p { margin: 0 0 20px; color: var(--text-secondary); font-size: 14px; }
 .confirm-btns { display: flex; gap: 12px; justify-content: center; }
+
+/* Toast 提示 */
+.toast {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-glass);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+  z-index: 2000;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.toast svg { width: 18px; height: 18px; }
+.toast.success { border-color: rgba(34,197,94,0.3); }
+.toast.success svg { color: #22c55e; }
+.toast.error { border-color: rgba(239,68,68,0.3); }
+.toast.error svg { color: #ef4444; }
+
+/* Toast 动画 */
+.toast-enter-active { animation: toastIn 0.3s ease; }
+.toast-leave-active { animation: toastOut 0.3s ease; }
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(-20px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+@keyframes toastOut {
+  from { opacity: 1; transform: translateX(-50%) translateY(0); }
+  to { opacity: 0; transform: translateX(-50%) translateY(-20px); }
+}
 
 @media (max-width: 768px) {
   .chat-sidebar { width: 240px; }

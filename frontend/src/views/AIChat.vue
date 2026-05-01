@@ -367,7 +367,7 @@ async function selectSession(sessionId: string) {
     const res = await apiGetHistoryBySessionId(sessionId, userId, 'chat')
     if (res.code === 200 && res.data) {
       const list = Array.isArray(res.data) ? res.data : []
-      messages.value = list.map((m: any) => ({
+      messages.value = list.map((m) => ({
         role: m.role === 'user' ? 'user' : 'assistant',
         content: m.content || '',
         timestamp: m.timestamp || Date.now()
@@ -437,11 +437,6 @@ async function confirmDelete() {
 }
 
 // 选择模式相关方法
-function enterSelectMode() {
-  selectMode.value = true
-  selectedMessageIndices.value = new Set()
-}
-
 function enterSelectModeFromMessage(userMsgIdx: number) {
   selectMode.value = true
   selectedMessageIndices.value = new Set()
@@ -647,8 +642,6 @@ async function sendMessage() {
         sessionId: currentSessionId.value
       })
     })
-    console.log('响应状态:', response.status)
-    console.log('Content-Type:', response.headers.get('Content-Type'))
     if (!response.ok) {
       const errorText = await response.text()
       if (errorText.includes('今日使用次数已达上限')) {

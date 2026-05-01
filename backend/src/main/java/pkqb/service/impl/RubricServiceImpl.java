@@ -248,33 +248,6 @@ public class RubricServiceImpl implements RubricService {
     }
 
     @Override
-    public Result<?> addQuestion(QuestionEntity questionEntity, Long userId) {
-        try {
-            RubricEntity rubric = rubricMapper.selectById(questionEntity.getRubricId());
-            if (rubric == null) {
-                return Result.error("试卷不存在");
-            }
-            if (!rubric.getCreateId().equals(userId)) {
-                return Result.error("只有创建者可以添加题目");
-            }
-            
-            questionEntity.setDeleted(0);
-            questionMapper.insert(questionEntity);
-            
-            // 更新试卷题目数量（增加）
-            Integer currentCount = rubric.getQuestionCount();
-            rubric.setQuestionCount(currentCount == null ? 1 : currentCount + 1);
-            rubric.setUpdateTime(LocalDateTime.now());
-            rubricMapper.updateById(rubric);
-            
-            return Result.success("添加题目成功");
-        } catch (Exception e) {
-            log.error("[添加题目] 添加失败", e);
-            return Result.error("添加题目失败");
-        }
-    }
-
-    @Override
     public Result<?> updateQuestion(QuestionEntity questionEntity, Long userId) {
         try {
             QuestionEntity question = questionMapper.selectById(questionEntity.getId());
@@ -303,40 +276,6 @@ public class RubricServiceImpl implements RubricService {
         } catch (Exception e) {
             log.error("[修改题目] 修改失败", e);
             return Result.error("修改题目失败");
-        }
-    }
-
-    @Override
-    public Result<?> deleteQuestion(Long questionId, Long userId) {
-        try {
-            QuestionEntity question = questionMapper.selectById(questionId);
-            if (question == null) {
-                return Result.error("题目不存在");
-            }
-            
-            RubricEntity rubric = rubricMapper.selectById(question.getRubricId());
-            if (rubric == null) {
-                return Result.error("试卷不存在");
-            }
-            if (!rubric.getCreateId().equals(userId)) {
-                return Result.error("只有创建者可以删除题目");
-            }
-            
-            // 软删除题目
-            question.setDeleted(1);
-            question.setUpdateTime(LocalDateTime.now());
-            questionMapper.updateById(question);
-            
-            // 更新试卷题目数量（减少，处理null情况）
-            Integer currentCount = rubric.getQuestionCount();
-            rubric.setQuestionCount(currentCount == null ? 0 : Math.max(0, currentCount - 1));
-            rubric.setUpdateTime(LocalDateTime.now());
-            rubricMapper.updateById(rubric);
-            
-            return Result.success("删除题目成功");
-        } catch (Exception e) {
-            log.error("[删除题目] 删除失败", e);
-            return Result.error("删除题目失败");
         }
     }
 

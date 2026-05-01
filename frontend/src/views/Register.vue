@@ -83,12 +83,10 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { useUserStore } from '@/stores/user'
 import { apiRegister } from '@/api'
 import type { RegisterRequest } from '@/types'
 
 const router = useRouter()
-const userStore = useUserStore()
 const form = ref<RegisterRequest>({ username: '', password: '', studentNo: '', classId: null, className: '' })
 const loading = ref(false)
 

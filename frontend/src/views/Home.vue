@@ -102,6 +102,15 @@
             <span class="link-text">上传题目</span>
           </router-link>
         </div>
+        <div class="sidebar-section">
+          <div class="sidebar-section-title" v-show="!isCollapsed">其他功能</div>
+          <a class="sidebar-link" @click="showFeedbackModal = true" :title="isCollapsed ? '意见反馈' : ''">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+            </svg>
+            <span class="link-text">意见反馈</span>
+          </a>
+        </div>
       </nav>
       
       <div class="sidebar-user" v-show="!isCollapsed">
@@ -144,6 +153,28 @@
       </svg>
     </button>
     <main class="main-content"><router-view /></main>
+    
+    <!-- 意见反馈模态框 -->
+    <div class="feedback-modal-overlay" v-if="showFeedbackModal" @click="showFeedbackModal = false">
+      <div class="feedback-modal" @click.stop>
+        <button class="modal-close-btn" @click="showFeedbackModal = false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+        <div class="modal-header">
+          <h3>意见反馈</h3>
+          <p>扫描下方二维码添加微信进行意见反馈</p>
+        </div>
+        <div class="modal-body">
+          <div class="qrcode-container">
+            <img src="/20260216200513_24_63.png" alt="微信二维码" class="qrcode-image" />
+          </div>
+          <p class="feedback-tip">请添加微信好友后进行反馈</p>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -156,6 +187,7 @@ const router = useRouter()
 const userStore = useUserStore()
 const isLightMode = ref(false)
 const isCollapsed = ref(false)
+const showFeedbackModal = ref(false)
 
 onMounted(() => {
   const savedTheme = localStorage.getItem('theme')
@@ -621,5 +653,129 @@ function handleLogout() { userStore.logout(); router.push('/login') }
   .collapse-btn {
     display: none;
   }
+}
+
+.feedback-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.feedback-modal {
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  border-radius: 20px;
+  padding: 32px;
+  max-width: 400px;
+  width: 90%;
+  position: relative;
+  animation: slideUp 0.3s ease;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.modal-close-btn {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--border-glass);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+}
+
+.modal-close-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.modal-close-btn:hover {
+  background: var(--error-light);
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.modal-header {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.modal-header h3 {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 8px 0;
+}
+
+.modal-header p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.qrcode-container {
+  background: #fff;
+  padding: 16px;
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  margin-bottom: 16px;
+}
+
+.qrcode-image {
+  width: 220px;
+  height: 220px;
+  object-fit: contain;
+  display: block;
+}
+
+.feedback-tip {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0;
+  padding: 8px 16px;
+  background: rgba(99, 102, 241, 0.1);
+  border-radius: 8px;
+  border: 1px solid rgba(99, 102, 241, 0.2);
 }
 </style>

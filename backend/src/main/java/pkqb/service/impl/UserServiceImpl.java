@@ -22,6 +22,7 @@ import pkqb.util.JwtUtil;
 
 /**
  * 用户服务实现类
+ * 实现用户注册、登录、信息更新等核心业务逻辑
  */
 @Service
 @RequiredArgsConstructor
@@ -41,29 +42,24 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public void register(RegisterRequest request) {
-        // 检查用户名是否已存在
         LambdaQueryWrapper<UserEntity> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(UserEntity::getUsername, request.getUsername());
         if (userMapper.selectCount(wrapper) > 0) {
             throw new IllegalArgumentException("用户名已存在");
         }
 
-        // 检查学号是否已存在
         LambdaQueryWrapper<UserEntity> studentNoWrapper = new LambdaQueryWrapper<>();
         studentNoWrapper.eq(UserEntity::getStudentNo, request.getStudentNo());
         if (userMapper.selectCount(studentNoWrapper) > 0) {
             throw new IllegalArgumentException("学号已被注册");
         }
 
-        // 处理班级
         Integer classId = request.getClassId();
         if (classId == null && request.getClassName() != null && !request.getClassName().trim().isEmpty()) {
-            // 根据班级名称查找或创建班级
             LambdaQueryWrapper<ClassEntity> classWrapper = new LambdaQueryWrapper<>();
             classWrapper.eq(ClassEntity::getClassName, request.getClassName().trim());
             ClassEntity classEntity = classMapper.selectOne(classWrapper);
             if (classEntity == null) {
-                // 创建新班级
                 classEntity = new ClassEntity();
                 classEntity.setClassName(request.getClassName().trim());
                 classMapper.insert(classEntity);
@@ -71,7 +67,6 @@ public class UserServiceImpl implements UserService {
             classId = classEntity.getId();
         }
 
-        // 创建用户
         UserEntity user = new UserEntity();
         user.setUsername(request.getUsername());
         user.setPasswordHash(Argon2idUtil.hash(request.getPassword()));
@@ -83,7 +78,6 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public LoginResponse login(LoginRequest request) {
-        // 根据学号查询用户
         LambdaQueryWrapper<UserEntity> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(UserEntity::getStudentNo, request.getStudentNo());
         UserEntity user = userMapper.selectOne(wrapper);
@@ -92,15 +86,12 @@ public class UserServiceImpl implements UserService {
             throw new ResourceNotFoundException("用户不存在");
         }
 
-        // 验证密码
         if (!Argon2idUtil.verify(user.getPasswordHash(), request.getPassword())) {
             throw new PermissionDeniedException("密码错误");
         }
 
-        // 生成 Token
         String token = jwtUtil.generateToken(user.getId(), user.getUsername());
 
-        // 获取班级名称
         String className = null;
         if (user.getClassId() != null) {
             ClassEntity classEntity = classMapper.selectById(user.getClassId());
@@ -109,7 +100,6 @@ public class UserServiceImpl implements UserService {
             }
         }
 
-        // 获取头像 URL
         String avatarUrl = getAvatarUrl(user.getAvatarUrl(), user.getId());
 
         return new LoginResponse(
@@ -123,15 +113,10 @@ public class UserServiceImpl implements UserService {
         );
     }
 
-    /**
-     * 获取用户头像公开URL
-     */
     private String getAvatarUrl(String objectKey, Long userId) {
         if (objectKey == null || objectKey.trim().isEmpty()) {
             return null;
         }
-        
-        // 直接返回公开URL
         return minioEndpoint + "/" + bucketName + "/" + objectKey;
     }
 
@@ -139,7 +124,6 @@ public class UserServiceImpl implements UserService {
     public String updateAvatar(Long userId, String objectKey) {
         log.info("开始更新用户 {} 的头像, objectKey: {}", userId, objectKey);
         
-        // 先删除旧头像（如果存在）
         UserEntity existingUser = userMapper.selectById(userId);
         if (existingUser != null && existingUser.getAvatarUrl() != null && !existingUser.getAvatarUrl().isEmpty()) {
             try {
@@ -150,14 +134,12 @@ public class UserServiceImpl implements UserService {
             }
         }
 
-        // 更新用户头像路径
         UserEntity user = new UserEntity();
         user.setId(userId);
         user.setAvatarUrl(objectKey);
         userMapper.updateById(user);
         log.info("用户 {} 更新头像成功: {}", userId, objectKey);
 
-        // 返回公开URL
         String publicUrl = minioEndpoint + "/" + bucketName + "/" + objectKey;
         log.info("生成公开URL: {}", publicUrl);
         

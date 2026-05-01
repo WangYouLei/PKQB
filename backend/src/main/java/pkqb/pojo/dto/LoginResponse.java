@@ -4,6 +4,7 @@ import lombok.Data;
 
 /**
  * 登录响应 DTO
+ * 用于用户登录成功后返回的数据
  */
 @Data
 public class LoginResponse {

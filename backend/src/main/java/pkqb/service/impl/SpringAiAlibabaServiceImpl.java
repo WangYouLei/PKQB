@@ -1,18 +1,21 @@
 package pkqb.service.impl;
 
+import com.alibaba.cloud.ai.graph.OverAllState;
+import com.alibaba.cloud.ai.graph.agent.Agent;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.reader.pdf.PagePdfDocumentReader;
 import org.springframework.ai.reader.tika.TikaDocumentReader;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.data.redis.core.BoundListOperations;
@@ -22,17 +25,19 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import pkqb.common.Result;
 import pkqb.common.RateLimitConstants;
-import pkqb.config.ChatClientFactory;
+import pkqb.config.ReactAgentFactory;
 import pkqb.enums.RubricQuestionTypeEnum;
 import pkqb.pojo.dto.AiRubric;
 import pkqb.service.RateLimitService;
-import pkqb.service.ChatMemoryService;
 import pkqb.service.SpringAiAlibabaService;
 import pkqb.service.strategy.QuestionExtractContext;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import java.io.ByteArrayInputStream;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -40,14 +45,14 @@ import java.util.stream.Collectors;
 @Slf4j
 public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     private final VectorStore vectorStore;
-    private final ChatClientFactory chatClientFactory;
     private final RedisTemplate<String,Object> redisTemplate;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
     private final RateLimitService rateLimitService;
     private final QuestionExtractContext questionExtractContext;
-    private final ReactAgent chatReactAgent;
-    private final ReactAgent ragReactAgent;
+    private final ReactAgentFactory reactAgentFactory;
+    
+    private static final ExecutorService AI_EXECUTOR = Executors.newFixedThreadPool(6);
 
     private static final StringBuilder TYPE_DESC = new StringBuilder();
     static {
@@ -120,23 +125,19 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     private static final Pattern NUMBER_PATTERN = Pattern.compile("(?m)^\\s*\\d+[、.．)）]");
 
     public SpringAiAlibabaServiceImpl(VectorStore vectorStore,
-                                      ChatClientFactory chatClientFactory,
                                       RedisTemplate<String,Object> redisTemplate,
                                       StringRedisTemplate stringRedisTemplate,
                                       ObjectMapper objectMapper,
                                       RateLimitService rateLimitService,
                                       QuestionExtractContext questionExtractContext,
-                                      ReactAgent chatReactAgent,
-                                      ReactAgent ragReactAgent) {
+                                      ReactAgentFactory reactAgentFactory) {
         this.vectorStore = vectorStore;
-        this.chatClientFactory = chatClientFactory;
         this.redisTemplate = redisTemplate;
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
         this.rateLimitService = rateLimitService;
         this.questionExtractContext = questionExtractContext;
-        this.chatReactAgent = chatReactAgent;
-        this.ragReactAgent = ragReactAgent;
+        this.reactAgentFactory = reactAgentFactory;
     }
 
     @Override
@@ -171,6 +172,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         }
     }
 
+    private static final int EMBEDDING_BATCH_SIZE = 10;
+
     private Result<String> processDocumentsContent(String content, String operationType, Long userId) {
         boolean isRubric = isRubric(content, userId);
         if (isRubric) {
@@ -189,11 +192,17 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         List<Document> splitDocuments = tokenTextSplitter.split(documents);
         log.info("[知识库-{}] 文档分割完成，共 {} 个片段，开始写入向量库", operationType, splitDocuments.size());
         
-        vectorStore.add(splitDocuments);
-        log.info("[知识库-{}] 成功写入向量库，共处理 {} 个文档片段", operationType, splitDocuments.size());
+        int totalSize = splitDocuments.size();
+        for (int i = 0; i < totalSize; i += EMBEDDING_BATCH_SIZE) {
+            int end = Math.min(i + EMBEDDING_BATCH_SIZE, totalSize);
+            List<Document> batch = splitDocuments.subList(i, end);
+            vectorStore.add(batch);
+            log.info("[知识库-{}] 已写入 {}/{} 个文档片段", operationType, end, totalSize);
+        }
+        log.info("[知识库-{}] 成功写入向量库，共处理 {} 个文档片段", operationType, totalSize);
         
         return Result.success("成功上传文件并添加到向量数据库，共处理了 " +
-                splitDocuments.size() + " 个文档片段");
+                totalSize + " 个文档片段");
     }
 
     @Override
@@ -230,12 +239,14 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                     .threadId(threadId)
                     .build();
             
+            ReactAgent ragReactAgent = reactAgentFactory.getRagReactAgent(userId);
+
             return ragReactAgent.stream(query, config)
                     .filter(output -> output instanceof StreamingOutput<?>)
                     .map(output -> (StreamingOutput<?>) output)
                     .flatMap(streamingOutput -> {
                         Message message = streamingOutput.message();
-                        if (message != null) {
+                        if (message instanceof org.springframework.ai.chat.messages.AssistantMessage) {
                             String text = message.getText();
                             if (text != null && !text.isEmpty()) {
                                 aiResponse.append(text);
@@ -251,7 +262,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                     .doOnComplete(() -> {
                         log.info("[RAG查询] 流式查询完成，sessionId={}", sessionId);
                         rateLimitService.incrementUsage(userId, RateLimitConstants.FEATURE_RAG);
-                        
+
                         if (aiResponse.length() > 0) {
                             try {
                                 String aiMsgJson = objectMapper.writeValueAsString(Map.of(
@@ -326,12 +337,14 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             
             log.info("[AI对话] 开始ReactAgent流式查询，sessionId={}, threadId={}", sessionId, threadId);
             
+            ReactAgent chatReactAgent = reactAgentFactory.getChatReactAgent(userId);
+            
             return chatReactAgent.stream(query, config)
                     .filter(output -> output instanceof StreamingOutput<?>)
                     .map(output -> (StreamingOutput<?>) output)
                     .flatMap(streamingOutput -> {
                         Message message = streamingOutput.message();
-                        if (message != null) {
+                        if (message instanceof org.springframework.ai.chat.messages.AssistantMessage) {
                             String text = message.getText();
                             if (text != null && !text.isEmpty()) {
                                 aiResponse.append(text);
@@ -408,11 +421,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         
         try {
             log.info("[题目解析] 开始调用AI解析题目");
-            ChatClient defaultChatClient = userId != null ? chatClientFactory.getDefaultChatClient(userId) : chatClientFactory.getDefaultChatClient(0L);
-            String result = defaultChatClient.prompt()
-                    .user(prompt)
-                    .call()
-                    .content();
+            String result = callReactAgentForText(prompt, userId);
             jsonStr = result.trim();
             if (jsonStr.startsWith("```")) {
                 jsonStr = jsonStr.replaceAll("^```(?:json)?\\s*", "").replaceAll("\\s*```$", "").trim();
@@ -508,11 +517,16 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             
             try {
                 log.info("[题目文件解析-AI] 开始调用AI解析题目");
-                ChatClient defaultChatClient = chatClientFactory.getDefaultChatClient(userId);
-                List<AiRubric> aiRubrics = defaultChatClient.prompt()
-                        .user(prompt)
-                        .call()
-                        .entity(new ParameterizedTypeReference<>() {});
+                String resultText = callReactAgentForText(prompt, userId);
+                
+                String jsonStr = resultText.trim();
+                if (jsonStr.startsWith("```")) {
+                    jsonStr = jsonStr.replaceAll("^```(?:json)?\\s*", "").replaceAll("\\s*```$", "").trim();
+                }
+                
+                List<AiRubric> aiRubrics = objectMapper.readValue(jsonStr, 
+                        objectMapper.getTypeFactory().constructCollectionType(List.class, AiRubric.class));
+                
                 log.info("[题目文件解析-AI] AI解析完成");
                 
                 if (aiRubrics == null || aiRubrics.isEmpty()) {
@@ -669,20 +683,49 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             return aiSolveAll(questionText, questionType, optionsJson, userId);
         }
         
-        String prompt = buildAiSolvePrompt(questionText, questionType, optionsJson, generateType);
+        String prompt = buildAiSolvePromptWithRag(questionText, questionType, optionsJson, generateType, userId);
         if (prompt == null) {
             return Result.error("无效的生成类型");
         }
         
         try {
-            ChatClient chatClient = chatClientFactory.getMilvusChatClient(userId);
-            String result = chatClient.prompt()
-                    .user(prompt)
-                    .call()
-                    .content();
+            Agent agent = reactAgentFactory.getMultiModelReactAgent(userId);
+            String threadId = "ai_solve:" + userId + ":" + System.currentTimeMillis();
+            RunnableConfig config = RunnableConfig.builder()
+                    .threadId(threadId)
+                    .build();
+            
+            StringBuilder result = new StringBuilder();
+            Optional<OverAllState> invoke = agent.invoke(prompt, config);
+
+            if (invoke.isPresent()) {
+                OverAllState state = invoke.get();
+                // 访问第最后一个Agent（也就是总结模型）的输出
+                state.value("final_answer").ifPresent(finalAnswer -> {
+                    if (finalAnswer instanceof AssistantMessage) {
+                        String text = ((AssistantMessage) finalAnswer).getText();
+                        result.append(text);
+                    }
+                });
+            }
+           /* agent.stream(prompt, config)
+                    .filter(output -> output instanceof StreamingOutput<?>)
+                    .map(output -> (StreamingOutput<?>) output)
+                    .doOnNext(streamingOutput -> {
+                        Message message = streamingOutput.message();
+                        if (message != null && message.getText() != null) {
+                            // 关键修改：判断是否来自 summary_agent
+                            // 这里的 "summary_agent" 需要和 ReactAgentUserConfig 中定义的 name 一致
+                            if ("summary_agent".equals(streamingOutput.agent())) {
+                                result.setLength(0); // 清空之前可能收集到的草稿
+                                result.append(message.getText());
+                            }
+                        }
+                    })
+                    .blockLast();*/
             
             log.info("[AI解答] 生成完成，generateType={}", generateType);
-            return Result.success(result);
+            return Result.success(result.toString());
         } catch (Exception e) {
             log.error("[AI解答] 生成失败: ", e);
             if (isApiKeyOrModelError(e)) {
@@ -694,32 +737,15 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     
     private Result<String> aiSolveAll(String questionText, String questionType, String optionsJson, Long userId) {
         try {
-            ChatClient chatClient = chatClientFactory.getMilvusChatClient(userId);
-            Map<String, String> results = new HashMap<>();
+            String ragContext = searchVectorStore(questionText, userId);
             
-            String answerPrompt = buildAiSolvePrompt(questionText, questionType, optionsJson, "answer");
-            if (answerPrompt != null) {
-                String answer = chatClient.prompt().user(answerPrompt).call().content();
-                results.put("answer", answer != null ? answer.trim() : "");
+            if (isSimpleQuestion(questionText, questionType)) {
+                log.info("[AI解答] 简单问题，使用单次调用模式");
+                return aiSolveAllInOne(questionText, questionType, optionsJson, ragContext, userId);
+            } else {
+                log.info("[AI解答] 复杂问题，使用并行调用模式");
+                return aiSolveAllParallel(questionText, questionType, optionsJson, ragContext, userId);
             }
-            
-            String explanationPrompt = buildAiSolvePrompt(questionText, questionType, optionsJson, "explanation");
-            if (explanationPrompt != null) {
-                String explanation = chatClient.prompt().user(explanationPrompt).call().content();
-                results.put("explanation", explanation != null ? explanation.trim() : "");
-            }
-            
-            if ("calculation".equals(questionType)) {
-                String stepsPrompt = buildAiSolvePrompt(questionText, questionType, optionsJson, "steps");
-                if (stepsPrompt != null) {
-                    String steps = chatClient.prompt().user(stepsPrompt).call().content();
-                    results.put("steps", steps != null ? steps.trim() : "");
-                }
-            }
-            
-            String jsonResult = new ObjectMapper().writeValueAsString(results);
-            log.info("[AI解答] 全部生成完成");
-            return Result.success(jsonResult);
         } catch (Exception e) {
             log.error("[AI解答] 全部生成失败: ", e);
             if (isApiKeyOrModelError(e)) {
@@ -729,8 +755,219 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         }
     }
     
-    private String buildAiSolvePrompt(String questionText, String questionType, String optionsJson, String generateType) {
+    private boolean isSimpleQuestion(String questionText, String questionType) {
+        if (questionText == null) return false;
+        
+        if ("multiple_choice".equals(questionType)) {
+            return false;
+        }
+        
+        if ("single_choice".equals(questionType) || "true_false".equals(questionType)) {
+            return true;
+        }
+        
+        if (questionText.length() < 50 && !"calculation".equals(questionType)) {
+            return true;
+        }
+        
+        return false;
+    }
+    
+    private Result<String> aiSolveAllInOne(String questionText, String questionType, String optionsJson, String ragContext, Long userId) {
+        try {
+            String prompt = buildAllInOnePrompt(questionText, questionType, optionsJson, ragContext);
+            
+            Agent agent = reactAgentFactory.getMultiModelReactAgent(userId);
+            String threadId = "ai_solve:" + userId + ":" + System.currentTimeMillis();
+            RunnableConfig config = RunnableConfig.builder()
+                    .threadId(threadId)
+                    .build();
+            
+            StringBuilder result = new StringBuilder();
+            Optional<OverAllState> invoke = agent.invoke(prompt, config);
+            if (invoke.isPresent()) {
+                OverAllState state = invoke.get();
+                state.value("final_answer").ifPresent(finalAnswer -> {
+                    if (finalAnswer instanceof AssistantMessage) {
+                        String text = ((AssistantMessage) finalAnswer).getText();
+                        result.append(text);
+                    }
+                });
+            }
+            
+            String aiResponse = result.toString().trim();
+            Map<String, String> results = parseAllInOneResponse(aiResponse, questionType);
+            
+            String jsonResult = objectMapper.writeValueAsString(results);
+            log.info("[AI解答] 单次调用完成");
+            return Result.success(jsonResult);
+        } catch (Exception e) {
+            log.error("[AI解答] 单次调用失败: ", e);
+            throw new RuntimeException("AI调用失败: " + e.getMessage(), e);
+        }
+    }
+    
+    private String buildAllInOnePrompt(String questionText, String questionType, String optionsJson, String ragContext) {
         StringBuilder prompt = new StringBuilder();
+        
+        if (ragContext != null && !ragContext.isEmpty()) {
+            prompt.append("以下是从知识库中检索到的相关内容，请参考这些内容来回答问题：\n\n");
+            prompt.append(ragContext);
+            prompt.append("\n\n---\n\n");
+        }
+        
+        String typeDesc = getTypeDescription(questionType);
+        prompt.append("请根据以下").append(typeDesc).append("，一次性生成答案和解析");
+        if ("calculation".equals(questionType)) {
+            prompt.append("以及计算步骤");
+        }
+        prompt.append("。\n\n");
+        
+        if (optionsJson != null && !optionsJson.isEmpty() && !optionsJson.equals("[]")) {
+            prompt.append("选项：\n").append(optionsJson).append("\n\n");
+        }
+        
+        prompt.append("题目：\n").append(questionText).append("\n\n");
+        
+        prompt.append("请严格按照以下JSON格式返回，不要包含任何其他内容：\n");
+        prompt.append("{\n");
+        
+        if ("true_false".equals(questionType)) {
+            prompt.append("  \"answer\": \"正确或错误\",\n");
+        } else if ("single_choice".equals(questionType) || "multiple_choice".equals(questionType)) {
+            prompt.append("  \"answer\": \"选项字母，如A或A,B,C\",\n");
+        } else if ("short_answer".equals(questionType)) {
+            prompt.append("  \"answer\": \"答案要点\",\n");
+        } else if ("calculation".equals(questionType)) {
+            prompt.append("  \"answer\": \"最终计算结果\",\n");
+        }
+        
+        prompt.append("  \"explanation\": \"题目解析，150字以内\"\n");
+        
+        if ("calculation".equals(questionType)) {
+            prompt.append(",\n  \"steps\": \"计算步骤，每步用换行分隔\"");
+        }
+        
+        prompt.append("\n}\n\n");
+        prompt.append("注意：只返回JSON，不要有任何其他文字。");
+        
+        return prompt.toString();
+    }
+    
+    private Map<String, String> parseAllInOneResponse(String aiResponse, String questionType) {
+        Map<String, String> results = new HashMap<>();
+        results.put("answer", "");
+        results.put("explanation", "");
+        results.put("steps", "");
+        
+        if (aiResponse == null || aiResponse.isEmpty()) {
+            log.warn("[AI解答] AI返回为空");
+            return results;
+        }
+        
+        String jsonStr = aiResponse;
+        if (jsonStr.contains("```")) {
+            jsonStr = jsonStr.replaceAll("```json\\s*", "").replaceAll("```\\s*", "").trim();
+        }
+        
+        int start = jsonStr.indexOf("{");
+        int end = jsonStr.lastIndexOf("}");
+        if (start >= 0 && end > start) {
+            jsonStr = jsonStr.substring(start, end + 1);
+        }
+        
+        try {
+            JsonNode node = objectMapper.readTree(jsonStr);
+            
+            if (node.has("answer")) {
+                results.put("answer", node.get("answer").asText().trim());
+            }
+            if (node.has("explanation")) {
+                results.put("explanation", node.get("explanation").asText().trim());
+            }
+            if (node.has("steps")) {
+                results.put("steps", node.get("steps").asText().trim());
+            }
+            
+            if (results.get("answer").isEmpty() && results.get("explanation").isEmpty()) {
+                log.warn("[AI解答] JSON解析后内容为空，原始响应: {}", aiResponse.substring(0, Math.min(100, aiResponse.length())));
+            }
+        } catch (Exception e) {
+            log.warn("[AI解答] JSON解析失败，尝试提取内容: {}, 原始响应前100字符: {}", 
+                    e.getMessage(), aiResponse.substring(0, Math.min(100, aiResponse.length())));
+            
+            if (aiResponse.contains("答案") || aiResponse.contains("正确") || aiResponse.contains("错误")) {
+                results.put("answer", aiResponse);
+            } else {
+                results.put("answer", aiResponse);
+                results.put("explanation", "AI返回格式异常，请重新生成");
+            }
+        }
+        
+        return results;
+    }
+    
+    private Result<String> aiSolveAllParallel(String questionText, String questionType, String optionsJson, String ragContext, Long userId) {
+        try {
+            CompletableFuture<String> answerFuture = CompletableFuture.supplyAsync(() -> {
+                String prompt = buildAiSolvePromptWithRagContext(questionText, questionType, optionsJson, "answer", ragContext);
+                if (prompt == null) return "";
+                String result = callMultiModelReactAgent(prompt, userId);
+                return result != null ? result.trim() : "";
+            }, AI_EXECUTOR);
+            
+            CompletableFuture<String> explanationFuture = CompletableFuture.supplyAsync(() -> {
+                String prompt = buildAiSolvePromptWithRagContext(questionText, questionType, optionsJson, "explanation", ragContext);
+                if (prompt == null) return "";
+                String result = callMultiModelReactAgent(prompt, userId);
+                return result != null ? result.trim() : "";
+            }, AI_EXECUTOR);
+            
+            CompletableFuture<String> stepsFuture = CompletableFuture.completedFuture("");
+            if ("calculation".equals(questionType)) {
+                stepsFuture = CompletableFuture.supplyAsync(() -> {
+                    String prompt = buildAiSolvePromptWithRagContext(questionText, questionType, optionsJson, "steps", ragContext);
+                    if (prompt == null) return "";
+                    String result = callMultiModelReactAgent(prompt, userId);
+                    return result != null ? result.trim() : "";
+                }, AI_EXECUTOR);
+            }
+            
+            CompletableFuture.allOf(answerFuture, explanationFuture, stepsFuture).join();
+            
+            Map<String, String> results = new HashMap<>();
+            results.put("answer", answerFuture.get());
+            results.put("explanation", explanationFuture.get());
+            results.put("steps", stepsFuture.get());
+            
+            String jsonResult = objectMapper.writeValueAsString(results);
+            log.info("[AI解答] 并行调用完成");
+            return Result.success(jsonResult);
+        } catch (java.util.concurrent.ExecutionException e) {
+            Throwable cause = e.getCause();
+            log.error("[AI解答] 并行调用执行异常: ", cause);
+            if (cause instanceof RuntimeException) {
+                throw (RuntimeException) cause;
+            }
+            throw new RuntimeException("AI调用失败: " + (cause != null ? cause.getMessage() : e.getMessage()), cause);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.error("[AI解答] 并行调用被中断: ", e);
+            throw new RuntimeException("AI调用被中断: " + e.getMessage(), e);
+        } catch (Exception e) {
+            log.error("[AI解答] 并行调用失败: ", e);
+            throw new RuntimeException("AI调用失败: " + e.getMessage(), e);
+        }
+    }
+    
+    private String buildAiSolvePromptWithRagContext(String questionText, String questionType, String optionsJson, String generateType, String ragContext) {
+        StringBuilder prompt = new StringBuilder();
+        
+        if (ragContext != null && !ragContext.isEmpty()) {
+            prompt.append("以下是从知识库中检索到的相关内容，请参考这些内容来回答问题：\n\n");
+            prompt.append(ragContext);
+            prompt.append("\n\n---\n\n");
+        }
         
         prompt.append("请根据以下题目内容");
         
@@ -771,6 +1008,159 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         }
         
         return prompt.toString();
+    }
+    
+    private String callReactAgent(String prompt, Long userId) {
+        try {
+            ReactAgent ragReactAgent = reactAgentFactory.getRagReactAgent(userId);
+            String threadId = "ai_solve:" + userId + ":" + System.currentTimeMillis();
+            RunnableConfig config = RunnableConfig.builder()
+                    .threadId(threadId)
+                    .build();
+            
+            StringBuilder result = new StringBuilder();
+            ragReactAgent.stream(prompt, config)
+                    .filter(output -> output instanceof StreamingOutput<?>)
+                    .map(output -> (StreamingOutput<?>) output)
+                    .doOnNext(streamingOutput -> {
+                        Message message = streamingOutput.message();
+                        if (message != null && message.getText() != null) {
+                            result.append(message.getText());
+                        }
+                    })
+                    .blockLast();
+            
+            return result.toString();
+        } catch (Exception e) {
+            log.error("[AI解答] ReactAgent调用失败: ", e);
+            return "";
+        }
+    }
+    
+    /**
+     * 调用多模型Agent（使用Multi-agent模式）
+     * 如果用户配置了主模型和辅助模型，则使用多模型模式
+     * 否则使用单模型模式
+     */
+    private String callMultiModelReactAgent(String prompt, Long userId) {
+        try {
+            Agent agent = reactAgentFactory.getMultiModelReactAgent(userId);
+            String threadId = "ai_solve:" + userId + ":" + System.currentTimeMillis();
+            RunnableConfig config = RunnableConfig.builder()
+                    .threadId(threadId)
+                    .build();
+            
+            StringBuilder result = new StringBuilder();
+            Optional<OverAllState> invoke = agent.invoke(prompt, config);
+            if (invoke.isPresent()) {
+                OverAllState state = invoke.get();
+                // 访问第最后一个Agent（也就是总结模型）的输出
+                state.value("final_answer").ifPresent(finalAnswer -> {
+                    if (finalAnswer instanceof AssistantMessage) {
+                        String text = ((AssistantMessage) finalAnswer).getText();
+                        result.append(text);
+                    }
+                });
+            }
+           /* agent.stream(prompt, config)
+                    .filter(output -> output instanceof StreamingOutput<?>)
+                    .map(output -> (StreamingOutput<?>) output)
+                    .doOnNext(streamingOutput -> {
+                        Message message = streamingOutput.message();
+                        if (message != null && message.getText() != null) {
+                            result.append(message.getText());
+                        }
+                    })
+                    .blockLast();*/
+            
+            return result.toString();
+        } catch (Exception e) {
+            log.error("[ReactAgent文本调用] 调用失败: ", e);
+            throw new RuntimeException("AI调用失败: " + e.getMessage(), e);
+        }
+    }
+    
+    private String buildAiSolvePromptWithRag(String questionText, String questionType, String optionsJson, String generateType, Long userId) {
+        StringBuilder prompt = new StringBuilder();
+        
+        String ragContext = searchVectorStore(questionText, userId);
+        if (ragContext != null && !ragContext.isEmpty()) {
+            prompt.append("以下是从知识库中检索到的相关内容，请参考这些内容来回答问题：\n\n");
+            prompt.append(ragContext);
+            prompt.append("\n\n---\n\n");
+        }
+        
+        prompt.append("请根据以下题目内容");
+        
+        String typeDesc = getTypeDescription(questionType);
+        prompt.append("（").append(typeDesc).append("）");
+        
+        if (optionsJson != null && !optionsJson.isEmpty() && !optionsJson.equals("[]")) {
+            prompt.append("\n\n选项：\n").append(optionsJson);
+        }
+        
+        prompt.append("\n\n题目：\n").append(questionText);
+        
+        switch (generateType) {
+            case "answer":
+                prompt.append("\n\n请直接给出正确答案，不要包含任何解释。");
+                if ("true_false".equals(questionType)) {
+                    prompt.append(" 判断题请回答:正确或错误");
+                } else if ("short_answer".equals(questionType)) {
+                    prompt.append(" 简答题请给出简洁的答案要点。");
+                } else if ("calculation".equals(questionType)) {
+                    prompt.append(" 计算题请给出最终计算结果。");
+                } else {
+                    prompt.append(" 选择题请直接给出选项字母（如A、B、C、D，多选用逗号分隔）。");
+                }
+                break;
+            case "explanation":
+                prompt.append("\n\n请给出这道题的详细解析，字数控制在150字以内，要求简洁明了，突出重点。");
+                break;
+            case "steps":
+                if (!"calculation".equals(questionType)) {
+                    return null;
+                }
+                prompt.append("\n\n请给出这道计算题的详细计算步骤，每步一行，格式如下：\n");
+                prompt.append("步骤1: xxx\n步骤2: xxx\n...");
+                break;
+            default:
+                return null;
+        }
+        
+        return prompt.toString();
+    }
+    
+    private String searchVectorStore(String query, Long userId) {
+        try {
+            SearchRequest searchRequest = SearchRequest.builder()
+                    .query(query)
+                    .topK(5)
+                    .similarityThreshold(0.7)
+                    .build();
+            
+            List<Document> documents = vectorStore.similaritySearch(searchRequest);
+            
+            if (documents == null || documents.isEmpty()) {
+                log.info("[AI解答-向量检索] 未找到相关文档");
+                return null;
+            }
+            
+            String result = documents.stream()
+                    .map(doc -> {
+                        String content = doc.getText();
+                        String source = doc.getMetadata() != null ? 
+                                (String) doc.getMetadata().getOrDefault("source", "未知来源") : "未知来源";
+                        return "【来源: " + source + "】\n" + content;
+                    })
+                    .collect(Collectors.joining("\n\n---\n\n"));
+            
+            log.info("[AI解答-向量检索] 找到 {} 个相关文档片段", documents.size());
+            return result;
+        } catch (Exception e) {
+            log.warn("[AI解答-向量检索] 检索失败: {}", e.getMessage());
+            return null;
+        }
     }
     
     private String getTypeDescription(String questionType) {
@@ -820,8 +1210,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                 "。" + "\n" +
                 "回答模版：如果是【题目】就回答：题目，如果是【知识点】就回答：知识点。要求：严格按照回答模版回答。";
         try {
-            ChatClient defaultChatClient = chatClientFactory.getDefaultChatClient(userId);
-            String call = defaultChatClient.prompt().user(prompt).call().content();
+            String call = callReactAgentForText(prompt, userId);
             return call.contains("题目");
         } catch (Exception e) {
             log.info("[题目判断] AI调用失败，fallback到本地规则算法，e={}", e.getMessage());
@@ -909,6 +1298,33 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         int count = 0;
         while (matcher.find()) count++;
         return count;
+    }
+
+    private String callReactAgentForText(String prompt, Long userId) {
+        try {
+            ReactAgent simpleReactAgent = reactAgentFactory.getSimpleReactAgent(userId != null ? userId : 0L);
+            String threadId = "simple_call:" + (userId != null ? userId : 0L) + ":" + System.currentTimeMillis();
+            RunnableConfig config = RunnableConfig.builder()
+                    .threadId(threadId)
+                    .build();
+            
+            StringBuilder result = new StringBuilder();
+            simpleReactAgent.stream(prompt, config)
+                    .filter(output -> output instanceof StreamingOutput<?>)
+                    .map(output -> (StreamingOutput<?>) output)
+                    .doOnNext(streamingOutput -> {
+                        Message message = streamingOutput.message();
+                        if (message != null && message.getText() != null) {
+                            result.append(message.getText());
+                        }
+                    })
+                    .blockLast();
+            
+            return result.toString();
+        } catch (Exception e) {
+            log.error("[ReactAgent文本调用] 调用失败: ", e);
+            throw new RuntimeException("AI调用失败: " + e.getMessage(), e);
+        }
     }
 
     private boolean isApiKeyOrModelError(Throwable e) {

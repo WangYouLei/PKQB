@@ -10,6 +10,7 @@ import java.time.LocalDateTime;
 
 /**
  * 试卷实体类
+ * 对应数据库rubric表，存储试卷基本信息
  */
 @Data
 @TableName("rubric")
@@ -26,9 +27,6 @@ public class RubricEntity {
 
     private String createStudentNo;
 
-    /**
-     * 是否私有：true=私有（仅自己可见），false=公开（班级可见）
-     */
     private Boolean isPrivate;
 
     private Integer questionCount;

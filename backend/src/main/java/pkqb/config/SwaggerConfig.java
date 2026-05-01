@@ -4,11 +4,15 @@ import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Contact;
 import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.info.License;
+import io.swagger.v3.oas.models.servers.Server;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.List;
+
 /**
- * Swagger API 文档配置
+ * Swagger API文档配置类
+ * 配置OpenAPI文档信息
  */
 @Configuration
 public class SwaggerConfig {
@@ -17,14 +21,17 @@ public class SwaggerConfig {
     public OpenAPI openAPI() {
         return new OpenAPI()
                 .info(new Info()
-                        .title("PKQB 智能题库生成系统 API")
-                        .description("智能题库生成系统后端 API 文档，包含用户认证、AI对话、知识库管理、题库解析等功能")
+                        .title("PKQB 智能题库系统 API")
+                        .description("智能题库管理与AI辅助学习系统后端API文档")
                         .version("1.0.0")
                         .contact(new Contact()
                                 .name("PKQB Team")
                                 .email("support@pkqb.com"))
                         .license(new License()
-                                .name("Apache 2.0")
-                                .url("https://www.apache.org/licenses/LICENSE-2.0")));
+                                .name("MIT License")
+                                .url("https://opensource.org/licenses/MIT")))
+                .servers(List.of(
+                        new Server().url("http://localhost:5555").description("开发服务器")
+                ));
     }
 }

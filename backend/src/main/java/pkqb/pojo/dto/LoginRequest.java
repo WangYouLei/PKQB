@@ -6,6 +6,7 @@ import lombok.Data;
 
 /**
  * 登录请求 DTO
+ * 用于用户登录的请求参数
  */
 @Data
 @Schema(description = "登录请求")
