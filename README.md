@@ -116,7 +116,3 @@ cors.allowed-origins=http://localhost:5173
 ```env
 VITE_API_BASE_URL=https://your-api-server.com
 ```
-
-## License
-
-MIT
