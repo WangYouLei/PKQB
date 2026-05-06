@@ -4,7 +4,9 @@ import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.agent.Agent;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
+import com.alibaba.cloud.ai.graph.streaming.OutputType;
 import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -245,15 +247,29 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                     .filter(output -> output instanceof StreamingOutput<?>)
                     .map(output -> (StreamingOutput<?>) output)
                     .flatMap(streamingOutput -> {
+                        OutputType type = streamingOutput.getOutputType();
                         Message message = streamingOutput.message();
-                        if (message instanceof org.springframework.ai.chat.messages.AssistantMessage) {
-                            String text = message.getText();
-                            if (text != null && !text.isEmpty()) {
-                                aiResponse.append(text);
-                                try {
-                                    return Mono.just(objectMapper.writeValueAsString(text));
-                                } catch (Exception e) {
-                                    return Mono.just(text.replace("\n", "\\n").replace("\r", "\\r"));
+                        if(type == OutputType.AGENT_MODEL_STREAMING){
+                            if(message instanceof AssistantMessage){
+                                // 检查是否为 Thinking 消息
+                                Object reasoningContent = message.getMetadata().get("reasoningContent");
+                                if (reasoningContent != null && !reasoningContent.toString().isEmpty()) {
+                                    aiResponse.append(reasoningContent);
+                                    try {
+                                        return Mono.just(objectMapper.writeValueAsString(reasoningContent));
+                                    } catch (JsonProcessingException e) {
+                                        return Mono.just(message.getText().replace("\n", "\\n").replace("\r", "\\r"));
+
+                                    }
+                                } else {
+                                    if(message.getText() != null && !message.getText().isEmpty()){
+                                        aiResponse.append(message.getText());
+                                        try {
+                                            return Mono.just(objectMapper.writeValueAsString(message.getText()));
+                                        } catch (JsonProcessingException e) {
+                                            return Mono.just(message.getText().replace("\n", "\\n").replace("\r", "\\r"));
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -343,15 +359,29 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                     .filter(output -> output instanceof StreamingOutput<?>)
                     .map(output -> (StreamingOutput<?>) output)
                     .flatMap(streamingOutput -> {
+                        OutputType type = streamingOutput.getOutputType();
                         Message message = streamingOutput.message();
-                        if (message instanceof org.springframework.ai.chat.messages.AssistantMessage) {
-                            String text = message.getText();
-                            if (text != null && !text.isEmpty()) {
-                                aiResponse.append(text);
-                                try {
-                                    return Mono.just(objectMapper.writeValueAsString(text));
-                                } catch (Exception e) {
-                                    return Mono.just(text.replace("\n", "\\n").replace("\r", "\\r"));
+                        if(type == OutputType.AGENT_MODEL_STREAMING){
+                            if(message instanceof AssistantMessage){
+                                // 检查是否为 Thinking 消息
+                                Object reasoningContent = message.getMetadata().get("reasoningContent");
+                                if (reasoningContent != null && !reasoningContent.toString().isEmpty()) {
+                                   aiResponse.append(reasoningContent);
+                                    try {
+                                        return Mono.just(objectMapper.writeValueAsString(reasoningContent));
+                                    } catch (JsonProcessingException e) {
+                                        return Mono.just(message.getText().replace("\n", "\\n").replace("\r", "\\r"));
+
+                                    }
+                                } else {
+                                    if(message.getText() != null && !message.getText().isEmpty()){
+                                        aiResponse.append(message.getText());
+                                        try {
+                                            return Mono.just(objectMapper.writeValueAsString(message.getText()));
+                                        } catch (JsonProcessingException e) {
+                                            return Mono.just(message.getText().replace("\n", "\\n").replace("\r", "\\r"));
+                                        }
+                                    }
                                 }
                             }
                         }
