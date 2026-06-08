@@ -70,6 +70,14 @@
             </svg>
             <span class="link-text">班级共享</span>
           </router-link>
+          <router-link to="/wrong-question" class="sidebar-link" active-class="active" :title="isCollapsed ? '错题本' : ''">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="15" y1="9" x2="9" y2="15"/>
+              <line x1="9" y1="9" x2="15" y2="15"/>
+            </svg>
+            <span class="link-text">错题本</span>
+          </router-link>
         </div>
         <div class="sidebar-section">
           <div class="sidebar-section-title" v-show="!isCollapsed">AI 功能</div>
@@ -104,6 +112,7 @@
         </div>
         <div class="sidebar-section">
           <div class="sidebar-section-title" v-show="!isCollapsed">其他功能</div>
+          <NotificationCenter sidebar :isCollapsed="isCollapsed" />
           <a class="sidebar-link" @click="showFeedbackModal = true" :title="isCollapsed ? '意见反馈' : ''">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
@@ -179,12 +188,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
+import { useWebSocket } from '@/composables/useWebSocket'
+import NotificationCenter from '@/components/NotificationCenter.vue'
 
 const router = useRouter()
 const userStore = useUserStore()
+const { connect: wsConnect, disconnect: wsDisconnect } = useWebSocket()
 const isLightMode = ref(false)
 const isCollapsed = ref(false)
 const showFeedbackModal = ref(false)
@@ -192,9 +204,18 @@ const showFeedbackModal = ref(false)
 onMounted(() => {
   const savedTheme = localStorage.getItem('theme')
   isLightMode.value = savedTheme === 'light'
-  
+
   const savedCollapsed = localStorage.getItem('sidebarCollapsed')
   isCollapsed.value = savedCollapsed === 'true'
+
+  // 已登录时连接 WebSocket
+  if (userStore.isLoggedIn) {
+    wsConnect()
+  }
+})
+
+onUnmounted(() => {
+  wsDisconnect()
 })
 
 function setTheme(light: boolean) {
@@ -212,7 +233,10 @@ function toggleSidebar() {
   localStorage.setItem('sidebarCollapsed', String(isCollapsed.value))
 }
 
-function handleLogout() { userStore.logout(); router.push('/login') }
+async function handleLogout() {
+  await userStore.logout()
+  window.location.href = '/login'
+}
 </script>
 
 <style scoped>
@@ -222,7 +246,10 @@ function handleLogout() { userStore.logout(); router.push('/login') }
   width: 260px;
   min-width: 260px;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  position: relative;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .sidebar.collapsed {
@@ -365,6 +392,7 @@ function handleLogout() { userStore.logout(); router.push('/login') }
 
 .sidebar-nav {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -477,7 +505,9 @@ function handleLogout() { userStore.logout(); router.push('/login') }
   margin-top: auto;
   background: rgba(255,255,255,0.02);
   border-radius: 16px;
-  margin: 16px 12px 0;
+  margin-left: 12px;
+  margin-right: 12px;
+  flex-shrink: 0;
   transition: all 0.3s ease;
 }
 

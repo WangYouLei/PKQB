@@ -3,10 +3,14 @@ package pkqb.controller;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 import pkqb.common.Result;
+import pkqb.config.GlobalExceptionHandler.PermissionDeniedException;
+import pkqb.config.GlobalExceptionHandler.ResourceNotFoundException;
+import pkqb.pojo.dto.UpdatePasswordRequest;
 import pkqb.service.UserService;
 
 @Slf4j
@@ -35,19 +39,16 @@ public class UserController {
     @Operation(summary = "修改密码", description = "修改用户密码")
     public Result<Void> updatePassword(
             @Parameter(description = "用户ID") @RequestAttribute("userId") Long userId,
-            @Parameter(description = "原密码") @RequestParam String oldPassword,
-            @Parameter(description = "新密码") @RequestParam String newPassword) {
+            @Valid @RequestBody UpdatePasswordRequest request) {
         try {
-            userService.updatePassword(userId, oldPassword, newPassword);
+            userService.updatePassword(userId, request.getOldPassword(), request.getNewPassword());
             return Result.success("密码修改成功", null);
         } catch (IllegalArgumentException e) {
             return Result.error(e.getMessage());
-        } catch (Exception e) {
-            if (e.getMessage().contains("原密码错误")) {
-                return Result.error("原密码错误");
-            }
-            log.error("修改密码失败: {}", e.getMessage());
-            return Result.error("修改密码失败");
+        } catch (PermissionDeniedException e) {
+            return Result.error(e.getMessage());
+        } catch (ResourceNotFoundException e) {
+            return Result.error(e.getMessage());
         }
     }
 }

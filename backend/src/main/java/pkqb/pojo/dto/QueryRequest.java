@@ -1,5 +1,6 @@
 package pkqb.pojo.dto;
 
+import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 
 /**
@@ -8,6 +9,8 @@ import lombok.Data;
  */
 @Data
 public class QueryRequest {
+    @NotBlank(message = "查询内容不能为空")
     private String query;
+    @NotBlank(message = "会话ID不能为空")
     private String sessionId;
 }

@@ -9,10 +9,6 @@ app.use(createPinia())
 app.use(router)
 app.mount('#app')
 
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').then(() => {
-    // SW registered successfully
-  }).catch(() => {
-    // SW registration failed
-  })
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {})
 }

@@ -35,9 +35,10 @@ public interface RubricService {
     /**
      * 根据RubricID获取所有题目
      * @param rubricId RubricID
+     * @param userId 当前用户ID（用于权限校验）
      * @return 结果
      */
-    Result<List<QuestionEntity>> getQuestionsByRubricId(Long rubricId);
+    Result<List<QuestionEntity>> getQuestionsByRubricId(Long rubricId, Long userId);
     
     /**
      * 修改Rubric (只有创建者可以修改)
@@ -79,4 +80,12 @@ public interface RubricService {
      * @return 结果
      */
     Result<?> batchSaveQuestions(Long rubricId, List<QuestionEntity> questions, Long userId);
+
+    /**
+     * 批量删除试卷（仅创建者可删除）
+     * @param rubricIds 试卷ID列表
+     * @param userId 当前用户ID
+     * @return 结果
+     */
+    Result<?> batchDeleteRubrics(List<Long> rubricIds, Long userId);
 }

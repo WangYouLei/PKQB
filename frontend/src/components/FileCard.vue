@@ -337,10 +337,10 @@ async function submitEdit() {
 
 .toggle { position: relative; display: inline-block; width: 48px; height: 26px; }
 .toggle input { opacity: 0; width: 0; height: 0; }
-.toggle-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--bg-glass); border: 1px solid var(--border-glass); transition: .3s; border-radius: 26px; }
-.toggle-slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: var(--text-muted); transition: .3s; border-radius: 50%; }
-.toggle input:checked + .toggle-slider { background: var(--tertiary-gradient); border-color: transparent; }
-.toggle input:checked + .toggle-slider:before { transform: translateX(22px); background-color: #fff; }
+.toggle-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.2); transition: .3s; border-radius: 26px; }
+.toggle-slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: #888; transition: .3s; border-radius: 50%; }
+.toggle input:checked + .toggle-slider { background: linear-gradient(135deg,#22c55e,#16a34a); border-color: transparent; }
+.toggle input:checked + .toggle-slider:before { transform: translateX(22px); background-color: #4ade80; }
 
 .modal-actions {
   display: flex;

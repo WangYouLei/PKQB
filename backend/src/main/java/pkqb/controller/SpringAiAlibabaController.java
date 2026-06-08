@@ -3,6 +3,8 @@ package pkqb.controller;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -35,7 +37,23 @@ public class SpringAiAlibabaController {
     @Operation(summary = "上传知识库文档", description = "上传文档到向量知识库")
     public Result<String> addDocumentsFile(
             @Parameter(description = "文档文件") @RequestParam("file") MultipartFile file,
-            @Parameter(description = "用户ID") @RequestParam("userId") Long userId) {
+            HttpServletRequest httpRequest) {
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        if (userId == null) {
+            return Result.error("未登录或登录已过期");
+        }
+        // 文件类型白名单
+        String originalFilename = file.getOriginalFilename();
+        if (originalFilename == null) {
+            return Result.error("文件名不能为空");
+        }
+        String extension = originalFilename.substring(originalFilename.lastIndexOf(".") + 1).toLowerCase();
+        java.util.Set<String> allowedExtensions = java.util.Set.of(
+            "pdf", "doc", "docx", "txt", "md", "ppt", "pptx", "xls", "xlsx"
+        );
+        if (!allowedExtensions.contains(extension)) {
+            return Result.error("不支持的文件类型: " + extension);
+        }
         return saaService.addDocuments(file, userId);
     }
 
@@ -43,40 +61,88 @@ public class SpringAiAlibabaController {
     @Operation(summary = "解析题目文件（AI）", description = "上传题目文件并使用AI解析为结构化题目数据")
     public Result<List<AiRubric>> handleRubricFile(
             @Parameter(description = "题目文件") @RequestParam("file") MultipartFile file,
-            @Parameter(description = "用户ID") @RequestParam("userId") Long userId) {
-        return saaService.handleRubricFile(file, userId);
+            HttpServletRequest httpRequest,
+            @Parameter(description = "模型类型：2=视觉模型，1=纯文本，不传则自动选择") @RequestParam(value = "modelType", required = false) Integer modelType) {
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        if (userId == null) {
+            return Result.error("未登录或登录已过期");
+        }
+        // 文件类型白名单
+        String originalFilename = file.getOriginalFilename();
+        if (originalFilename == null) {
+            return Result.error("文件名不能为空");
+        }
+        String extension = originalFilename.substring(originalFilename.lastIndexOf(".") + 1).toLowerCase();
+        java.util.Set<String> allowedExtensions = java.util.Set.of(
+            "pdf", "doc", "docx", "txt", "md", "ppt", "pptx", "xls", "xlsx"
+        );
+        if (!allowedExtensions.contains(extension)) {
+            return Result.error("不支持的文件类型: " + extension);
+        }
+        return saaService.handleRubricFile(file, userId, modelType);
     }
 
     @PostMapping("/handle-rubricFile-local")
     @Operation(summary = "解析题目文件（本地）", description = "上传题目文件并使用本地算法解析为结构化题目数据")
     public Result<List<AiRubric>> handleRubricFileLocal(
             @Parameter(description = "题目文件") @RequestParam("file") MultipartFile file,
-            @Parameter(description = "用户ID") @RequestParam("userId") Long userId) {
+            HttpServletRequest httpRequest) {
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        if (userId == null) {
+            return Result.error("未登录或登录已过期");
+        }
+        // 文件类型白名单
+        String originalFilename = file.getOriginalFilename();
+        if (originalFilename == null) {
+            return Result.error("文件名不能为空");
+        }
+        String extension = originalFilename.substring(originalFilename.lastIndexOf(".") + 1).toLowerCase();
+        java.util.Set<String> allowedExtensions = java.util.Set.of(
+            "pdf", "doc", "docx", "txt", "md", "ppt", "pptx", "xls", "xlsx"
+        );
+        if (!allowedExtensions.contains(extension)) {
+            return Result.error("不支持的文件类型: " + extension);
+        }
         return saaService.handleRubricFileLocal(file, userId);
     }
 
     @PostMapping(value = "/query", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @Operation(summary = "AI对话", description = "普通AI对话（流式返回）")
     public Flux<String> query(
-            @RequestBody QueryRequest request,
-            @Parameter(description = "用户ID") @RequestParam("userId") Long userId
+            @Valid @RequestBody QueryRequest request,
+            HttpServletRequest httpRequest
     ) {
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        if (userId == null) {
+            return Flux.error(new RuntimeException("未登录或登录已过期"));
+        }
         return saaService.query(request.getQuery(), request.getSessionId(), userId);
     }
 
     @PostMapping(value = "/rag-query", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @Operation(summary = "知识库问答", description = "基于RAG的向量知识库问答（流式返回）")
     public Flux<String> ragQuery(
-            @RequestBody QueryRequest request,
-            @Parameter(description = "用户ID") @RequestParam(value = "userId") Long userId) {
+            @Valid @RequestBody QueryRequest request,
+            HttpServletRequest httpRequest) {
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        if (userId == null) {
+            return Flux.error(new RuntimeException("未登录或登录已过期"));
+        }
         return saaService.ragQuery(request.getQuery(), request.getSessionId(), userId);
     }
 
     @GetMapping(value = "/get-historyList")
     @Operation(summary = "获取历史会话列表", description = "获取用户的历史会话列表")
-    public Result<List<Object>> getHistory(
-            @Parameter(description = "用户ID") @RequestParam(value = "userId") Long userId,
+    public Result<List<String>> getHistory(
+            HttpServletRequest httpRequest,
             @Parameter(description = "会话类型：rag或chat") @RequestParam(value = "type") String type){
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        if (userId == null) {
+            return Result.error("未登录或登录已过期");
+        }
+        if (!"rag".equals(type) && !"chat".equals(type)) {
+            return Result.error("type参数必须为rag或chat");
+        }
         return saaService.getHistory(userId.toString(), type);
     }
 
@@ -84,8 +150,15 @@ public class SpringAiAlibabaController {
     @Operation(summary = "获取会话历史详情", description = "获取指定会话的聊天记录")
     public Result<Object> getHistoryById(
             @Parameter(description = "会话ID") @RequestParam(value = "sessionId") String sessionId,
-            @Parameter(description = "用户ID") @RequestParam(value = "userId") Long userId,
+            HttpServletRequest httpRequest,
             @Parameter(description = "会话类型") @RequestParam(value = "type") String type){
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        if (userId == null) {
+            return Result.error("未登录或登录已过期");
+        }
+        if (!"rag".equals(type) && !"chat".equals(type)) {
+            return Result.error("type参数必须为rag或chat");
+        }
         return saaService.getHistoryBySessionId(sessionId, userId.toString(), type);
     }
 
@@ -93,8 +166,15 @@ public class SpringAiAlibabaController {
     @Operation(summary = "删除会话", description = "删除指定的聊天会话记录（AI对话或知识库问答）")
     public Result<Boolean> deleteHistory(
             @Parameter(description = "会话ID") @RequestParam String sessionId,
-            @Parameter(description = "用户ID") @RequestParam Long userId,
+            HttpServletRequest httpRequest,
             @Parameter(description = "会话类型：rag或chat") @RequestParam String type) {
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        if (userId == null) {
+            return Result.error("未登录或登录已过期");
+        }
+        if (!"rag".equals(type) && !"chat".equals(type)) {
+            return Result.error("type参数必须为rag或chat");
+        }
         return saaService.deleteHistory(sessionId, userId, type);
     }
 
@@ -102,17 +182,34 @@ public class SpringAiAlibabaController {
     @Operation(summary = "删除消息", description = "删除会话中的指定消息")
     public Result<Boolean> deleteMessages(
             @Parameter(description = "会话ID") @RequestParam String sessionId,
-            @Parameter(description = "用户ID") @RequestParam Long userId,
+            HttpServletRequest httpRequest,
             @Parameter(description = "会话类型：rag或chat") @RequestParam String type,
             @Parameter(description = "消息索引列表") @RequestParam List<Integer> messageIndices) {
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        if (userId == null) {
+            return Result.error("未登录或登录已过期");
+        }
+        if (!"rag".equals(type) && !"chat".equals(type)) {
+            return Result.error("type参数必须为rag或chat");
+        }
+        if (messageIndices != null && messageIndices.size() > 100) {
+            return Result.error("删除消息数量不能超过100条");
+        }
         return saaService.deleteMessages(sessionId, userId, type, messageIndices);
     }
 
     @GetMapping("/usage")
     @Operation(summary = "获取使用次数", description = "获取用户今日AI功能使用次数")
     public Result<Map<String, Object>> getUsage(
-            @Parameter(description = "用户ID") @RequestParam Long userId,
+            HttpServletRequest httpRequest,
             @Parameter(description = "功能类型：chat或rag") @RequestParam String type) {
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        if (userId == null) {
+            return Result.error("未登录或登录已过期");
+        }
+        if (!"rag".equals(type) && !"chat".equals(type)) {
+            return Result.error("type参数必须为rag或chat");
+        }
         Map<String, Object> result = new HashMap<>();
         
         boolean shouldLimit = rateLimitService.shouldRateLimit(userId);
@@ -140,7 +237,20 @@ public class SpringAiAlibabaController {
             @Parameter(description = "题目类型") @RequestParam("questionType") String questionType,
             @Parameter(description = "选项JSON") @RequestParam(value = "optionsJson", required = false) String optionsJson,
             @Parameter(description = "生成类型：answer/explanation/steps") @RequestParam("generateType") String generateType,
-            @Parameter(description = "用户ID") @RequestParam("userId") Long userId) {
+            HttpServletRequest httpRequest) {
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        if (userId == null) {
+            return Result.error("未登录或登录已过期");
+        }
+        if (questionText == null || questionText.isBlank()) {
+            return Result.error("题目内容不能为空");
+        }
+        if (questionType == null || questionType.isBlank()) {
+            return Result.error("题目类型不能为空");
+        }
+        if (generateType == null || generateType.isBlank()) {
+            return Result.error("生成类型不能为空");
+        }
         return saaService.aiSolveQuestion(questionText, questionType, optionsJson, generateType, userId);
     }
 }

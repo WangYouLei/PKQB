@@ -5,7 +5,7 @@ import { apiAiSolveQuestion } from '@/api'
 const POSITIVE_KEYWORDS = ['√', '正确', '对', '是', 'yes', 'YES', 'Yes', 'true', 'TRUE', 'True', '1', 'A', 'a']
 const NEGATIVE_KEYWORDS = ['×', '错误', '错', '否', 'no', 'NO', 'No', 'false', 'FALSE', 'False', '0', 'B', 'b']
 
-export function useQuestionEditor(userId: number) {
+export function useQuestionEditor() {
   const aiResults = ref<Record<number, { answer?: string; explanation?: string; steps?: string }>>({})
   const aiLoading = ref<Record<number, boolean>>({})
 
@@ -97,7 +97,6 @@ export function useQuestionEditor(userId: number) {
         questionType: q.questionType,
         optionsJson: q.optionsJson,
         generateType,
-        userId
       })
       if (res.code === 200 && res.data) {
         if (generateType === 'all') {

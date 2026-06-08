@@ -35,7 +35,7 @@ public interface SpringAiAlibabaService {
      * @param type 对话类型   rag或者chat
      * @return 历史对话
      */
-    Result<List<Object>> getHistory(String userId,String type);
+    Result<List<String>> getHistory(String userId,String type);
 
     /**
      * 使用ReactAgent回答问题
@@ -74,7 +74,7 @@ public interface SpringAiAlibabaService {
      * @param userId 用户ID
      * @return 添加结果
      */
-    Result<List<AiRubric>> handleRubricFile(MultipartFile file, Long userId);
+    Result<List<AiRubric>> handleRubricFile(MultipartFile file, Long userId, Integer modelType);
 
     /**
      * 上传题库文件（本地解析）

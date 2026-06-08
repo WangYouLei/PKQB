@@ -361,14 +361,17 @@ function formatContent(text: string): string {
 
 function formatTime(ts: number): string {
   const d = new Date(ts)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const hour = String(d.getHours()).padStart(2, '0')
+  const min = String(d.getMinutes()).padStart(2, '0')
+  return `${month}-${day} ${hour}:${min}`
 }
 
 async function loadSessions() {
   loadingSessions.value = true
   try {
-    const userId = String(userStore.userId || localStorage.getItem('userId') || '')
-    const res = await apiGetHistoryList(userId, 'rag')
+    const res = await apiGetHistoryList('rag')
     if (res.code === 200 && res.data) {
       sessions.value = Array.isArray(res.data) ? (res.data as string[]) : []
     }
@@ -384,8 +387,7 @@ async function selectSession(sessionId: string) {
   messages.value = []
   cancelSelectMode()
   try {
-    const userId = String(userStore.userId || localStorage.getItem('userId') || '')
-    const res = await apiGetHistoryBySessionId(sessionId, userId, 'rag')
+    const res = await apiGetHistoryBySessionId(sessionId, 'rag')
     if (res.code === 200 && res.data) {
       const list = Array.isArray(res.data) ? res.data : []
       messages.value = list.map((m) => ({
@@ -418,8 +420,7 @@ function newSessionFromLimit() {
 
 async function checkUsage() {
   try {
-    const userId = String(userStore.userId || localStorage.getItem('userId') || '')
-    const res = await apiGetUsage(userId, 'rag')
+    const res = await apiGetUsage('rag')
     if (res.code === 200 && res.data) {
       hasOwnApiKey.value = res.data.hasOwnApiKey
       remainingUsage.value = res.data.remaining
@@ -440,8 +441,7 @@ async function confirmDelete() {
   showDeleteConfirm.value = false
   
   try {
-    const userId = String(userStore.userId || localStorage.getItem('userId') || '')
-    const res = await apiDeleteHistory(sessionId, userId, 'rag')
+    const res = await apiDeleteHistory(sessionId, 'rag')
     if (res.code === 200) {
       sessions.value = sessions.value.filter(s => s !== sessionId)
       if (currentSessionId.value === sessionId) {
@@ -605,9 +605,8 @@ async function confirmDeleteMessages() {
   if (selectedMessageIndices.value.size === 0) return
   
   try {
-    const userId = String(userStore.userId || localStorage.getItem('userId') || '')
     const indices = Array.from(selectedMessageIndices.value)
-    const res = await apiDeleteMessages(currentSessionId.value!, userId, 'rag', indices)
+    const res = await apiDeleteMessages(currentSessionId.value!, 'rag', indices)
     
     if (res.code === 200) {
       messages.value = messages.value.filter((_, idx) => !selectedMessageIndices.value.has(idx))

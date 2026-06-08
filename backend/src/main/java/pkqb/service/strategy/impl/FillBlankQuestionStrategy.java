@@ -15,6 +15,7 @@ public class FillBlankQuestionStrategy implements QuestionExtractStrategy {
     
     @Override
     public boolean canHandle(String questionText, Matcher questionMatcher) {
+        if (questionText == null) return false;
         return questionText.contains("___") || questionText.contains("____")
                 || questionText.contains("（  ）") || questionText.contains("（）")
                 || questionText.contains("[]") || questionText.contains("（ ）");
@@ -22,6 +23,9 @@ public class FillBlankQuestionStrategy implements QuestionExtractStrategy {
     
     @Override
     public QuestionExtractResult extract(String questionText, Matcher questionMatcher) {
+        if (questionText == null) {
+            return null;
+        }
         log.debug("[填空题策略] 处理题目: {}", questionText);
         
         QuestionExtractResult result = new QuestionExtractResult();

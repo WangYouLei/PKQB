@@ -47,14 +47,25 @@ export interface Result<T = unknown> {
 
 // ========== AI 相关类型 ==========
 
+export interface QuestionResource {
+  id?: number
+  questionId?: number
+  type: 'question_image' | 'option_image' | 'answer_image' | 'explanation_image'
+  label?: string
+  url: string
+  mimeType?: string
+  sortOrder?: number
+}
+
 export interface QuestionItem {
   question: string
   questionType: 'single_choice' | 'multiple_choice' | 'true_false' | 'short_answer' | 'calculation'
   options: string[]
   answer: string
   explanation: string
-  calculationSteps?: string[]  // 计算题步骤
-  calculationStepsText?: string  // 编辑模式用的文本字段
+  calculationSteps?: string[]
+  calculationStepsText?: string
+  resources?: QuestionResource[]
 }
 
 export interface ChatMessage {
@@ -93,6 +104,7 @@ export interface RubricQuestion {
   answer: string
   explanation?: string
   calculationStepsJson?: string
+  resources?: QuestionResource[]
   orderIndex?: number
 }
 
@@ -110,6 +122,7 @@ export interface ApiKeyStatus {
   hasRateLimit: boolean
   mainModel?: string
   assistantModels: ModelsEntity[]
+  visionModel: ModelsEntity | null
   allModels: ModelsEntity[]
   modelCount: number
   maxModelCount: number
@@ -121,7 +134,7 @@ export interface ModelsEntity {
   id: number
   userId: number
   modelName: string
-  isMain: number
+  modelType: number  // 0=主模型，1=辅助模型，2=视觉模型
   createTime: string
   updateTime: string
 }
@@ -158,4 +171,50 @@ export interface ParsedQuestion {
   answer: string
   explanation?: string
   calculationSteps?: string[]
+}
+
+// ========== 错题本相关类型 ==========
+
+export interface WrongQuestion {
+  id: number
+  userId: number
+  questionId: number
+  rubricId: number
+  rubricTitle?: string
+  questionText: string
+  questionType: string
+  optionsJson?: string
+  answer: string
+  explanation?: string
+  calculationStepsJson?: string
+  resources?: QuestionResource[]
+  userAnswer?: string
+  wrongCount: number
+  correctCount: number
+  easeFactor: number
+  intervalDays: number
+  nextReviewDate: string
+  lastReviewTime?: string
+  masteryLevel: number  // 0=未掌握, 1=初步掌握, 2=基本掌握, 3=完全掌握
+  createTime: string
+  updateTime: string
+}
+
+export interface WrongQuestionStats {
+  totalCount: number
+  todayReviewCount: number
+  masteredCount: number
+  learningCount: number
+}
+
+// ========== 通知相关类型 ==========
+
+export interface NotificationItem {
+  id: number
+  userId: number
+  type: string
+  title: string
+  message: string
+  isRead: boolean
+  createTime: string
 }

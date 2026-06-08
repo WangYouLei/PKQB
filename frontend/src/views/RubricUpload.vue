@@ -17,10 +17,13 @@
         <span style="color:var(--accent);font-weight:500">{{ selectedFile.name }}</span>
         <button class="btn btn-sm btn-ghost" @click="selectedFile=null">移除</button>
       </div>
-      <button class="btn btn-primary" style="margin-top:16px" @click="confirmParse" :disabled="!selectedFile || parsing">
-        <span v-if="parsing" class="spinner"></span><span v-else>AI 解析题目</span>
+      <button class="btn btn-primary" style="margin-top:16px" @click="confirmParse(2)" :disabled="!selectedFile || parsing">
+        <span v-if="parsing" class="spinner"></span><span v-else>视觉模型解析</span>
       </button>
-      <button class="btn btn-secondary" style="margin-top:16px;margin-left:12px" @click="confirmParseLocal" :disabled="!selectedFile || parsing">
+      <button class="btn btn-secondary" style="margin-top:16px;margin-left:12px" @click="confirmParse(1)" :disabled="!selectedFile || parsing">
+        <span v-if="parsing" class="spinner"></span><span v-else>纯文本模型解析</span>
+      </button>
+      <button class="btn btn-secondary" style="margin-top:16px;margin-left:12px" @click="confirmParseLocal" :disabled="!selectedFile || parsingLocal">
         <span v-if="parsingLocal" class="spinner"></span><span v-else>本地解析题目</span>
       </button>
 
@@ -66,24 +69,51 @@
         </div>
         
         <!-- 题目内容 -->
-        <div v-if="!editMode" class="question-text">{{ q.question }}</div>
+        <template v-if="!editMode">
+          <div class="question-text">{{ q.question }}</div>
+          <template v-if="q.resources?.length">
+            <img v-for="img in getQuestionImages(q.resources)" :key="img.url" :src="img.url" class="question-image" />
+          </template>
+        </template>
         <div v-else class="form-group">
           <label class="form-label">题目内容</label>
           <textarea v-model="q.question" class="form-input" rows="3"></textarea>
+          <div class="image-edit-area">
+            <template v-if="getQuestionImages(q.resources).length">
+              <div v-for="img in getQuestionImages(q.resources)" :key="img.url" class="image-edit-item">
+                <img :src="img.url" class="question-image" />
+                <div class="image-edit-actions">
+                  <button class="img-action-btn replace" @click="triggerImageUpload(q, 'question_image', '')" title="替换图片">替换</button>
+                  <button class="img-action-btn delete" @click="removeResource(q, 'question_image')" title="删除图片">删除</button>
+                </div>
+              </div>
+            </template>
+            <button v-else class="img-action-btn add" @click="triggerImageUpload(q, 'question_image', '')" title="添加图片">+ 添加题目图片</button>
+          </div>
         </div>
         
         <!-- 选项 -->
         <div v-if="q.options && q.options.length" class="question-options">
           <template v-if="!editMode">
             <div v-for="(opt, oi) in q.options" :key="oi" class="option-item">
-              <span class="option-label">{{ String.fromCharCode(65 + oi) }}.</span>
               <span class="option-text">{{ opt }}</span>
+              <img v-if="getOptionImage(q.resources, String.fromCharCode(65 + oi))" :src="getOptionImage(q.resources, String.fromCharCode(65 + oi))!" class="option-image" />
             </div>
           </template>
           <template v-else>
             <div v-for="(_, oi) in q.options" :key="oi" class="option-edit-item">
               <span class="option-label">{{ String.fromCharCode(65 + oi) }}.</span>
               <input v-model="q.options![oi]" class="option-input" />
+              <div class="image-edit-area">
+                <template v-if="getOptionImage(q.resources, String.fromCharCode(65 + oi))">
+                  <img :src="getOptionImage(q.resources, String.fromCharCode(65 + oi))!" class="option-image" />
+                  <div class="image-edit-actions">
+                    <button class="img-action-btn replace" @click="triggerImageUpload(q, 'option_image', String.fromCharCode(65 + oi))" title="替换图片">替换</button>
+                    <button class="img-action-btn delete" @click="removeResource(q, 'option_image', String.fromCharCode(65 + oi))" title="删除图片">删除</button>
+                  </div>
+                </template>
+                <button v-else class="img-action-btn add" @click="triggerImageUpload(q, 'option_image', String.fromCharCode(65 + oi))" title="添加图片">+ 图片</button>
+              </div>
             </div>
           </template>
         </div>
@@ -103,6 +133,7 @@
         <!-- 答案 -->
         <div v-if="!editMode" class="question-answer">
           <strong>答案：</strong>{{ q.answer }}
+          <img v-if="getAnswerImage(q.resources)" :src="getAnswerImage(q.resources)!" class="answer-image" />
         </div>
         <div v-else class="form-group">
           <label class="form-label">答案</label>
@@ -112,6 +143,7 @@
         <!-- 解析 -->
         <div v-if="!editMode && q.explanation" class="question-explanation">
           <strong>解析：</strong>{{ q.explanation }}
+          <img v-if="getExplanationImage(q.resources)" :src="getExplanationImage(q.resources)!" class="explanation-image" />
         </div>
         <div v-else-if="editMode" class="form-group">
           <label class="form-label">解析</label>
@@ -135,7 +167,7 @@
         <div class="form-group" style="display:flex;align-items:center;justify-content:space-between">
           <label class="form-label" style="margin-bottom:0">是否公开（班级可见）</label>
           <label class="toggle">
-            <input v-model="rubricIsPrivate" type="checkbox" />
+            <input :checked="!rubricIsPrivate" @change="rubricIsPrivate = !$event.target.checked" type="checkbox" />
             <span class="toggle-slider"></span>
           </label>
         </div>
@@ -153,7 +185,7 @@
       <div class="modal-content" style="max-width:500px">
         <h3 style="font-size:18px;margin-bottom:16px">📋 已有试卷列表</h3>
         <p style="color:var(--text-muted);margin-bottom:16px;font-size:14px">
-          以下是您和班级公开的试卷，请确认是否已存在相同试卷，不要重复上传。
+          以下是您和班级公开的试卷，请确认是否已存在相同试卷，不要重复上传。如果不确定，请先查看一下
         </p>
         <div v-if="examListLoading" style="text-align:center;padding:20px;color:var(--text-muted)">
           加载中...
@@ -181,7 +213,7 @@
       <div class="modal-content">
         <h3 style="font-size:18px;margin-bottom:16px">⚠️ 确认解析</h3>
         <p style="color:var(--text-muted);margin-bottom:24px">
-          AI解析可能需要几分钟时间，请耐心等待。解析过程中请勿关闭页面。
+          将使用<strong>{{ pendingModelType === 2 ? '视觉模型' : '纯文本模型' }}</strong>解析，可能需要几分钟时间，请耐心等待。解析过程中请勿关闭页面。
         </p>
         <div style="display:flex;gap:12px">
           <button class="btn btn-secondary" @click="showParseConfirm = false">取消</button>
@@ -194,9 +226,10 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { apiAddRubricFile, apiAddRubricFileLocal, apiGetMyRubrics, apiGetPublicRubrics } from '@/api'
+import { apiAddRubricFile, apiAddRubricFileLocal, apiGetMyRubrics, apiGetPublicRubrics, apiUploadResourceImage } from '@/api'
 import { useUserStore } from '@/stores/user'
-import type { QuestionItem, RubricItem } from '@/types'
+import type { QuestionItem, QuestionResource } from '@/types'
+import { getQuestionImages, getOptionImage, getAnswerImage, getExplanationImage } from '@/composables/useQuestionResources'
 
 const userStore = useUserStore()
 
@@ -212,6 +245,7 @@ const editMode = ref(false)
 // 上传题目表单相关
 const showUploadModal = ref(false)
 const showParseConfirm = ref(false)  // AI解析确认弹窗
+const pendingModelType = ref<number>(2)  // 待解析的模型类型
 const showExamListModal = ref(false)  // 试卷列表弹窗
 const uploadLoading = ref(false)
 const rubricTitle = ref('')
@@ -245,6 +279,40 @@ function toggleEditMode() {
   editMode.value = !editMode.value
 }
 
+// 图片编辑相关
+function removeResource(q: QuestionItem, type: string, label?: string) {
+  if (!q.resources) return
+  q.resources = q.resources.filter(r => !(r.type === type && (label === undefined || r.label === label)))
+}
+
+async function uploadImageToResource(q: QuestionItem, type: string, label: string, file: File) {
+  const res = await apiUploadResourceImage(file)
+  if (res.code === 200 && res.data?.url) {
+    if (!q.resources) q.resources = []
+    // 如果同 type+label 已存在，替换
+    const existing = q.resources.find(r => r.type === type && r.label === label)
+    if (existing) {
+      existing.url = res.data.url
+    } else {
+      q.resources.push({ type: type as QuestionResource['type'], label, url: res.data.url })
+    }
+  } else {
+    alert(res.message || '图片上传失败')
+  }
+}
+
+function triggerImageUpload(q: QuestionItem, type: string, label: string) {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'image/*'
+  input.onchange = async () => {
+    const file = input.files?.[0]
+    if (!file) return
+    await uploadImageToResource(q, type, label, file)
+  }
+  input.click()
+}
+
 // 上传题目 - 显示弹窗
 function showUploadForm() {
   rubricTitle.value = ''
@@ -268,7 +336,8 @@ async function handleUploadRubric() {
       options: q.options || [],
       answer: q.answer,
       explanation: q.explanation || '',
-      calculationSteps: q.calculationSteps && q.calculationSteps.length > 0 ? q.calculationSteps : []
+      calculationSteps: q.calculationSteps && q.calculationSteps.length > 0 ? q.calculationSteps : [],
+      resources: q.resources || []
     }))
     
     const payload = {
@@ -319,7 +388,7 @@ async function handleFileParse() {
   parsing.value = true
   editMode.value = false
   try {
-    const res = await apiAddRubricFile(selectedFile.value, userStore.userId!)
+    const res = await apiAddRubricFile(selectedFile.value, pendingModelType.value)
     if (res.code === 200 && res.data) {
       // 后端直接返回数组对象，不需要再 JSON.parse
       const questionsArr = Array.isArray(res.data) ? res.data : []
@@ -346,7 +415,7 @@ async function handleFileParseLocal() {
   parsingLocal.value = true
   parseResult.value = null
   try {
-    const res = await apiAddRubricFileLocal(selectedFile.value, userStore.userId!)
+    const res = await apiAddRubricFileLocal(selectedFile.value)
     if (res.code === 200 && res.data) {
       // 后端直接返回数组对象，不需要再 JSON.parse
       const questionsArr = Array.isArray(res.data) ? res.data : []
@@ -364,7 +433,8 @@ async function handleFileParseLocal() {
   } finally { parsingLocal.value = false }
 }
 
-function confirmParse() {
+function confirmParse(modelType: number) {
+  pendingModelType.value = modelType
   // 先获取试卷列表，显示弹窗让用户确认
   examListLoading.value = true
   showExamListModal.value = true
@@ -434,11 +504,15 @@ function confirmParseLocal() {
 .calculation-steps strong { display: block; margin-bottom: 8px; }
 .step-item { padding: 4px 0; }
 .question-text { font-size: 15px; line-height: 1.7; color: var(--text-primary); margin-bottom: 12px; }
+.question-image { max-width: 100%; max-height: 300px; border-radius: 8px; margin-top: 8px; }
 .question-options { margin-bottom: 12px; }
-.option-item { display: flex; gap: 8px; padding: 6px 0; font-size: 14px; color: var(--text-primary); }
+.option-item { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; font-size: 14px; color: var(--text-primary); }
 .option-label { font-weight: 600; flex-shrink: 0; }
+.option-image { max-width: 200px; max-height: 150px; border-radius: 6px; margin-left: 4px; }
 .question-answer { padding: 8px 12px; background: rgba(34,197,94,0.05); border-radius: 8px; margin-bottom: 8px; font-size: 14px; color: #16a34a; }
+.answer-image { max-width: 100%; max-height: 200px; border-radius: 6px; margin-top: 6px; display: block; }
 .question-explanation { padding: 8px 12px; background: rgba(59,130,246,0.05); border-radius: 8px; font-size: 14px; color: #2563eb; line-height: 1.6; }
+.explanation-image { max-width: 100%; max-height: 200px; border-radius: 6px; margin-top: 6px; display: block; }
 
 /* 编辑模式样式 */
 .type-select { padding: 4px 8px; border-radius: 20px; border: 1px solid var(--border-color); background: var(--card-bg); color: var(--text-primary); font-size: 12px; cursor: pointer; }
@@ -450,15 +524,27 @@ function confirmParseLocal() {
 .option-input { flex: 1; padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--card-bg); color: var(--text-primary); font-size: 14px; }
 .option-input:focus { outline: none; border-color: var(--accent); }
 
+/* 图片编辑样式 */
+.image-edit-area { margin-top: 6px; }
+.image-edit-item { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-right: 8px; }
+.image-edit-actions { display: flex; gap: 4px; }
+.img-action-btn { padding: 2px 8px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 12px; cursor: pointer; transition: all 0.2s; background: var(--card-bg); color: var(--text-primary); }
+.img-action-btn.add { border-color: var(--accent); color: var(--accent); }
+.img-action-btn.add:hover { background: var(--accent); color: #fff; }
+.img-action-btn.replace { border-color: #f59e0b; color: #f59e0b; }
+.img-action-btn.replace:hover { background: #f59e0b; color: #fff; }
+.img-action-btn.delete { border-color: #ef4444; color: #ef4444; }
+.img-action-btn.delete:hover { background: #ef4444; color: #fff; }
+
 /* 模态框样式 */
 .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .modal-content { background: var(--card-bg); border-radius: 16px; padding: 32px; width: 90%; max-width: 420px; border: 1px solid var(--border-color); }
 .toggle { position: relative; display: inline-block; width: 48px; height: 26px; cursor: pointer; }
 .toggle input { opacity: 0; width: 0; height: 0; }
-.toggle-slider { position: absolute; inset: 0; background: var(--border-color); border-radius: 26px; transition: 0.3s; }
-.toggle-slider::before { content: ''; position: absolute; width: 20px; height: 20px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.3s; }
-.toggle input:checked + .toggle-slider { background: var(--accent); }
-.toggle input:checked + .toggle-slider::before { transform: translateX(22px); }
+.toggle-slider { position: absolute; inset: 0; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.2); border-radius: 26px; transition: 0.3s; }
+.toggle-slider::before { content: ''; position: absolute; width: 20px; height: 20px; left: 3px; bottom: 3px; background: #888; border-radius: 50%; transition: 0.3s; }
+.toggle input:checked + .toggle-slider { background: linear-gradient(135deg,#22c55e,#16a34a); border-color: transparent; }
+.toggle input:checked + .toggle-slider::before { transform: translateX(22px); background: #4ade80; }
 
 /* 试卷列表样式 */
 .exam-item { display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid var(--border-color); }

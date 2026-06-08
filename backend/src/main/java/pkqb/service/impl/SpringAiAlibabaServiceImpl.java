@@ -10,8 +10,11 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.reader.pdf.PagePdfDocumentReader;
 import org.springframework.ai.reader.tika.TikaDocumentReader;
@@ -20,26 +23,53 @@ import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.core.io.InputStreamResource;
-import org.springframework.data.redis.core.BoundListOperations;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import pkqb.common.Result;
 import pkqb.common.RateLimitConstants;
+import pkqb.config.DashScopeModelFactory;
 import pkqb.config.ReactAgentFactory;
+import pkqb.enums.ApiKeyMode;
 import pkqb.enums.RubricQuestionTypeEnum;
 import pkqb.pojo.dto.AiRubric;
+import pkqb.pojo.entity.ModelsEntity;
+import pkqb.mapper.FileMapper;
+import pkqb.pojo.entity.FileEntity;
+import pkqb.service.MinioService;
+import pkqb.service.NotificationService;
+import pkqb.service.OssService;
 import pkqb.service.RateLimitService;
 import pkqb.service.SpringAiAlibabaService;
+import pkqb.service.UserApiKeyService;
 import pkqb.service.strategy.QuestionExtractContext;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import org.apache.commons.codec.digest.DigestUtils;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDResources;
+import org.apache.pdfbox.pdmodel.graphics.PDXObject;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
+import org.apache.pdfbox.rendering.PDFRenderer;
+
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeoutException;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -53,8 +83,23 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     private final RateLimitService rateLimitService;
     private final QuestionExtractContext questionExtractContext;
     private final ReactAgentFactory reactAgentFactory;
+    private final DashScopeModelFactory dashScopeModelFactory;
+    private final MinioService minioService;
+    private final NotificationService notificationService;
+    private final UserApiKeyService userApiKeyService;
+    private final FileMapper fileMapper;
+    private final OssService ossService;
     
-    private static final ExecutorService AI_EXECUTOR = Executors.newFixedThreadPool(6);
+    private static final ExecutorService AI_EXECUTOR = new ThreadPoolExecutor(
+            6, 6, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+            new java.util.concurrent.LinkedBlockingQueue<>(100),
+            r -> {
+                Thread t = new Thread(r, "ai-executor-" + System.currentTimeMillis());
+                t.setDaemon(true);
+                return t;
+            },
+            new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy()
+    );
 
     private static final StringBuilder TYPE_DESC = new StringBuilder();
     static {
@@ -70,26 +115,16 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             题型说明：
             %s
 
-            1.必须以纯JSON数组格式返回，不要包含任何其他文字或说明。直接返回JSON数组，不要用对象包裹。
-            2.从文档内容中提取信息，文档中有的答案和解析就提取。
-            3.如果文档中没有答案、解析或计算步骤，请根据题目内容自行生成合理的答案、解析和计算步骤。
+            要求：
+            1. 从文档内容中提取信息，文档中有的答案和解析就提取。
+            2. 如果文档中没有答案、解析或计算步骤，请根据题目内容自行生成合理的答案、解析和计算步骤。
                - 单选题/多选题：根据题目内容推断正确答案，简要题目解析
                - 填空题：根据题目内容推断正确答案
                - 判断题：根据题目内容判断对错，给出解析
                - 简答题：给出合理的答案要点
                - 计算题：给出正确答案和详细的计算步骤
-           
-            JSON格式要求（直接返回数组，不要用对象包裹）：
-            [
-                {
-                    "question": "题目内容",
-                    "questionType": "题型代码",
-                    "options": ["选项A", "选项B", "选项C", "选项D"],
-                    "answer": "正确答案，多选题用逗号分隔如：A,B,C；简答题和计算题直接写答案内容；",
-                    "explanation": "题目解析，字数控制在100字以内并且在不影响表达的情况越少越好",
-                    "calculationSteps": ["步骤1", "步骤2", "步骤3"]
-                }
-            ]
+            3. explanation字段字数控制在100字以内并且在不影响表达的情况越少越好
+            4. answer字段：多选题用逗号分隔如A,B,C；简答题和计算题直接写答案内容
 
             文本内容：
             %s
@@ -125,6 +160,32 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     private static final Pattern OPTION_PATTERN_CACHE = Pattern.compile("(?i)[（(\\[]?[A-D][）)\\]]?[、.．，,]");
     private static final Pattern QUESTION_MARK_PATTERN = Pattern.compile("\\?|\\？");
     private static final Pattern NUMBER_PATTERN = Pattern.compile("(?m)^\\s*\\d+[、.．)）]");
+    private static final Pattern HEADING_PATTERN = Pattern.compile("(?m)^\\s*[#第][一二三四五六七八九十百0-9]+[章章节部分篇条]");
+    private static final Pattern CODE_BLOCK_PATTERN = Pattern.compile("```[\\s\\S]*?```");
+    private static final Pattern INLINE_CODE_PATTERN = Pattern.compile("`[^`]+`");
+
+    private static final int MAX_SESSIONS = 20;
+
+    private static final String RECORD_SESSION_SCRIPT = 
+        "local listKey = KEYS[1]\n" +
+        "local sessionId = ARGV[1]\n" +
+        "local maxSessions = tonumber(ARGV[2])\n" +
+        "local ttl = tonumber(ARGV[3])\n" +
+        "local list = redis.call('LRANGE', listKey, 0, -1)\n" +
+        "for i, v in ipairs(list) do\n" +
+        "  if v == sessionId then\n" +
+        "    redis.call('LREM', listKey, 1, v)\n" +
+        "    redis.call('LPUSH', listKey, v)\n" +
+        "    redis.call('EXPIRE', listKey, ttl)\n" +
+        "    return 1\n" +
+        "  end\n" +
+        "end\n" +
+        "if #list >= maxSessions then\n" +
+        "  redis.call('RPOP', listKey)\n" +
+        "end\n" +
+        "redis.call('LPUSH', listKey, sessionId)\n" +
+        "redis.call('EXPIRE', listKey, ttl)\n" +
+        "return 1";
 
     public SpringAiAlibabaServiceImpl(VectorStore vectorStore,
                                       RedisTemplate<String,Object> redisTemplate,
@@ -132,7 +193,13 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                                       ObjectMapper objectMapper,
                                       RateLimitService rateLimitService,
                                       QuestionExtractContext questionExtractContext,
-                                      ReactAgentFactory reactAgentFactory) {
+                                      ReactAgentFactory reactAgentFactory,
+                                      DashScopeModelFactory dashScopeModelFactory,
+                                      MinioService minioService,
+                                      NotificationService notificationService,
+                                      UserApiKeyService userApiKeyService,
+                                      FileMapper fileMapper,
+                                      OssService ossService) {
         this.vectorStore = vectorStore;
         this.redisTemplate = redisTemplate;
         this.stringRedisTemplate = stringRedisTemplate;
@@ -140,36 +207,131 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         this.rateLimitService = rateLimitService;
         this.questionExtractContext = questionExtractContext;
         this.reactAgentFactory = reactAgentFactory;
+        this.dashScopeModelFactory = dashScopeModelFactory;
+        this.minioService = minioService;
+        this.notificationService = notificationService;
+        this.userApiKeyService = userApiKeyService;
+        this.fileMapper = fileMapper;
+        this.ossService = ossService;
+    }
+
+    @jakarta.annotation.PreDestroy
+    public void shutdown() {
+        AI_EXECUTOR.shutdown();
+        try {
+            if (!AI_EXECUTOR.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                AI_EXECUTOR.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            AI_EXECUTOR.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 
     @Override
     public Result<String> addDocuments(MultipartFile file, Long userId) {
         log.info("[知识库-文件上传] 开始处理文件: {}, 大小: {} bytes, userId={}",
                 file.getOriginalFilename(), file.getSize(), userId);
+
+        String originalFilename = file.getOriginalFilename();
+        String extension = originalFilename != null && originalFilename.contains(".")
+                ? originalFilename.substring(originalFilename.lastIndexOf("."))
+                : "";
+        String objectKey = "knowledge/" + userId + "/" + UUID.randomUUID() + extension;
+        Long fileRecordId = null;
+
         try {
+            // 1. 频率限制检查
             Result<?> limitCheck = rateLimitService.checkLimit(userId, RateLimitConstants.FEATURE_KNOWLEDGE, RateLimitConstants.KNOWLEDGE_LIMIT);
             if (limitCheck != null) {
                 log.warn("[知识库-文件上传] 用户 {} 超过每日限制", userId);
                 return Result.error(limitCheck.getMessage());
             }
 
+            // 2. 文档解析
             List<Document> documents = getDocuments(file);
-            if(documents == null || documents.isEmpty()){
+            if (documents == null || documents.isEmpty()) {
                 log.error("[知识库-文件上传] 文件解析失败，未获取到文档内容");
                 return Result.error("处理文档发生异常，请从新上传");
             }
             log.info("[知识库-文件上传] 文件解析成功，共 {} 个文档", documents.size());
 
+            // 3. 提取文本内容 + 内容审核
             String content = documents.stream()
                     .map(Document::getText)
                     .collect(Collectors.joining("\n"));
-            Result<String> result = processDocumentsContent(content, "文件上传", userId);
-            if (result.getCode() == 200) {
-                rateLimitService.incrementUsage(userId, RateLimitConstants.FEATURE_KNOWLEDGE);
+            if (isRubric(content, userId)) {
+                log.info("[知识库-文件上传] 检测到题目内容，已拒绝上传");
+                return Result.error("检测到题目内容，已拒绝上传");
             }
+
+            // 4. 上传文件到 Minio
+            try {
+                minioService.upload(objectKey, file.getInputStream(), file.getContentType(), file.getSize());
+                log.info("[知识库-文件上传] 文件已上传到Minio, objectKey={}", objectKey);
+            } catch (Exception e) {
+                log.error("[知识库-文件上传] 上传文件到Minio失败: ", e);
+                return Result.error("上传文件失败，请从新上传");
+            }
+
+            // 5. 写入 file 表
+            try {
+                FileEntity fileEntity = new FileEntity();
+                fileEntity.setUserId(userId);
+                fileEntity.setFileName(originalFilename);
+                fileEntity.setMinioKey(objectKey);
+                fileEntity.setIsPrivate(false);
+                fileMapper.insert(fileEntity);
+                fileRecordId = fileEntity.getId();
+                log.info("[知识库-文件上传] 文件记录已保存, fileId={}", fileRecordId);
+            } catch (Exception e) {
+                // DB写入失败，回滚Minio文件
+                log.error("[知识库-文件上传] 保存文件记录失败，回滚Minio文件: ", e);
+                try {
+                    minioService.remove(objectKey);
+                } catch (Exception removeEx) {
+                    log.error("[知识库-文件上传] 回滚Minio文件失败, objectKey={}: ", objectKey, removeEx);
+                }
+                return Result.error("上传文件失败，请从新上传");
+            }
+
+            // 6. 写入向量库
+            Result<String> result = processDocumentsContent(content, "文件上传", userId);
+            if (result.getCode() != 200) {
+                // 向量库写入失败，回滚Minio文件和DB记录
+                log.error("[知识库-文件上传] 写入向量库失败，回滚Minio文件和DB记录");
+                try {
+                    minioService.remove(objectKey);
+                } catch (Exception removeEx) {
+                    log.error("[知识库-文件上传] 回滚Minio文件失败, objectKey={}: ", objectKey, removeEx);
+                }
+                try {
+                    fileMapper.deleteById(fileRecordId);
+                } catch (Exception dbEx) {
+                    log.error("[知识库-文件上传] 回滚DB记录失败, fileId={}: ", fileRecordId, dbEx);
+                }
+                return result;
+            }
+
+            // 7. 全部成功
+            notificationService.notifyKnowledgeUploadComplete(userId, originalFilename);
             return result;
         } catch (Exception e) {
+            // 未知异常，尝试回滚Minio和DB
             log.error("[知识库-文件上传] 上传到向量数据库时发生错误: ", e);
+            if (fileRecordId != null) {
+                try {
+                    fileMapper.deleteById(fileRecordId);
+                } catch (Exception dbEx) {
+                    log.error("[知识库-文件上传] 回滚DB记录失败, fileId={}: ", fileRecordId, dbEx);
+                }
+            }
+            try {
+                minioService.remove(objectKey);
+            } catch (Exception removeEx) {
+                log.error("[知识库-文件上传] 回滚Minio文件失败, objectKey={}: ", objectKey, removeEx);
+            }
+            notificationService.notifyKnowledgeUploadFailed(userId, originalFilename, e.getMessage());
             return Result.error("上传文件失败，请从新上传");
         }
     }
@@ -177,12 +339,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     private static final int EMBEDDING_BATCH_SIZE = 10;
 
     private Result<String> processDocumentsContent(String content, String operationType, Long userId) {
-        boolean isRubric = isRubric(content, userId);
-        if (isRubric) {
-            log.info("[知识库-{}] 检测到题目内容，已拒绝上传", operationType);
-            return Result.error("检测到题目内容，已拒绝上传");
-        }
-        log.info("[知识库-{}] 检测为知识点内容，开始分割文档", operationType);
+        log.info("[知识库-{}] 开始分割文档", operationType);
         
         List<Document> documents = Arrays.stream(content.split("\n\n+"))
                 .filter(s -> !s.trim().isEmpty())
@@ -226,6 +383,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                     "timestamp", System.currentTimeMillis()
             ));
             stringRedisTemplate.opsForList().rightPush(historyKey, userMsgJson);
+            stringRedisTemplate.expire(historyKey, 7, java.util.concurrent.TimeUnit.DAYS);
             log.info("[RAG查询] 保存用户消息到历史记录, key={}", historyKey);
         } catch (Exception e) {
             log.warn("[RAG查询] 保存用户消息失败", e);
@@ -258,7 +416,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                                     try {
                                         return Mono.just(objectMapper.writeValueAsString(reasoningContent));
                                     } catch (JsonProcessingException e) {
-                                        return Mono.just(message.getText().replace("\n", "\\n").replace("\r", "\\r"));
+                                        log.warn("[RAG查询] 序列化推理内容失败，使用原始内容", e);
+                                        return Mono.just(reasoningContent.toString().replace("\n", "\\n").replace("\r", "\\r"));
 
                                     }
                                 } else {
@@ -277,7 +436,6 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                     })
                     .doOnComplete(() -> {
                         log.info("[RAG查询] 流式查询完成，sessionId={}", sessionId);
-                        rateLimitService.incrementUsage(userId, RateLimitConstants.FEATURE_RAG);
 
                         if (aiResponse.length() > 0) {
                             try {
@@ -287,6 +445,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                                         "timestamp", System.currentTimeMillis()
                                 ));
                                 stringRedisTemplate.opsForList().rightPush(historyKey, aiMsgJson);
+                                stringRedisTemplate.expire(historyKey, 7, java.util.concurrent.TimeUnit.DAYS);
                                 log.info("[RAG查询] 保存AI回复到历史记录, key={}, length={}", historyKey, aiResponse.length());
                             } catch (Exception e) {
                                 log.warn("[RAG查询] 保存AI回复失败", e);
@@ -306,14 +465,14 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     }
 
     @Override
-    public Result<List<Object>> getHistory(String userId, String type) {
+    public Result<List<String>> getHistory(String userId, String type) {
         log.info("[历史列表] 获取历史会话列表，userId={}, type={}", userId, type);
         if (type == null || type.isEmpty() || userId == null || userId.isEmpty()) {
             log.warn("[历史列表] 参数为空，userId={}, type={}", userId, type);
             return Result.error("参数不能为空");
         }
         String listKey = "history:" + type + ":" + userId;
-        List<Object> range = redisTemplate.opsForList().range(listKey, 0, -1);
+        List<String> range = stringRedisTemplate.opsForList().range(listKey, 0, -1);
         int size = range != null ? range.size() : 0;
         log.info("[历史列表] 查询完成，key={}, 共 {} 个会话", listKey, size);
         return Result.success(range);
@@ -338,6 +497,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                     "timestamp", System.currentTimeMillis()
             ));
             stringRedisTemplate.opsForList().rightPush(historyKey, userMsgJson);
+            stringRedisTemplate.expire(historyKey, 7, java.util.concurrent.TimeUnit.DAYS);
             log.info("[AI对话] 保存用户消息到历史记录, key={}", historyKey);
         } catch (Exception e) {
             log.warn("[AI对话] 保存用户消息失败", e);
@@ -370,7 +530,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                                     try {
                                         return Mono.just(objectMapper.writeValueAsString(reasoningContent));
                                     } catch (JsonProcessingException e) {
-                                        return Mono.just(message.getText().replace("\n", "\\n").replace("\r", "\\r"));
+                                        log.warn("[AI对话] 序列化推理内容失败，使用原始内容", e);
+                                        return Mono.just(reasoningContent.toString().replace("\n", "\\n").replace("\r", "\\r"));
 
                                     }
                                 } else {
@@ -389,7 +550,6 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                     })
                     .doOnComplete(() -> {
                         log.info("[AI对话] 流式查询完成，sessionId={}", sessionId);
-                        rateLimitService.incrementUsage(userId, RateLimitConstants.FEATURE_CHAT);
                         
                         if (aiResponse.length() > 0) {
                             try {
@@ -399,6 +559,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                                         "timestamp", System.currentTimeMillis()
                                 ));
                                 stringRedisTemplate.opsForList().rightPush(historyKey, aiMsgJson);
+                                stringRedisTemplate.expire(historyKey, 7, java.util.concurrent.TimeUnit.DAYS);
                                 log.info("[AI对话] 保存AI回复到历史记录, key={}, length={}", historyKey, aiResponse.length());
                             } catch (Exception e) {
                                 log.warn("[AI对话] 保存AI回复失败", e);
@@ -418,17 +579,17 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     }
 
     private void recordSessionId(String userId, String sessionId, String type) {
-        String sessionListKey = "history:" + type + ":" + userId;
-        BoundListOperations<String, Object> boundListOps = redisTemplate.boundListOps(sessionListKey);
-        List<Object> existing = redisTemplate.opsForList().range(sessionListKey, 0, -1);
-        
-        if (existing != null && existing.size() >= 20 && !existing.contains(sessionId)) {
-            throw new RuntimeException("会话数量已达上限(20个)，请删除一个会话后再创建新会话");
-        }
-        
-        if (existing == null || !existing.contains(sessionId)) {
-            boundListOps.leftPush(sessionId);
-            log.info("[会话记录] 新会话已记录，type={}, sessionId={}", type, sessionId);
+        try {
+            String sessionListKey = "history:" + type + ":" + userId;
+            DefaultRedisScript<Long> script = new DefaultRedisScript<>(RECORD_SESSION_SCRIPT, Long.class);
+            stringRedisTemplate.execute(script, 
+                    List.of(sessionListKey), 
+                    sessionId, 
+                    String.valueOf(MAX_SESSIONS), 
+                    String.valueOf(java.util.concurrent.TimeUnit.DAYS.toSeconds(7)));
+            log.debug("[会话管理] 记录会话 {} for 用户 {}", sessionId, userId);
+        } catch (Exception e) {
+            log.error("[会话管理] 记录会话失败", e);
         }
     }
 
@@ -445,18 +606,13 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     private Result<String> parseRubricContent(String content, Long userId) {
         log.info("[题目解析] 内容长度={}", content.length());
         
-        String jsonStr;
         String truncatedContent = content.length() > RUBRIC_TRUNCATE_LENGTH ? content.substring(0, RUBRIC_TRUNCATE_LENGTH) : content;
         String prompt = getQuestionAnalysisPrompt(truncatedContent);
         
         try {
-            log.info("[题目解析] 开始调用AI解析题目");
-            String result = callReactAgentForText(prompt, userId);
-            jsonStr = result.trim();
-            if (jsonStr.startsWith("```")) {
-                jsonStr = jsonStr.replaceAll("^```(?:json)?\\s*", "").replaceAll("\\s*```$", "").trim();
-            }
-            objectMapper.readTree(jsonStr);
+            log.info("[题目解析] 开始调用AI解析题目（结构化输出）");
+            List<AiRubric> aiRubrics = callForStructuredOutput(prompt, userId);
+            String jsonStr = objectMapper.writeValueAsString(aiRubrics);
             log.info("[题目解析] AI解析完成");
             return Result.success(jsonStr);
         } catch (Exception e) {
@@ -469,7 +625,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             return Result.error("解析题目失败，请检查内容格式");
         }
         try {
-            jsonStr = objectMapper.writeValueAsString(maps);
+            String jsonStr = objectMapper.writeValueAsString(maps);
             log.info("[题目解析] 兜底解析完成");
             return Result.success(jsonStr);
         } catch (Exception ex) {
@@ -522,58 +678,331 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     }
 
     @Override
-    public Result<List<AiRubric>> handleRubricFile(MultipartFile file, Long userId) {
-        log.info("[题目文件解析-AI] 开始处理文件: {}, 大小: {} bytes, userId={}",
-                file.getOriginalFilename(), file.getSize(), userId);
+    public Result<List<AiRubric>> handleRubricFile(MultipartFile file, Long userId, Integer modelType) {
+        log.info("[题目文件解析-AI] 开始处理文件: {}, 大小: {} bytes, userId={}, modelType={}",
+                file.getOriginalFilename(), file.getSize(), userId, modelType);
         try {
             Result<?> limitCheck = rateLimitService.checkLimit(userId, RateLimitConstants.FEATURE_RUBRIC, RateLimitConstants.RUBRIC_LIMIT);
             if (limitCheck != null) {
                 return Result.error(limitCheck.getMessage());
             }
-            
+
+            if (modelType != null && modelType == 2) {
+                // 用户指定视觉模型
+                return handleRubricFileWithVision(file, userId);
+            } else if (modelType != null && modelType == 1) {
+                // 用户指定纯文本模型
+                return handleRubricFileWithText(file, userId);
+            } else {
+                // 未指定：自动选择（PDF→视觉模型，其他→纯文本）
+                String originalFilename = file.getOriginalFilename();
+                boolean isPdf = originalFilename != null && originalFilename.toLowerCase().endsWith(".pdf");
+                if (isPdf) {
+                    return handleRubricFileWithVision(file, userId);
+                } else {
+                    return handleRubricFileWithText(file, userId);
+                }
+            }
+
+        } catch (Exception e) {
+            log.error("[题目文件解析-AI] 处理文件时发生错误: ", e);
+            return Result.error("处理文件失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 使用视觉模型解析PDF文件：PDF页面渲染为图片→上传OSS→URL传给视觉模型→结构化输出+嵌入图片提取映射
+     */
+    private Result<List<AiRubric>> handleRubricFileWithVision(MultipartFile file, Long userId) {
+        try {
+            log.info("[题目文件解析-视觉] 使用视觉模型解析PDF文件");
+            byte[] fileBytes = file.getBytes();
+
+            // Step 1+2: 一次打开PDF，同时渲染页面图片和提取嵌入图片，上传OSS
+            List<String> pageImageUrls;
+            List<ExtractedImage> extractedImages;
+            try (PDDocument document = Loader.loadPDF(fileBytes)) {
+                pageImageUrls = renderPdfPagesToOss(document, userId);
+                extractedImages = extractImagesFromPdf(document, userId);
+            }
+
+            if (pageImageUrls.isEmpty()) {
+                log.warn("[题目文件解析-视觉] PDF页面渲染失败，降级到纯文本模式");
+                return handleRubricFileWithText(file, userId);
+            }
+            log.info("[题目文件解析-视觉] PDF渲染为 {} 张页面图片，提取到 {} 张嵌入图片",
+                    pageImageUrls.size(), extractedImages.size());
+
+            // Step 3: 将页面图片URL发给视觉模型，获取结构化题目
+            List<AiRubric> aiRubrics = callVisionModelForQuestions(pageImageUrls, extractedImages, userId);
+            if (aiRubrics == null || aiRubrics.isEmpty()) {
+                log.warn("[题目文件解析-视觉] 视觉模型返回为空，降级到纯文本模式");
+                return handleRubricFileWithText(file, userId);
+            }
+
+            // Step 4: 将图片编号映射为实际URL
+            mapImageReferencesToUrls(aiRubrics, extractedImages);
+
+            log.info("[题目文件解析-视觉] 解析完成，共提取 {} 道题目", aiRubrics.size());
+            notificationService.notifyRubricParseComplete(userId, "AI视觉解析");
+            return Result.success(aiRubrics);
+        } catch (Exception e) {
+            log.error("[题目文件解析-视觉] 视觉识别失败: {}，降级到纯文本模式", e.getMessage());
+            // OssService 暂无 delete 方法，已上传的 OSS 页面/嵌入图片无法清理，记录日志
+            log.warn("[题目文件解析-视觉] 降级到纯文本模式，已上传的OSS资源可能孤立，待后续清理");
+            return handleRubricFileWithText(file, userId);
+        }
+    }
+
+    /**
+     * 将PDF每页渲染为图片并上传到OSS
+     */
+    private List<String> renderPdfPagesToOss(PDDocument document, Long userId) {
+        List<String> urls = new ArrayList<>();
+        try {
+            PDFRenderer renderer = new PDFRenderer(document);
+            for (int i = 0; i < document.getNumberOfPages(); i++) {
+                BufferedImage pageImage = renderer.renderImageWithDPI(i, 150);
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                ImageIO.write(pageImage, "png", baos);
+                byte[] imageBytes = baos.toByteArray();
+
+                String objectKey = "question-image/" + userId + "/page-" + i + "-" + UUID.randomUUID() + ".png";
+                String url = ossService.upload(objectKey, imageBytes, "image/png");
+                urls.add(url);
+            }
+        } catch (Exception e) {
+            log.error("[PDF页面渲染] 渲染PDF页面失败: {}", e.getMessage());
+        }
+        return urls;
+    }
+
+    /**
+     * 调用视觉模型，传入页面图片URL列表，获取结构化题目
+     */
+    private List<AiRubric> callVisionModelForQuestions(List<String> pageImageUrls, List<ExtractedImage> extractedImages, Long userId) {
+        try {
+            // 构建图片编号提示
+            StringBuilder imageRef = new StringBuilder();
+            if (!extractedImages.isEmpty()) {
+                imageRef.append("\n\n文档中包含以下嵌入图片：\n");
+                for (ExtractedImage img : extractedImages) {
+                    imageRef.append("- 图片").append(img.index).append("\n");
+                }
+            }
+
+            String promptText = """
+                你是一个专业的题目解析专家。以下是一份试卷的每一页图片，请从中提取所有题目，输出为JSON数组。
+
+                要求：
+                1. 每道题包含：question（题目内容）、questionType（题型）、options（选项，没有则为空数组）、answer（答案）、explanation（解析）、calculationSteps（计算步骤，没有则为空数组）、resources（图片资源）
+                2. resources格式为[{"url":"图片N","type":"资源类型","label":"标签"}]，N为图片编号
+                   type必须为以下之一：
+                   - question_image：题目本身的配图
+                   - option_image：选项配图（必须同时填写label为对应选项字母，如"A"、"B"、"C"、"D"）
+                   - answer_image：答案中的配图
+                   - explanation_image：解析中的配图
+                3. 如果题目中包含图片，在question字段中用[图片N]标记图片位置，同时在resources中添加对应引用
+                4. 严格输出JSON数组，不要输出其他内容
+                """ + imageRef;
+
+            // 获取视觉模型
+            String apiKey = userApiKeyService.hasUserOwnApiKey(userId) ? userApiKeyService.getPlainApiKey(userId) : null;
+            ModelsEntity visionModel = userApiKeyService.getVisionModel(userId);
+            String modelName = visionModel != null ? visionModel.getModelName() : null;
+            ChatModel chatModel = dashScopeModelFactory.createVisionChatModel(
+                    apiKey != null ? apiKey : dashScopeModelFactory.getDefaultApiKey(),
+                    modelName);
+
+            // 构建包含多张图片的请求
+            var userSpec = ChatClient.builder(chatModel).build().prompt()
+                    .user(u -> {
+                        u.text(promptText);
+                        for (String url : pageImageUrls) {
+                            try {
+                                u.media(org.springframework.util.MimeTypeUtils.IMAGE_PNG,
+                                        new org.springframework.core.io.UrlResource(url));
+                            } catch (java.net.MalformedURLException e) {
+                                log.warn("[题目文件解析-视觉] 图片URL格式错误: {}", url);
+                            }
+                        }
+                    });
+
+            String response = userSpec.call().content();
+            log.info("[题目文件解析-视觉] 视觉模型返回，响应长度: {}", response != null ? response.length() : 0);
+
+            // 解析JSON响应
+            if (response == null || response.isEmpty()) return null;
+            String jsonStr = response.trim();
+            if (jsonStr.startsWith("```")) {
+                jsonStr = jsonStr.replaceAll("^```(?:json)?\\s*", "").replaceAll("\\s*```$", "").trim();
+            }
+            int start = jsonStr.indexOf("[");
+            int end = jsonStr.lastIndexOf("]");
+            if (start >= 0 && end > start) {
+                jsonStr = jsonStr.substring(start, end + 1);
+            }
+            return objectMapper.readValue(jsonStr,
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, AiRubric.class));
+        } catch (Exception e) {
+            log.error("[题目文件解析-视觉] 视觉模型调用失败: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private static class ExtractedImage {
+        int index;
+        String url;
+        int pageIndex;
+
+        ExtractedImage(int index, String url, int pageIndex) {
+            this.index = index;
+            this.url = url;
+            this.pageIndex = pageIndex;
+        }
+    }
+
+    private List<ExtractedImage> extractImagesFromPdf(PDDocument document, Long userId) {
+        List<ExtractedImage> images = new ArrayList<>();
+        Set<String> uploadedHashes = new HashSet<>();
+        int pageIndex = 0;
+        for (PDPage page : document.getPages()) {
+            PDResources resources = page.getResources();
+            if (resources == null) { pageIndex++; continue; }
+
+            for (COSName name : resources.getXObjectNames()) {
+                try {
+                    PDXObject xobject = resources.getXObject(name);
+                    if (xobject instanceof PDImageXObject pdImage) {
+                        BufferedImage bufferedImage = pdImage.getImage();
+                        if (bufferedImage.getWidth() < 50 || bufferedImage.getHeight() < 50) continue;
+
+                        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                        ImageIO.write(bufferedImage, "png", baos);
+                        byte[] imageBytes = baos.toByteArray();
+
+                        String hash = DigestUtils.md5Hex(imageBytes);
+                        if (uploadedHashes.contains(hash)) continue;
+                        uploadedHashes.add(hash);
+
+                        // 上传到OSS（公网可达，供DashScope模型和前端访问）
+                        String objectKey = "question-image/" + userId + "/" + UUID.randomUUID() + ".png";
+                        String url = ossService.upload(objectKey, imageBytes, "image/png");
+
+                        // 临时用-1作为index，排序后重新编号
+                        images.add(new ExtractedImage(-1, url, pageIndex));
+                    }
+                } catch (Exception e) {
+                    log.debug("[PDF图片提取] 跳过无法处理的图片: {}", e.getMessage());
+                }
+            }
+            pageIndex++;
+        }
+
+        // 按页码排序，同页内保持PDFBox遍历顺序
+        images.sort(Comparator.comparingInt(a -> a.pageIndex));
+
+        // 重新编号
+        for (int i = 0; i < images.size(); i++) {
+            images.get(i).index = i;
+        }
+
+        return images;
+    }
+
+    private void mapImageReferencesToUrls(List<AiRubric> aiRubrics, List<ExtractedImage> extractedImages) {
+        Map<Integer, String> indexToUrl = new HashMap<>();
+        for (ExtractedImage img : extractedImages) {
+            indexToUrl.put(img.index, img.url);
+        }
+
+        for (AiRubric rubric : aiRubrics) {
+            if (rubric.getResources() == null) continue;
+            for (AiRubric.AiResource resource : rubric.getResources()) {
+                // 规范化 type 字段：AI 可能返回非标准的 type，统一为前端期望的值
+                if (resource.getType() != null) {
+                    String type = resource.getType().toLowerCase();
+                    if ("image".equals(type) || "img".equals(type)) {
+                        // 未分类的图片，根据 label 推断类型
+                        if (resource.getLabel() != null && resource.getLabel().matches("^[A-Da-d]$")) {
+                            resource.setType("option_image");
+                            resource.setLabel(resource.getLabel().toUpperCase());
+                        } else {
+                            resource.setType("question_image");
+                        }
+                    } else {
+                        // 确保已知类型的小写变体也能匹配，统一为标准命名
+                        switch (type) {
+                            case "question_image": resource.setType("question_image"); break;
+                            case "option_image": resource.setType("option_image"); break;
+                            case "answer_image": resource.setType("answer_image"); break;
+                            case "explanation_image": resource.setType("explanation_image"); break;
+                            default: resource.setType("question_image"); break;
+                        }
+                    }
+                }
+
+                if (resource.getUrl() != null && resource.getUrl().startsWith("图片")) {
+                    try {
+                        String numStr = resource.getUrl().replace("图片", "").trim();
+                        int idx = Integer.parseInt(numStr);
+                        String actualUrl = indexToUrl.get(idx);
+                        if (actualUrl != null) {
+                            resource.setUrl(actualUrl);
+                        }
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 使用纯文本提取流程（原有逻辑）
+     */
+    private Result<List<AiRubric>> handleRubricFileWithText(MultipartFile file, Long userId) {
+        try {
             List<Document> documents = getDocuments(file);
             if (documents == null || documents.isEmpty()) {
                 log.error("[题目文件解析-AI] 文件解析失败，未获取到文档内容");
                 return Result.error("文件解析失败");
             }
-            
+
             String content = documents.stream()
                     .map(Document::getText)
                     .collect(Collectors.joining("\n"));
-            
+
             log.info("[题目文件解析-AI] 文件解析成功，内容长度: {}", content.length());
-            
+
+            // 截断内容，防止超出模型 token 限制
+            if (content.length() > RUBRIC_TRUNCATE_LENGTH) {
+                log.info("[题目文件解析-文本] 内容过长({}字符)，截断到{}字符", content.length(), RUBRIC_TRUNCATE_LENGTH);
+                content = content.substring(0, RUBRIC_TRUNCATE_LENGTH);
+            }
+
             String prompt = getQuestionAnalysisPrompt(content);
-            
+
             try {
-                log.info("[题目文件解析-AI] 开始调用AI解析题目");
-                String resultText = callReactAgentForText(prompt, userId);
-                
-                String jsonStr = resultText.trim();
-                if (jsonStr.startsWith("```")) {
-                    jsonStr = jsonStr.replaceAll("^```(?:json)?\\s*", "").replaceAll("\\s*```$", "").trim();
-                }
-                
-                List<AiRubric> aiRubrics = objectMapper.readValue(jsonStr, 
-                        objectMapper.getTypeFactory().constructCollectionType(List.class, AiRubric.class));
-                
+                log.info("[题目文件解析-AI] 开始调用AI解析题目（结构化输出）");
+                List<AiRubric> aiRubrics = callForStructuredOutput(prompt, userId);
+
                 log.info("[题目文件解析-AI] AI解析完成");
-                
+
                 if (aiRubrics == null || aiRubrics.isEmpty()) {
                     log.warn("[题目文件解析-AI] AI返回为空");
                     return Result.error("AI解析结果为空");
                 }
-                
+
                 log.info("[题目文件解析-AI] 解析完成，共提取 {} 道题目", aiRubrics.size());
-                rateLimitService.incrementUsage(userId, RateLimitConstants.FEATURE_RUBRIC);
+                notificationService.notifyRubricParseComplete(userId, "AI文本解析");
                 return Result.success(aiRubrics);
             } catch (Exception e) {
                 log.error("[题目文件解析-AI] AI解析失败: {}", e.getMessage(), e);
+                notificationService.notifyRubricParseFailed(userId, e.getMessage());
                 return Result.error("AI解析失败，可能原因：题目数量过多等，可以尝试减少题目数量或者使用\"本地解析题目\"功能");
             }
-            
         } catch (Exception e) {
-            log.error("[题目文件解析-AI] 处理文件时发生错误: ", e);
+            log.error("[题目文件解析-AI] 纯文本处理失败: ", e);
             return Result.error("处理文件失败: " + e.getMessage());
         }
     }
@@ -608,10 +1037,9 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                     return Result.error("解析题目失败，请检查文件内容格式");
                 }
                 
-                @SuppressWarnings("unchecked")
-                List<AiRubric> aiRubrics = (List<AiRubric>) (List<?>) maps;
+                List<AiRubric> aiRubrics = objectMapper.convertValue(maps,
+                        objectMapper.getTypeFactory().constructCollectionType(List.class, AiRubric.class));
                 log.info("[题目文件解析-本地] 本地解析完成，共 {} 道题目", aiRubrics.size());
-                rateLimitService.incrementUsage(userId, RateLimitConstants.FEATURE_RUBRIC);
                 return Result.success(aiRubrics);
             } catch (Exception e) {
                 log.error("[题目文件解析-本地] 本地解析失败: {}", e.getMessage(), e);
@@ -639,7 +1067,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         try {
             // 1. 从历史列表中移除会话ID
             String listKey = "history:" + type + ":" + userId;
-            Boolean removed = redisTemplate.opsForList().remove(listKey, 1, sessionId) > 0;
+            Long removedCount = stringRedisTemplate.opsForList().remove(listKey, 1, sessionId);
+            boolean removed = removedCount != null && removedCount > 0;
             
             // 2. 删除会话详细数据
             String sessionKey = "spring_ai_alibaba_chat_memory:history:" + type + ":" + userId + ":" + sessionId;
@@ -752,7 +1181,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                             }
                         }
                     })
-                    .blockLast();*/
+                    .blockLast(Duration.ofSeconds(120));*/
             
             log.info("[AI解答] 生成完成，generateType={}", generateType);
             return Result.success(result.toString());
@@ -963,7 +1392,18 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                 }, AI_EXECUTOR);
             }
             
-            CompletableFuture.allOf(answerFuture, explanationFuture, stepsFuture).join();
+            try {
+                CompletableFuture.allOf(answerFuture, explanationFuture, stepsFuture).get(120, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (TimeoutException e) {
+                log.error("[AI解题] 并行解题超时", e);
+                throw new RuntimeException("AI解题超时，请稍后重试");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("AI解题被中断");
+            } catch (ExecutionException e) {
+                log.error("[AI解题] 并行解题执行异常", e);
+                throw new RuntimeException("AI解题执行失败: " + e.getCause().getMessage());
+            }
             
             Map<String, String> results = new HashMap<>();
             results.put("answer", answerFuture.get());
@@ -1058,7 +1498,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                             result.append(message.getText());
                         }
                     })
-                    .blockLast();
+                    .blockLast(Duration.ofSeconds(120));
             
             return result.toString();
         } catch (Exception e) {
@@ -1101,7 +1541,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                             result.append(message.getText());
                         }
                     })
-                    .blockLast();*/
+                    .blockLast(Duration.ofSeconds(120));*/
             
             return result.toString();
         } catch (Exception e) {
@@ -1309,7 +1749,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             noteScore += countMatches(sample, conn) * 5;
         }
 
-        int headingPattern = countMatches(sample, "(?m)^\\s*[#第][一二三四五六七八九十百0-9]+[章章节部分篇条]");
+        int headingPattern = countMatches(sample, HEADING_PATTERN);
         if (headingPattern >= 2) {noteScore += 15;}
 
         return questionScore > noteScore;
@@ -1348,13 +1788,41 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                             result.append(message.getText());
                         }
                     })
-                    .blockLast();
+                    .blockLast(Duration.ofSeconds(120));
             
             return result.toString();
         } catch (Exception e) {
             log.error("[ReactAgent文本调用] 调用失败: ", e);
             throw new RuntimeException("AI调用失败: " + e.getMessage(), e);
         }
+    }
+
+    private List<AiRubric> callForStructuredOutput(String prompt, Long userId) {
+        ChatModel chatModel;
+        if (userId != null && userApiKeyService.getApiKeyMode(userId) == ApiKeyMode.PERSONAL) {
+            String apiKey = userApiKeyService.getPlainApiKey(userId);
+            ModelsEntity mainModel = userApiKeyService.getMainModel(userId);
+            String modelName = mainModel != null ? mainModel.getModelName() : null;
+            chatModel = dashScopeModelFactory.createChatModel(apiKey, modelName);
+        } else {
+            chatModel = dashScopeModelFactory.createLocalChatModel();
+        }
+        ChatClient chatClient = ChatClient.builder(chatModel).build();
+
+        BeanOutputConverter<List<AiRubric>> converter = new BeanOutputConverter<>(
+                new ParameterizedTypeReference<>() {});
+
+        String content = chatClient.prompt()
+                .user(prompt + "\n\n" + converter.getFormat())
+                .call()
+                .content();
+
+        String jsonStr = content.trim();
+        if (jsonStr.startsWith("```")) {
+            jsonStr = jsonStr.replaceAll("^```(?:json)?\\s*", "").replaceAll("\\s*```$", "").trim();
+        }
+
+        return converter.convert(jsonStr);
     }
 
     private boolean isApiKeyOrModelError(Throwable e) {
@@ -1364,15 +1832,18 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             message = e.getClass().getSimpleName();
         }
         String lowerMessage = message.toLowerCase();
-        return lowerMessage.contains("api key") ||
-               lowerMessage.contains("apikey") ||
-               lowerMessage.contains("invalid") ||
-               lowerMessage.contains("unauthorized") ||
-               lowerMessage.contains("401") ||
-               lowerMessage.contains("403") ||
-               lowerMessage.contains("model") && lowerMessage.contains("not found") ||
-               lowerMessage.contains("model") && lowerMessage.contains("invalid") ||
-               lowerMessage.contains("access denied") ||
-               lowerMessage.contains("authentication");
+        return lowerMessage.contains("invalid api") 
+                || lowerMessage.contains("invalid api-key")
+                || lowerMessage.contains("invalid apikey")
+                || lowerMessage.contains("invalid key")
+                || lowerMessage.contains("api key") && lowerMessage.contains("invalid")
+                || lowerMessage.contains("authentication")
+                || lowerMessage.contains("unauthorized")
+                || lowerMessage.contains("401")
+                || lowerMessage.contains("403")
+                || lowerMessage.contains("model") && lowerMessage.contains("not found")
+                || lowerMessage.contains("model") && lowerMessage.contains("does not exist")
+                || lowerMessage.contains("quota")
+                || lowerMessage.contains("rate limit");
     }
 }

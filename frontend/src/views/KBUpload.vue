@@ -34,9 +34,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { apiAddDocumentsFile } from '@/api'
-import { useUserStore } from '@/stores/user'
-
-const userStore = useUserStore()
 
 const selectedFile = ref<File|null>(null)
 const dragOver = ref(false)
@@ -58,7 +55,7 @@ async function handleFileUpload() {
   if (!selectedFile.value) return
   uploading.value = true
   try {
-    const res = await apiAddDocumentsFile(selectedFile.value, userStore.userId!)
+    const res = await apiAddDocumentsFile(selectedFile.value)
     uploadResult.value = { success: res.code === 200, message: res.message || (res.code === 200 ? '上传成功' : '上传失败') }
     if (res.code === 200) selectedFile.value = null
   } catch (e: unknown) {

@@ -232,6 +232,7 @@
               <ul>
                 <li><strong>主模型</strong>：用于所有单模型操作（如AI对话、知识库问答等），并负责整合辅助模型的回答</li>
                 <li><strong>辅助模型</strong>：在AI解答功能中，辅助模型会并行回答问题，然后由主模型综合判断并输出最优答案</li>
+                <li><strong>视觉模型</strong>：用于上传题目时的图片识别和PDF解析，支持文字和图片同时理解</li>
                 <li><strong>设计原因</strong>：不同模型有各自的优势领域，多模型协作可以获得更全面、更准确的答案</li>
               </ul>
             </div>
@@ -245,6 +246,13 @@
               <div class="model-name">{{ mainModel.modelName }}</div>
               <div class="model-actions">
                 <span class="model-status">用于所有单模型操作</span>
+                <button class="btn btn-sm btn-outline" @click="handleEditModel(mainModel)" title="修改模型名称">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                  </svg>
+                  修改
+                </button>
               </div>
             </div>
             
@@ -253,6 +261,13 @@
               <div class="model-badge assistant">辅助模型</div>
               <div class="model-name">{{ model.modelName }}</div>
               <div class="model-actions">
+                <button class="btn btn-sm btn-outline" @click="handleEditModel(model)" title="修改模型名称">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                  </svg>
+                  修改
+                </button>
                 <button class="btn btn-sm btn-outline" @click="handleSetMainModel(model.id)" title="设为主模型">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
@@ -271,30 +286,62 @@
                 </button>
               </div>
             </div>
+
+            <!-- 视觉模型 -->
+            <div class="model-item vision-model" v-if="visionModel">
+              <div class="model-badge vision">视觉</div>
+              <div class="model-name">{{ visionModel.modelName }}</div>
+              <div class="model-actions">
+                <span class="model-status">用于图片识别和PDF解析</span>
+                <button class="btn btn-sm btn-outline" @click="handleEditModel(visionModel)" title="修改模型名称">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                  </svg>
+                  修改
+                </button>
+                <button class="btn btn-sm btn-danger-outline" @click="handleDeleteModel(visionModel.id)" :disabled="deletingModelId === visionModel.id" title="删除模型">
+                  <svg v-if="deletingModelId === visionModel.id" class="spinner" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31.4 31.4" stroke-linecap="round"/>
+                  </svg>
+                  <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                  </svg>
+                  删除
+                </button>
+              </div>
+            </div>
           </div>
           
           <!-- 添加模型 -->
-          <div class="add-model-section" v-if="canAddModel">
+          <div class="add-model-section" v-if="canAddMainModel || canAddAssistantModel || canAddVisionModel">
             <div class="add-model-form">
               <input 
                 v-model="newModelName" 
                 type="text" 
-                class="form-input" 
+                class="form-input add-model-input" 
                 placeholder="请输入模型名称，如 qwen-plus、qwen-turbo"
               />
-              <label class="checkbox-label">
-                <input type="checkbox" v-model="newModelIsMain" />
-                <span>设为主模型</span>
-              </label>
-              <button class="btn btn-primary btn-sm" @click="handleAddModel" :disabled="savingModel || !newModelName.trim()">
-                <svg v-if="savingModel" class="spinner" viewBox="0 0 24 24">
-                  <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31.4 31.4" stroke-linecap="round"/>
-                </svg>
-                {{ savingModel ? '添加中...' : '添加模型' }}
-              </button>
+              <div class="add-model-options">
+                <label class="checkbox-label" :class="{ disabled: !canAddMainModel }">
+                  <input type="checkbox" v-model="newModelIsMain" :disabled="!canAddMainModel" @change="newModelIsVision = false" />
+                  <span>设为主模型</span>
+                </label>
+                <label class="checkbox-label" :class="{ disabled: !canAddVisionModel }">
+                  <input type="checkbox" v-model="newModelIsVision" :disabled="!canAddVisionModel" @change="newModelIsMain = false" />
+                  <span>视觉模型</span>
+                </label>
+                <button class="btn btn-primary btn-sm" @click="handleAddModel" :disabled="savingModel || !newModelName.trim()">
+                  <svg v-if="savingModel" class="spinner" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31.4 31.4" stroke-linecap="round"/>
+                  </svg>
+                  {{ savingModel ? '添加中...' : '添加模型' }}
+                </button>
+              </div>
             </div>
             <p class="input-hint">
-              您可以在 <a href="https://bailian.console.aliyun.com/" target="_blank" rel="noopener">阿里云百炼控制台</a> 获取模型名称
+              不勾选则默认为辅助模型。您可以在 <a href="https://bailian.console.aliyun.com/" target="_blank" rel="noopener">阿里云百炼控制台</a> 获取模型名称
             </p>
           </div>
           
@@ -333,7 +380,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useUserStore } from '@/stores/user'
 import { apiGetApiKeyStatus, apiSaveApiKey, apiDeleteApiKey, apiAddModel, apiDeleteModel, apiSetMainModel, apiGetAvatarUploadPath, apiUpdateAvatar, apiUpdateUsername, apiUpdatePassword } from '@/api'
-import type { ApiKeyStatus } from '@/types'
+import type { ApiKeyStatus, ModelsEntity } from '@/types'
 
 const userStore = useUserStore()
 const status = ref<ApiKeyStatus | null>(null)
@@ -346,6 +393,7 @@ const fileInput = ref<HTMLInputElement | null>(null)
 
 const newModelName = ref('')
 const newModelIsMain = ref(false)
+const newModelIsVision = ref(false)
 const savingModel = ref(false)
 const deletingModelId = ref<number | null>(null)
 
@@ -360,12 +408,17 @@ const showOldPassword = ref(false)
 const showNewPassword = ref(false)
 const savingPassword = ref(false)
 
-const mainModel = computed(() => status.value?.allModels?.find(m => m.isMain === 1))
-const assistantModels = computed(() => status.value?.allModels?.filter(m => m.isMain === 0) || [])
-const canAddModel = computed(() => status.value?.canAddModel ?? false)
+const mainModel = computed(() => status.value?.allModels?.find(m => m.modelType === 0))
+const assistantModels = computed(() => status.value?.allModels?.filter(m => m.modelType === 1) || [])
+const visionModel = computed(() => status.value?.allModels?.find(m => m.modelType === 2) || null)
 const modelCount = computed(() => status.value?.modelCount ?? 0)
-const maxModelCount = computed(() => status.value?.maxModelCount ?? 3)
+const maxModelCount = computed(() => status.value?.maxModelCount ?? 4)
 const supportsMultiModel = computed(() => status.value?.supportsMultiModel ?? false)
+
+// 按类型判断是否还能添加
+const canAddMainModel = computed(() => !mainModel.value)
+const canAddAssistantModel = computed(() => assistantModels.value.length < 2)
+const canAddVisionModel = computed(() => !visionModel.value)
 
 onMounted(async () => {
   await loadStatus()
@@ -374,7 +427,7 @@ onMounted(async () => {
 async function loadStatus() {
   if (!userStore.userId) return
   try {
-    const res = await apiGetApiKeyStatus(userStore.userId)
+    const res = await apiGetApiKeyStatus()
     if (res.code === 200) {
       status.value = res.data
       if (res.data?.hasOwnApiKey) {
@@ -406,18 +459,32 @@ function handleApiKeyBlur() {
 
 async function handleAddModel() {
   if (!newModelName.value.trim() || !userStore.userId) return
-  if (!canAddModel.value) {
-    alert(`最多只能添加 ${maxModelCount.value} 个模型`)
+  
+  // 从 checkbox 计算 modelType：主模型=0，视觉=2，辅助模型=1
+  const modelType = newModelIsMain.value ? 0 : newModelIsVision.value ? 2 : 1
+
+  // 前端按类型校验
+  if (modelType === 0 && !canAddMainModel.value) {
+    alert('主模型已存在，最多只能设置1个主模型')
     return
   }
-  
+  if (modelType === 1 && !canAddAssistantModel.value) {
+    alert('辅助模型已达到最大数量限制（2个）')
+    return
+  }
+  if (modelType === 2 && !canAddVisionModel.value) {
+    alert('视觉模型已存在，最多只能设置1个视觉模型')
+    return
+  }
+
   savingModel.value = true
   try {
-    const res = await apiAddModel(userStore.userId, newModelName.value.trim(), newModelIsMain.value)
+    const res = await apiAddModel(newModelName.value.trim(), modelType)
     if (res.code === 200) {
       alert('模型添加成功')
       newModelName.value = ''
       newModelIsMain.value = false
+      newModelIsVision.value = false
       await loadStatus()
     } else {
       alert(res.message || '模型添加失败')
@@ -436,7 +503,7 @@ async function handleDeleteModel(modelId: number) {
   
   deletingModelId.value = modelId
   try {
-    const res = await apiDeleteModel(userStore.userId, modelId)
+    const res = await apiDeleteModel(modelId)
     if (res.code === 200) {
       alert('模型删除成功')
       await loadStatus()
@@ -456,7 +523,7 @@ async function handleSetMainModel(modelId: number) {
   if (!confirm('确定要将此模型设为主模型吗？')) return
   
   try {
-    const res = await apiSetMainModel(userStore.userId, modelId)
+    const res = await apiSetMainModel(modelId)
     if (res.code === 200) {
       alert('主模型设置成功')
       await loadStatus()
@@ -469,6 +536,43 @@ async function handleSetMainModel(modelId: number) {
   }
 }
 
+function handleEditModel(model: ModelsEntity) {
+  const newName = prompt('请输入新的模型名称：', model.modelName)
+  if (!newName || !newName.trim() || newName.trim() === model.modelName) return
+  // 先删除旧模型，再添加新模型（保持类型不变）
+  editingModelId.value = model.id
+  editingModelType.value = model.modelType
+  editingModelNewName.value = newName.trim()
+  doEditModel()
+}
+
+const editingModelId = ref<number | null>(null)
+const editingModelType = ref<number>(0)
+const editingModelNewName = ref('')
+
+async function doEditModel() {
+  if (!userStore.userId || editingModelId.value === null) return
+  try {
+    // 删除旧模型
+    await apiDeleteModel(editingModelId.value)
+    // 添加新模型（保持原类型）
+    const res = await apiAddModel(editingModelNewName.value, editingModelType.value)
+    if (res.code === 200) {
+      alert('模型修改成功')
+      await loadStatus()
+    } else {
+      alert(res.message || '模型修改失败')
+      await loadStatus()
+    }
+  } catch (error) {
+    console.error('模型修改失败:', error)
+    alert('模型修改失败')
+    await loadStatus()
+  } finally {
+    editingModelId.value = null
+  }
+}
+
 async function handleSave() {
   if (!userStore.userId || !apiKeyInput.value.trim()) return
   if (isMaskedKey.value && apiKeyInput.value === MASKED_KEY) {
@@ -477,7 +581,7 @@ async function handleSave() {
   }
   saving.value = true
   try {
-    const res = await apiSaveApiKey(userStore.userId, apiKeyInput.value.trim())
+    const res = await apiSaveApiKey(apiKeyInput.value.trim())
     if (res.code === 200) {
       alert('API Key 保存成功！')
       apiKeyInput.value = MASKED_KEY
@@ -499,7 +603,7 @@ async function handleDelete() {
   
   deleting.value = true
   try {
-    const res = await apiDeleteApiKey(userStore.userId)
+    const res = await apiDeleteApiKey()
     if (res.code === 200) {
       alert('API Key 已删除')
       apiKeyInput.value = ''
@@ -936,6 +1040,11 @@ async function handleUpdatePassword() {
   border-color: var(--accent);
 }
 
+.model-item.vision-model {
+  background: rgba(245, 158, 11, 0.05);
+  border-color: rgba(245, 158, 11, 0.2);
+}
+
 .model-badge {
   font-size: 11px;
   font-weight: 600;
@@ -953,6 +1062,11 @@ async function handleUpdatePassword() {
 .model-badge.assistant {
   background: rgba(16, 185, 129, 0.15);
   color: #10b981;
+}
+
+.model-badge.vision {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
 }
 
 .model-name {
@@ -1004,6 +1118,16 @@ async function handleUpdatePassword() {
 
 .add-model-form {
   display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.add-model-input {
+  width: 100%;
+}
+
+.add-model-options {
+  display: flex;
   gap: 12px;
   align-items: center;
   flex-wrap: wrap;
@@ -1022,6 +1146,11 @@ async function handleUpdatePassword() {
   width: 16px;
   height: 16px;
   accent-color: var(--accent);
+}
+
+.checkbox-label.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .multi-model-status {

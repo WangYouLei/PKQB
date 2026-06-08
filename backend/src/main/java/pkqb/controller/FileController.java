@@ -34,6 +34,20 @@ public class FileController {
             @Parameter(description = "文件名") @RequestParam("file_name") String fileName,
             @Parameter(description = "是否私有") @RequestParam("is_private") boolean isPrivate
     ) {
+        // 文件类型白名单
+        String originalFilename = file.getOriginalFilename();
+        if (originalFilename == null) {
+            return Result.error("文件名不能为空");
+        }
+        String extension = originalFilename.substring(originalFilename.lastIndexOf(".") + 1).toLowerCase();
+        java.util.Set<String> allowedExtensions = java.util.Set.of(
+            "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+            "txt", "md", "csv",
+            "jpg", "jpeg", "png", "gif", "bmp", "webp"
+        );
+        if (!allowedExtensions.contains(extension)) {
+            return Result.error("不支持的文件类型: " + extension);
+        }
         FileResponse response = fileService.uploadFile(file, userId,fileName,isPrivate);
         return Result.success("上传成功", response);
     }
@@ -98,5 +112,17 @@ public class FileController {
                 .headers(headers)
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
                 .body(resource);
+    }
+
+    @DeleteMapping("/batch")
+    @Operation(summary = "批量删除文件", description = "批量删除多个文件")
+    public Result<Void> batchDeleteFiles(
+            @RequestBody List<Long> fileIds,
+            @RequestAttribute("userId") Long userId) {
+        if (fileIds == null || fileIds.size() > 100) {
+            return Result.error("批量操作数量不能超过100个");
+        }
+        int count = fileService.batchDeleteFiles(fileIds, userId);
+        return Result.success(String.format("成功删除 %d 个文件", count), null);
     }
 }

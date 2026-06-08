@@ -35,10 +35,8 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useUserStore } from '@/stores/user'
 import { apiGetHistoryList } from '@/api'
 
-const userStore = useUserStore()
 const historyType = ref<'chat' | 'rag'>('chat')
 const sessions = ref<Array<{ title: string; time: string }>>([])
 const loading = ref(false)
@@ -46,8 +44,7 @@ const loading = ref(false)
 async function loadHistory() {
   loading.value = true
   try {
-    const userId = String(userStore.userId || localStorage.getItem('userId') || '')
-    const res = await apiGetHistoryList(userId, historyType.value)
+    const res = await apiGetHistoryList(historyType.value)
     if (res.code === 200 && res.data) {
       const list = Array.isArray(res.data) ? res.data : []
       sessions.value = list.map((item, idx) => ({

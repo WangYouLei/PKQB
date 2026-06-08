@@ -17,6 +17,7 @@ const router = createRouter({
         { path: 'kb-upload', name: 'KBUpload', component: () => import('@/views/KBUpload.vue') },
         { path: 'rubric-upload', name: 'RubricUpload', component: () => import('@/views/RubricUpload.vue') },
         { path: 'settings', name: 'Settings', component: () => import('@/views/Settings.vue') },
+        { path: 'wrong-question', name: 'WrongQuestionBook', component: () => import('@/views/WrongQuestionBook.vue') },
       ],
     },
   ],

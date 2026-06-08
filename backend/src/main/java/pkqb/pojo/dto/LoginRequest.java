@@ -2,6 +2,7 @@ package pkqb.pojo.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 /**
@@ -17,6 +18,7 @@ public class LoginRequest {
     private String studentNo;
 
     @NotBlank(message = "密码不能为空")
+    @Size(max = 128, message = "密码长度不能超过128个字符")
     @Schema(description = "密码", example = "123456")
     private String password;
 }

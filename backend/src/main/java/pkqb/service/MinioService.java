@@ -13,6 +13,8 @@ import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
 import java.io.ByteArrayOutputStream;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 
 @Slf4j
 @Service
@@ -23,6 +25,9 @@ public class MinioService {
 
     @Value("${minio.bucket-name}")
     private String bucketName;
+
+    @Value("${minio.endpoint}")
+    private String endpoint;
 
     public void ensureBucketExists() {
         try {
@@ -68,22 +73,31 @@ public class MinioService {
     public byte[] getFile(String objectKey) {
         try {
             ensureBucketExists();
-            InputStream stream = minioClient.getObject(
+            try (InputStream stream = minioClient.getObject(
                     GetObjectArgs.builder()
                             .bucket(bucketName)
                             .object(objectKey)
                             .build());
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buf = new byte[8192];
-            int len;
-            while ((len = stream.read(buf)) > 0) {
-                out.write(buf, 0, len);
+                 ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+                byte[] buf = new byte[8192];
+                int len;
+                while ((len = stream.read(buf)) > 0) {
+                    out.write(buf, 0, len);
+                }
+                return out.toByteArray();
             }
-            out.close();
-            stream.close();
-            return out.toByteArray();
         } catch (Exception e) {
             throw new RuntimeException("获取文件失败: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * 获取文件的访问URL
+     */
+    public String getFileUrl(String objectKey) {
+        String baseEndpoint = endpoint.replaceAll("/+$", "");
+        String encodedKey = URLEncoder.encode(objectKey, StandardCharsets.UTF_8)
+                .replace("%2F", "/"); // 保留路径分隔符
+        return baseEndpoint + "/" + bucketName + "/" + encodedKey;
     }
 }

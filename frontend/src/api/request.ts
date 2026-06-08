@@ -56,8 +56,8 @@ async function put<T = unknown>(url: string, data?: unknown, params?: Record<str
   return res.data
 }
 
-async function del<T = unknown>(url: string, params?: Record<string, unknown>) {
-  const res = await request.delete<any, AxiosResponse<Result<T>>>(url, { params })
+async function del<T = unknown>(url: string, data?: unknown, params?: Record<string, unknown>) {
+  const res = await request.delete<any, AxiosResponse<Result<T>>>(url, { data, params })
   return res.data
 }
 

@@ -18,38 +18,30 @@ spring:
     time-zone: Asia/Shanghai
   servlet:
     multipart:
-      # 最大文件大小   springboot默认是10mb
       max-file-size: 8MB
-      # 最大请求大小
       max-request-size: 8MB
   ai:
-    # 重试配置  失败后，再重试一次（所以是2）
     retry:
       max-attempts: 2
     dashscope:
-      # 从系统的环境变量中加载api-key
       api-key: ${Spring_ai_alibaba}
       chat:
         options:
-          model: tongyi-xiaomi-analysis-pro
-          # 模型温度越高，灵活性越高，结果越随机
+          model: deepseek-v4-flash
           temperature: 0.7
-          # 系统API输出最大token数（限制较小） 选择范围为：【1,2000】
-          # 自定义：localhost-max-tokens:本地apikey的限制    personal-max-tokens：个人apikey的限制
           localhost-max-tokens: 1024
-          personal-max-tokens:  2000
+          personal-max-tokens:  8192
+      vision:
+        model: qwen3.6-plus
       embedding:
         options:
           model: text-embedding-v4
-          # 模型返回的向量的维度大小
           dimensions: 1024
-    # Redis Vector Store 配置 (Redis 8 向量搜索)
     vectorstore:
       redis:
         initialize-schema: true
         index-name: pkqb_vector_index
         prefix: "pkqb:"
-
 
 mybatis-plus:
   configuration:
@@ -61,7 +53,6 @@ mybatis-plus:
 
 jwt:
   secret: pkqb-jwt-secret-key-2026-this-is-a-long-enough-secret-for-hs256
-  # 604800000 = 7 * 24 * 60 * 60 * 1000 过期时间为7天
   expiration: 604800000
 
 app:
@@ -74,7 +65,12 @@ minio:
   secret-key: minioadmin
   bucket-name: pkqb-files
 
-# Swagger配置
+aliyun-oss:
+  endpoint: oss-cn-guangzhou.aliyuncs.com
+  access-key-id: ${AccessKey_ID}
+  access-key-secret: ${AccessKey_Secret}
+  bucket-name: pkqb-oss
+
 springdoc:
   api-docs:
     path: /v3/api-docs

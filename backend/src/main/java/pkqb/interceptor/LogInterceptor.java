@@ -53,7 +53,8 @@ public class LogInterceptor implements HandlerInterceptor {
     @Override
     public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) throws Exception {
         String requestId = (String) request.getAttribute(REQUEST_ID);
-        long startTime = (Long) request.getAttribute(START_TIME);
+        Object startTimeAttr = request.getAttribute(START_TIME);
+        long startTime = startTimeAttr instanceof Long ? (Long) startTimeAttr : System.currentTimeMillis();
         long duration = System.currentTimeMillis() - startTime;
         
         // 记录响应信息

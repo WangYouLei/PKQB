@@ -15,13 +15,17 @@ public class TrueFalseQuestionStrategy implements QuestionExtractStrategy {
     
     @Override
     public boolean canHandle(String questionText, Matcher questionMatcher) {
+        if (questionText == null) return false;
         return questionText.endsWith("√") || questionText.endsWith("×")
                 || questionText.endsWith("对") || questionText.endsWith("错")
                 || questionText.endsWith("正确") || questionText.endsWith("错误");
     }
-    
+
     @Override
     public QuestionExtractResult extract(String questionText, Matcher questionMatcher) {
+        if (questionText == null) {
+            return null;
+        }
         log.debug("[判断题策略] 处理题目: {}", questionText);
         
         QuestionExtractResult result = new QuestionExtractResult();
@@ -31,7 +35,7 @@ public class TrueFalseQuestionStrategy implements QuestionExtractStrategy {
             answer = "正确";
         }
         
-        String cleanedQuestion = questionText.replaceAll("[√×对错正确错误\\s]+$", "").trim();
+        String cleanedQuestion = questionText.replaceAll("(?:正确|错误|[√×对错\\s])+$", "").trim();
         result.setQuestion(cleanedQuestion);
         result.setAnswer(answer);
         result.setQuestionType(getQuestionType());

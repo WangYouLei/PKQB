@@ -16,6 +16,7 @@ public class MultipleChoiceQuestionStrategy implements QuestionExtractStrategy {
     
     @Override
     public boolean canHandle(String questionText, Matcher questionMatcher) {
+        if (questionText == null) return false;
         boolean isMultipleChoice = questionText.contains("(多选题)")
                 || questionText.contains("【多选题]")
                 || questionText.contains("[多选题]");
@@ -40,6 +41,9 @@ public class MultipleChoiceQuestionStrategy implements QuestionExtractStrategy {
     
     @Override
     public QuestionExtractResult extract(String questionText, Matcher questionMatcher) {
+        if (questionText == null) {
+            return null;
+        }
         log.debug("[多选题策略] 处理题目: {}", questionText);
         
         QuestionExtractResult result = new QuestionExtractResult();

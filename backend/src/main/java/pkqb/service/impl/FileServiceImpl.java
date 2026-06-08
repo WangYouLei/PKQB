@@ -101,9 +101,9 @@ public class FileServiceImpl implements FileService {
             throw new PermissionDeniedException("无权删除该文件");
         }
 
-        minioService.remove(entity.getMinioKey());
-
         fileMapper.deleteById(fileId);
+
+        minioService.remove(entity.getMinioKey());
     }
 
     @Override
@@ -199,7 +199,7 @@ public class FileServiceImpl implements FileService {
         userWrapper.in(UserEntity::getId, userIds);
         List<UserEntity> users = userMapper.selectList(userWrapper);
         return users.stream()
-                .collect(Collectors.toMap(UserEntity::getId, UserEntity::getUsername));
+                .collect(Collectors.toMap(UserEntity::getId, UserEntity::getUsername, (a, b) -> a));
     }
 
     private FileResponse toResponse(FileEntity entity) {
@@ -225,5 +225,32 @@ public class FileServiceImpl implements FileService {
         response.setCreatorName(creatorName);
         
         return response;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int batchDeleteFiles(List<Long> fileIds, Long userId) {
+        if (fileIds == null || fileIds.isEmpty()) {
+            return 0;
+        }
+
+        int successCount = 0;
+        for (Long fileId : fileIds) {
+            FileEntity entity = fileMapper.selectById(fileId);
+            if (entity == null || !entity.getUserId().equals(userId)) {
+                continue;
+            }
+            fileMapper.deleteById(fileId);
+            try {
+                minioService.remove(entity.getMinioKey());
+            } catch (Exception e) {
+                log.warn("[文件删除] Minio文件删除失败，fileId={}, minioKey={}: {}", fileId, entity.getMinioKey(), e.getMessage());
+                // 不抛异常，接受孤立文件
+            }
+            successCount++;
+        }
+
+        log.info("[批量删除文件] userId={}, 总数={}, 成功={}", userId, fileIds.size(), successCount);
+        return successCount;
     }
 }

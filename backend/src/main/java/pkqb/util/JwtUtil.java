@@ -74,6 +74,21 @@ public class JwtUtil {
     }
 
     /**
+     * 获取 Token 的剩余有效时间（毫秒）
+     * 如果 token 已过期返回 0
+     */
+    public long getTokenRemainingExpiration(String token) {
+        try {
+            Claims claims = parseToken(token);
+            Date expiration = claims.getExpiration();
+            long remaining = expiration.getTime() - System.currentTimeMillis();
+            return Math.max(0, remaining);
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /**
      * 验证 Token 是否有效
      */
     public boolean validateToken(String token) {

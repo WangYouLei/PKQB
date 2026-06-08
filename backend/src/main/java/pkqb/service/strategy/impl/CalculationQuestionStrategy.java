@@ -15,11 +15,15 @@ public class CalculationQuestionStrategy implements QuestionExtractStrategy {
     
     @Override
     public boolean canHandle(String questionText, Matcher questionMatcher) {
+        if (questionText == null) return false;
         return questionText.contains("计算题") || questionText.contains("应用题");
     }
     
     @Override
     public QuestionExtractResult extract(String questionText, Matcher questionMatcher) {
+        if (questionText == null) {
+            return null;
+        }
         log.debug("[计算题策略] 处理题目: {}", questionText);
         
         QuestionExtractResult result = new QuestionExtractResult();

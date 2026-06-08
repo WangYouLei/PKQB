@@ -22,7 +22,10 @@ public class ModelsEntity {
 
     private String modelName;
 
-    private Integer isMain;
+    /**
+     * 模型类型：0=主模型，1=辅助模型，2=视觉模型
+     */
+    private Integer modelType;
 
     private LocalDateTime createTime;
 

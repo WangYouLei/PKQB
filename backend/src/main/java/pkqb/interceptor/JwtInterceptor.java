@@ -5,6 +5,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 import pkqb.util.JwtUtil;
@@ -19,6 +20,7 @@ import pkqb.util.JwtUtil;
 public class JwtInterceptor implements HandlerInterceptor {
 
     private final JwtUtil jwtUtil;
+    private final RedisTemplate<String, String> redisTemplate;
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
@@ -33,6 +35,7 @@ public class JwtInterceptor implements HandlerInterceptor {
             response.setContentType("application/json;charset=UTF-8");
             log.info("未登录或token已过期");
             response.getWriter().write("{\"code\":401,\"message\":\"未登录或token已过期\"}");
+            response.getWriter().flush();
             return false;
         }
 
@@ -41,6 +44,17 @@ public class JwtInterceptor implements HandlerInterceptor {
             response.setContentType("application/json;charset=UTF-8");
             log.info("未登录或token已过期");
             response.getWriter().write("{\"code\":401,\"message\":\"未登录或token已过期\"}");
+            response.getWriter().flush();
+            return false;
+        }
+
+        // 检查 token 是否在黑名单中（已登出）
+        if (Boolean.TRUE.equals(redisTemplate.hasKey("token:blacklist:" + token))) {
+            response.setStatus(401);
+            response.setContentType("application/json;charset=UTF-8");
+            log.info("token已失效，请重新登录");
+            response.getWriter().write("{\"code\":401,\"message\":\"token已失效，请重新登录\"}");
+            response.getWriter().flush();
             return false;
         }
 

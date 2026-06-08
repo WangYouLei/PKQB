@@ -92,4 +92,12 @@ public interface FileService {
      * @throws pkqb.config.GlobalExceptionHandler.PermissionDeniedException 无权修改时抛出
      */
     FileResponse updateFile(Long fileId, Long userId, String fileName, Boolean isPrivate);
+
+    /**
+     * 批量删除文件
+     * @param fileIds 文件ID列表
+     * @param userId 用户ID
+     * @return 成功删除的数量
+     */
+    int batchDeleteFiles(List<Long> fileIds, Long userId);
 }

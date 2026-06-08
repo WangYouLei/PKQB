@@ -36,7 +36,7 @@ public class AuditLogServiceImpl implements AuditLogService {
             entity.setCreateTime(LocalDateTime.now());
             auditLogMapper.insert(entity);
         } catch (Exception e) {
-            log.error("保存审计日志失败: {}", e.getMessage());
+            log.error("保存审计日志失败", e);
         }
     }
 

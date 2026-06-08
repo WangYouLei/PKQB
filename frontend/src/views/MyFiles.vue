@@ -6,19 +6,27 @@
     
     <!-- 切换按钮 -->
     <div class="tab-switch">
-      <button 
-        class="tab-btn" 
-        :class="{ active: activeTab === 'files' }" 
+      <button
+        class="tab-btn"
+        :class="{ active: activeTab === 'files' }"
         @click="activeTab = 'files'"
       >
         MinIO 文件
       </button>
-      <button 
-        class="tab-btn" 
-        :class="{ active: activeTab === 'rubrics' }" 
+      <button
+        class="tab-btn"
+        :class="{ active: activeTab === 'rubrics' }"
         @click="activeTab = 'rubrics'"
       >
         我的试卷
+      </button>
+      <!-- 批量管理切换按钮 -->
+      <button
+        class="tab-btn batch-toggle-btn"
+        :class="{ active: batchMode }"
+        @click="toggleBatchMode"
+      >
+        {{ batchMode ? '退出管理' : '批量管理' }}
       </button>
     </div>
 
@@ -31,7 +39,13 @@
         <div class="empty-state-hint">点击上方按钮生成你的第一个文件</div>
       </div>
       <div v-else class="file-grid">
-        <FileCard v-for="file in files" :key="file.id" :file="file" :showEdit="true" :showDelete="true" @preview="handlePreviewFile" @download="handleDownloadFile" @remove="handleDeleteFile" @updated="handleFileUpdated" />
+        <div v-for="file in files" :key="file.id" class="batch-card-wrapper" @click="batchMode && toggleFileSelection(file.id)">
+          <!-- 批量选择复选框 -->
+          <div v-if="batchMode" class="batch-checkbox" :class="{ checked: selectedFileIds.has(file.id) }" @click.stop="toggleFileSelection(file.id)">
+            <svg v-if="selectedFileIds.has(file.id)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          <FileCard :file="file" :showEdit="!batchMode" :showDelete="!batchMode" @preview="handlePreviewFile" @download="handleDownloadFile" @remove="handleDeleteFile" @updated="handleFileUpdated" />
+        </div>
       </div>
     </div>
 
@@ -44,12 +58,17 @@
         <div class="empty-state-hint">在上传题目页面生成你的第一个试卷</div>
       </div>
       <div v-else class="rubric-list">
-        <div 
-          v-for="rubric in rubrics" 
-          :key="rubric.id" 
+        <div
+          v-for="rubric in rubrics"
+          :key="rubric.id"
           class="rubric-card"
-          @click="handleOpenRubric(rubric)"
+          :class="{ 'batch-selected': batchMode && selectedRubricIds.has(rubric.id) }"
+          @click="batchMode ? toggleRubricSelection(rubric.id) : handleOpenRubric(rubric)"
         >
+          <!-- 批量选择复选框 -->
+          <div v-if="batchMode" class="batch-checkbox rubric-checkbox" :class="{ checked: selectedRubricIds.has(rubric.id) }" @click.stop="toggleRubricSelection(rubric.id)">
+            <svg v-if="selectedRubricIds.has(rubric.id)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
           <div class="rubric-info">
             <div class="rubric-title">{{ rubric.title }}</div>
             <div class="rubric-meta">
@@ -58,7 +77,7 @@
               <span>创建时间: {{ formatDate(rubric.createTime) }}</span>
             </div>
           </div>
-          <div class="rubric-actions">
+          <div class="rubric-actions" v-if="!batchMode">
             <button class="btn btn-sm btn-secondary" @click.stop="showEditRubric(rubric)">修改</button>
             <button class="btn btn-sm btn-primary" @click.stop="handleGenerateHtml(rubric)">生成HTML</button>
             <span class="rubric-arrow">›</span>
@@ -102,6 +121,31 @@
           <button class="btn btn-danger" @click="confirmDeleteFile">确定删除</button>
         </div>
       </div>
+    </div>
+
+    <!-- 批量删除确认弹窗 -->
+    <div v-if="showBatchDeleteConfirm" class="modal-overlay confirm-overlay" @click.self="showBatchDeleteConfirm = false">
+      <div class="confirm-modal">
+        <h3>确认批量删除</h3>
+        <p>确定删除选中的 {{ batchSelectedCount }} 项吗？删除后无法恢复。</p>
+        <div class="confirm-btns">
+          <button class="btn btn-secondary" @click="showBatchDeleteConfirm = false">取消</button>
+          <button class="btn btn-danger" @click="confirmBatchDelete" :disabled="batchDeleteLoading">
+            <span v-if="batchDeleteLoading" class="spinner"></span><span v-else>确定删除</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 批量操作底栏 -->
+    <div v-if="batchMode" class="batch-action-bar">
+      <div class="batch-action-left">
+        <span class="batch-selected-count">已选择 {{ batchSelectedCount }} 项</span>
+        <button class="btn btn-ghost btn-sm" @click="clearSelection" :disabled="batchSelectedCount === 0">取消选择</button>
+      </div>
+      <button class="btn btn-danger" @click="handleBatchDelete" :disabled="batchSelectedCount === 0">
+        批量删除
+      </button>
     </div>
 
     <!-- 修改试卷弹窗 -->
@@ -166,6 +210,13 @@
         <!-- 加载状态 -->
         <div v-if="questionsLoading" class="loading-center"><div class="spinner"></div></div>
         
+        <!-- 空题目 -->
+        <div v-else-if="questions.length === 0" class="empty-state">
+          <div class="empty-state-icon">&#128220;</div>
+          <div class="empty-state-text">该试卷暂无题目</div>
+          <div class="empty-state-hint">请先为试卷添加题目</div>
+        </div>
+
         <!-- 做题模式 -->
         <div v-else-if="examMode === 'practice'" class="practice-mode">
           <!-- 进度条 -->
@@ -183,7 +234,9 @@
               <span class="question-type">{{ getTypeLabel(questions[currentQuestionIndex]?.questionType) }}</span>
             </div>
             <div class="question-text">{{ questions[currentQuestionIndex]?.questionText }}</div>
-            
+            <template v-if="questions[currentQuestionIndex]?.resources?.length">
+              <img v-for="img in getQuestionImages(questions[currentQuestionIndex].resources)" :key="img.url" :src="img.url" class="question-image" />
+            </template>
             <!-- 选择题选项 -->
             <div v-if="hasOptions(questions[currentQuestionIndex])" class="question-options">
               <div 
@@ -191,14 +244,21 @@
                 :key="oi" 
                 class="option-item"
                 :class="{ 
-                  selected: userAnswers[currentQuestionIndex] === String.fromCharCode(65 + oi),
-                  correct: showAnswer && (String.fromCharCode(65 + oi) === getCorrectAnswer(questions[currentQuestionIndex]) || opt === getCorrectAnswer(questions[currentQuestionIndex]))
+                  selected: isOptionSelected(currentQuestionIndex, String.fromCharCode(65 + oi)),
+                  correct: showAnswer && isOptionCorrect(questions[currentQuestionIndex], String.fromCharCode(65 + oi), oi),
+                  wrong: showAnswer && isOptionSelected(currentQuestionIndex, String.fromCharCode(65 + oi)) && !isOptionCorrect(questions[currentQuestionIndex], String.fromCharCode(65 + oi), oi)
                 }"
                 @click="selectAnswer(String.fromCharCode(65 + oi))"
               >
                 <span class="option-label">{{ String.fromCharCode(65 + oi) }}.</span>
                 <span class="option-text">{{ opt }}</span>
+                <img v-if="getOptionImage(questions[currentQuestionIndex]?.resources, String.fromCharCode(65 + oi))" :src="getOptionImage(questions[currentQuestionIndex]?.resources, String.fromCharCode(65 + oi))!" class="option-image" />
               </div>
+            </div>
+
+            <!-- 多选题确认按钮 -->
+            <div v-if="!showAnswer && isMultipleChoice(questions[currentQuestionIndex]) && userAnswers[currentQuestionIndex]" class="submit-answer">
+              <button class="btn btn-primary" @click="submitChoiceAnswer">确认答案</button>
             </div>
 
             <!-- 简答题/计算题 输入框 -->
@@ -272,9 +332,13 @@
                 <span class="question-type">{{ getTypeLabel(q.questionType) }}</span>
               </div>
               <div class="question-text">{{ q.questionText }}</div>
+              <template v-if="q.resources?.length">
+                <img v-for="img in getQuestionImages(q.resources)" :key="img.url" :src="img.url" class="question-image" />
+              </template>
               <div v-if="getOptions(q).length" class="question-options">
                 <div v-for="(opt, oi) in getOptions(q)" :key="oi" class="option">
                   {{ String.fromCharCode(65 + oi) }}. {{ opt }}
+                  <img v-if="getOptionImage(q.resources, String.fromCharCode(65 + oi))" :src="getOptionImage(q.resources, String.fromCharCode(65 + oi))!" class="option-image" />
                 </div>
               </div>
               <div class="question-answer">答案: {{ formatAnswer(q) }}</div>
@@ -305,6 +369,9 @@
                 <label>题目内容：</label>
                 <textarea v-model="q.questionText" class="edit-textarea" rows="3"></textarea>
               </div>
+              <template v-if="q.resources?.length">
+                <img v-for="img in getQuestionImages(q.resources)" :key="img.url" :src="img.url" class="question-image" />
+              </template>
               <div v-if="needsOptions(q.questionType)" class="edit-field">
                 <label>选项：</label>
                 <div v-for="(_, oi) in getOptionsForEdit(q)" :key="oi" class="option-edit-row">
@@ -390,16 +457,31 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, reactive, watch } from 'vue'
-import { apiGetMyFiles, apiGetMyRubrics, apiGetQuestionsByRubricId, apiUpdateRubric, apiDeleteRubric, apiGenerateRubricHtml, apiDeleteFile, apiAiSolveQuestion, apiBatchSaveQuestions } from '@/api'
-import { useUserStore } from '@/stores/user'
+import { ref, onMounted, reactive, watch, computed } from 'vue'
+import { apiGetMyFiles, apiGetMyRubrics, apiGetQuestionsByRubricId, apiUpdateRubric, apiDeleteRubric, apiGenerateRubricHtml, apiDeleteFile, apiAiSolveQuestion, apiBatchSaveQuestions, apiAddWrongQuestion, apiBatchDeleteRubrics, apiBatchDeleteFiles } from '@/api'
 import type { HtmlFileItem, RubricItem, RubricQuestion } from '@/types'
 import FileCard from '@/components/FileCard.vue'
-
-const userStore = useUserStore()
+import { getQuestionImages, getOptionImage } from '@/composables/useQuestionResources'
 
 // 标签页切换
 const activeTab = ref<'files' | 'rubrics'>('files')
+
+// 批量管理模式
+const batchMode = ref(false)
+const selectedRubricIds = ref<Set<number>>(new Set())
+const selectedFileIds = ref<Set<number>>(new Set())
+const showBatchDeleteConfirm = ref(false)
+const batchDeleteLoading = ref(false)
+
+// 当前批量选中的数量
+const batchSelectedCount = computed(() => {
+  return activeTab.value === 'files' ? selectedFileIds.value.size : selectedRubricIds.value.size
+})
+
+// 切换标签页时清空选择
+watch(activeTab, () => {
+  clearSelection()
+})
 
 // 文件相关
 const files = ref<HtmlFileItem[]>([])
@@ -439,6 +521,87 @@ function showToastMsg(title: string, message: string) {
   toastTitle.value = title
   toastMessage.value = message
   showToast.value = true
+}
+
+// ========== 批量管理相关 ==========
+
+/** 切换批量管理模式 */
+function toggleBatchMode() {
+  batchMode.value = !batchMode.value
+  if (!batchMode.value) {
+    // 退出批量模式时清空选择
+    clearSelection()
+  }
+}
+
+/** 切换试卷选中状态 */
+function toggleRubricSelection(id: number) {
+  const newSet = new Set(selectedRubricIds.value)
+  if (newSet.has(id)) {
+    newSet.delete(id)
+  } else {
+    newSet.add(id)
+  }
+  selectedRubricIds.value = newSet
+}
+
+/** 切换文件选中状态 */
+function toggleFileSelection(id: number) {
+  const newSet = new Set(selectedFileIds.value)
+  if (newSet.has(id)) {
+    newSet.delete(id)
+  } else {
+    newSet.add(id)
+  }
+  selectedFileIds.value = newSet
+}
+
+/** 清空选择 */
+function clearSelection() {
+  selectedRubricIds.value = new Set()
+  selectedFileIds.value = new Set()
+}
+
+/** 点击批量删除按钮 */
+function handleBatchDelete() {
+  showBatchDeleteConfirm.value = true
+}
+
+/** 确认批量删除 */
+async function confirmBatchDelete() {
+  batchDeleteLoading.value = true
+  try {
+    if (activeTab.value === 'files') {
+      // 批量删除文件
+      const ids = Array.from(selectedFileIds.value)
+      const res = await apiBatchDeleteFiles(ids)
+      if (res.code === 200) {
+        showToastMsg('成功', `成功删除 ${ids.length} 个文件`)
+        await loadFiles()
+      } else {
+        showToastMsg('错误', res.message || '批量删除失败')
+      }
+    } else {
+      // 批量删除试卷
+      const ids = Array.from(selectedRubricIds.value)
+      const res = await apiBatchDeleteRubrics(ids)
+      if (res.code === 200) {
+        showToastMsg('成功', `成功删除 ${ids.length} 个试卷`)
+        await loadRubrics()
+      } else {
+        showToastMsg('错误', res.message || '批量删除失败')
+      }
+    }
+    // 删除成功后退出批量模式
+    showBatchDeleteConfirm.value = false
+    batchMode.value = false
+    clearSelection()
+  } catch (e) {
+    console.error('批量删除失败', e)
+    showToastMsg('错误', '批量删除失败')
+  } finally {
+    batchDeleteLoading.value = false
+  }
 }
 
 // 考试模式
@@ -660,8 +823,7 @@ async function generateAiAll(idx: number) {
       questionText: q.questionText,
       questionType: q.questionType,
       optionsJson: q.optionsJson,
-      generateType: 'all',
-      userId: userStore.userId!
+      generateType: 'all'
     })
     if (res.code === 200) {
       const data = JSON.parse(res.data)
@@ -767,6 +929,7 @@ async function saveAllQuestions() {
       answer: q.answer,
       explanation: q.explanation,
       calculationStepsJson: q.calculationStepsJson,
+      resources: q.resources || [],
       orderIndex: idx + 1
     }))
     
@@ -912,29 +1075,89 @@ function isTextQuestion(q: RubricQuestion): boolean {
   return q.questionType === 'short_answer' || q.questionType === 'calculation'
 }
 
-// 选择答案
+// 判断是否为多选题
+function isMultipleChoice(q: RubricQuestion): boolean {
+  return q?.questionType === 'multiple_choice'
+}
+
+// 判断选项是否被用户选中（支持多选答案如 "A,C"）
+function isOptionSelected(index: number, optionLetter: string): boolean {
+  const answer = userAnswers.value[index]
+  if (!answer) return false
+  // 多选题答案格式如 "A,C"，单选/判断题格式如 "A"
+  return answer.split(',').map(s => s.trim()).includes(optionLetter)
+}
+
+// 判断选项是否为正确答案
+function isOptionCorrect(q: RubricQuestion, optionLetter: string, optionIndex: number): boolean {
+  const options = getOptions(q)
+  const correctAnswer = getCorrectAnswer(q)
+  // 匹配字母或匹配选项内容
+  return optionLetter === correctAnswer || options[optionIndex] === correctAnswer ||
+    correctAnswer.split(',').map(s => s.trim()).includes(optionLetter)
+}
+
+// 选择答案（单选直接判断，多选 toggle）
 function selectAnswer(answer: string) {
   if (showAnswer.value) return
-  userAnswers.value[currentQuestionIndex.value] = answer
-  
   const q = questions.value[currentQuestionIndex.value]
-  if (hasOptions(q)) {
-    const options = getOptions(q)
-    const selectedIndex = answer.charCodeAt(0) - 65
-    const selectedContent = options[selectedIndex]
-    const isCorrect = answer === q.answer || selectedContent === q.answer
-    if (isCorrect) {
-      setTimeout(() => {
-        if (currentQuestionIndex.value < questions.value.length - 1) {
-          currentQuestionIndex.value++
-          showAnswer.value = false
-        } else {
-          showRubricDetail.value = false
-        }
-      }, 300)
+
+  if (isMultipleChoice(q)) {
+    // 多选题：toggle 选项
+    const current = userAnswers.value[currentQuestionIndex.value] || ''
+    const selected = current ? current.split(',').map(s => s.trim()) : []
+    const idx = selected.indexOf(answer)
+    if (idx >= 0) {
+      selected.splice(idx, 1)
     } else {
-      showAnswer.value = true
+      selected.push(answer)
     }
+    // 按字母顺序排序
+    selected.sort()
+    userAnswers.value[currentQuestionIndex.value] = selected.join(',')
+    // 多选题不自动判断，需要点击确认按钮
+  } else {
+    // 单选题/判断题：直接判断
+    userAnswers.value[currentQuestionIndex.value] = answer
+    if (hasOptions(q)) {
+      const options = getOptions(q)
+      const selectedIndex = answer.charCodeAt(0) - 65
+      const selectedContent = options[selectedIndex]
+      const isCorrect = answer === q.answer || selectedContent === q.answer
+      if (isCorrect) {
+        setTimeout(() => {
+          if (currentQuestionIndex.value < questions.value.length - 1) {
+            currentQuestionIndex.value++
+            showAnswer.value = false
+          } else {
+            showRubricDetail.value = false
+          }
+        }, 300)
+      } else {
+        showAnswer.value = true
+        // 答错时自动添加到错题本
+        apiAddWrongQuestion({
+          questionId: q.id!,
+          rubricId: currentRubric.value?.id || 0,
+          userAnswer: answer
+        }).catch(e => console.error('添加错题失败', e))
+      }
+    }
+  }
+}
+
+// 多选题确认答案
+function submitChoiceAnswer() {
+  const q = questions.value[currentQuestionIndex.value]
+  if (!q || !userAnswers.value[currentQuestionIndex.value]) return
+  showAnswer.value = true
+  // 答错时自动添加到错题本
+  if (!isCurrentAnswerCorrect()) {
+    apiAddWrongQuestion({
+      questionId: q.id!,
+      rubricId: currentRubric.value?.id || 0,
+      userAnswer: userAnswers.value[currentQuestionIndex.value]
+    }).catch(e => console.error('添加错题失败', e))
   }
 }
 
@@ -946,6 +1169,14 @@ function submitAnswer() {
     userAnswers.value[currentQuestionIndex.value] = userTextAnswers.value[currentQuestionIndex.value]
   }
   showAnswer.value = true
+  // 简答题/计算题答错时自动添加到错题本
+  if (q && !isCurrentAnswerCorrect()) {
+    apiAddWrongQuestion({
+      questionId: q.id!,
+      rubricId: currentRubric.value?.id || 0,
+      userAnswer: userTextAnswers.value[currentQuestionIndex.value] || ''
+    }).catch(e => console.error('添加错题失败', e))
+  }
 }
 
 // 判断当前答案是否正确
@@ -956,12 +1187,25 @@ function isCurrentAnswerCorrect(): boolean {
   if (!userAnswer) return false
   
   if (hasOptions(q)) {
+    if (isMultipleChoice(q)) {
+      // 多选题：将用户答案和正确答案都拆分为集合比较
+      const userSet = new Set(userAnswer.split(',').map(s => s.trim().toUpperCase()))
+      const correctAnswer = q.answer || ''
+      const correctSet = new Set(correctAnswer.split(',').map(s => s.trim().toUpperCase()))
+      if (userSet.size !== correctSet.size) return false
+      for (const item of userSet) {
+        if (!correctSet.has(item)) return false
+      }
+      return true
+    }
+    // 单选题/判断题
     const options = getOptions(q)
     const selectedIndex = userAnswer.charCodeAt(0) - 65
     const selectedContent = options[selectedIndex]
     return userAnswer === q.answer || selectedContent === q.answer
   }
-  return userAnswer === q.answer
+  // 简答题/计算题：忽略首尾空格差异
+  return userAnswer.trim() === q.answer?.trim()
 }
 
 // 上一题
@@ -1064,15 +1308,19 @@ function getTypeLabel(type: string): string {
 .question-num { font-weight: 600; font-size: 17px; }
 .question-type { font-size: 12px; padding: 6px 14px; background: var(--accent-light); color: var(--accent); border-radius: 20px; border: 1px solid var(--accent-border); }
 .question-text { font-size: 18px; line-height: 1.8; margin-bottom: 24px; }
+.question-image { max-width: 100%; max-height: 300px; border-radius: 8px; margin-top: 8px; }
 
 .question-options { display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px; }
 .option-item { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border: 1px solid var(--border-glass); border-radius: 14px; cursor: pointer; transition: all 0.3s ease; color: var(--text-primary); }
 .option-item:hover { border-color: var(--accent); background: rgba(99,102,241,0.05); }
 .option-item.selected { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
 .option-item.correct { border-color: var(--success); background: var(--success-light); color: var(--success); }
+.option-item.wrong { border-color: #ef4444; background: rgba(239,68,68,0.1); color: #ef4444; }
 .option-label { font-weight: 600; width: 28px; height: 28px; border-radius: 8px; background: var(--bg-glass); display: flex; align-items: center; justify-content: center; font-size: 14px; color: var(--text-primary); }
+.option-image { max-width: 200px; max-height: 150px; border-radius: 6px; margin-left: 4px; }
 .option-item.selected .option-label { background: var(--accent); color: #fff; }
 .option-item.correct .option-label { background: var(--success); color: #fff; }
+.option-item.wrong .option-label { background: #ef4444; color: #fff; }
 
 .true-false-options { display: flex; gap: 16px; margin-bottom: 24px; }
 .tf-btn { flex: 1; padding: 18px; border: 1px solid var(--border-glass); border-radius: 14px; background: var(--card-bg); font-size: 16px; font-weight: 500; cursor: pointer; transition: all 0.3s ease; color: var(--text-primary); }
@@ -1161,4 +1409,31 @@ function getTypeLabel(type: string): string {
 .confirm-modal h3 { margin: 0 0 12px; font-size: 18px; color: var(--text-primary); }
 .confirm-modal p { margin: 0 0 20px; color: var(--text-secondary); font-size: 14px; }
 .confirm-btns { display: flex; gap: 12px; justify-content: center; }
+
+/* 批量管理按钮 */
+.batch-toggle-btn { margin-left: auto; }
+.batch-toggle-btn.active { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); border-color: transparent; box-shadow: 0 4px 16px rgba(245,158,11,0.3); }
+
+/* 批量选择复选框 */
+.batch-checkbox { width: 22px; height: 22px; border: 2px solid var(--border-glass); border-radius: 6px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s ease; flex-shrink: 0; background: var(--bg-glass); }
+.batch-checkbox:hover { border-color: var(--accent); }
+.batch-checkbox.checked { background: var(--accent-gradient); border-color: transparent; }
+.batch-checkbox svg { width: 14px; height: 14px; color: #fff; }
+
+/* 文件卡片批量选择包装器 */
+.batch-card-wrapper { position: relative; display: flex; align-items: flex-start; gap: 10px; }
+.batch-card-wrapper .batch-checkbox { margin-top: 16px; z-index: 1; }
+.batch-card-wrapper .file-card { flex: 1; }
+
+/* 试卷卡片批量选中样式 */
+.rubric-card.batch-selected { border-color: var(--accent); background: var(--accent-light); }
+.rubric-checkbox { margin-right: 12px; }
+
+/* 批量操作底栏 */
+.batch-action-bar { position: fixed; bottom: 0; left: 0; right: 0; display: flex; align-items: center; justify-content: space-between; padding: 16px 32px; background: var(--card-bg); border-top: 1px solid var(--border-glass); box-shadow: 0 -4px 24px rgba(0,0,0,0.2); z-index: 100; backdrop-filter: blur(12px); }
+.batch-action-left { display: flex; align-items: center; gap: 16px; }
+.batch-selected-count { font-size: 14px; font-weight: 500; color: var(--text-secondary); }
+.btn-ghost { background: transparent; border: 1px solid var(--border-glass); color: var(--text-secondary); }
+.btn-ghost:hover { border-color: var(--accent-border); color: var(--accent); }
+.btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>

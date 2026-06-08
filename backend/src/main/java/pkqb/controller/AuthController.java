@@ -3,10 +3,12 @@ package pkqb.controller;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -16,6 +18,9 @@ import pkqb.pojo.dto.LoginRequest;
 import pkqb.pojo.dto.LoginResponse;
 import pkqb.pojo.dto.RegisterRequest;
 import pkqb.service.UserService;
+import pkqb.util.JwtUtil;
+
+import java.util.concurrent.TimeUnit;
 
 /**
  * 认证控制器
@@ -31,9 +36,14 @@ import pkqb.service.UserService;
 public class AuthController {
 
     private final UserService userService;
+    private final JwtUtil jwtUtil;
+    private final RedisTemplate<String, String> redisTemplate;
 
     @Value("${jwt.expiration}")
     private long jwtExpiration;
+
+    @Value("${cookie.secure:false}")
+    private boolean cookieSecure;
 
     /**
      * 用户注册
@@ -61,14 +71,14 @@ public class AuthController {
     @Operation(summary = "用户登录", description = "用户登录并获取JWT令牌")
     public Result<LoginResponse> login(@Valid @RequestBody LoginRequest request, HttpServletResponse response) {
         LoginResponse loginResponse = userService.login(request);
-        
-        Cookie tokenCookie = new Cookie("token", loginResponse.getToken());
-        tokenCookie.setHttpOnly(true);
-        tokenCookie.setSecure(false);
-        tokenCookie.setPath("/");
-        tokenCookie.setMaxAge((int) (jwtExpiration / 1000));
-        response.addCookie(tokenCookie);
-        
+
+        int maxAge = (int) (jwtExpiration / 1000);
+        String cookieValue = String.format("token=%s; Path=/; Max-Age=%d; SameSite=Lax%s",
+                loginResponse.getToken(),
+                maxAge,
+                cookieSecure ? "; Secure" : "");
+        response.setHeader("Set-Cookie", cookieValue);
+
         return Result.success("登录成功", loginResponse);
     }
     
@@ -81,12 +91,34 @@ public class AuthController {
      */
     @PostMapping("/logout")
     @Operation(summary = "用户登出", description = "清除登录状态")
-    public Result<Void> logout(HttpServletResponse response) {
-        Cookie tokenCookie = new Cookie("token", null);
-        tokenCookie.setHttpOnly(true);
-        tokenCookie.setPath("/");
-        tokenCookie.setMaxAge(0);
-        response.addCookie(tokenCookie);
+    public Result<Void> logout(HttpServletRequest request, HttpServletResponse response) {
+        String token = getTokenFromRequest(request);
+
+        if (token != null && jwtUtil.validateToken(token)) {
+            long remaining = jwtUtil.getTokenRemainingExpiration(token);
+            if (remaining > 0) {
+                redisTemplate.opsForValue().set("token:blacklist:" + token, "1", remaining, TimeUnit.MILLISECONDS);
+            }
+        }
+
+        String cookieValue = "token=; Path=/; HttpOnly; Max-Age=0; SameSite=Strict";
+        response.setHeader("Set-Cookie", cookieValue);
         return Result.success("登出成功", null);
+    }
+
+    private String getTokenFromRequest(HttpServletRequest request) {
+        String token = request.getHeader("token");
+        if (token != null) {
+            return token;
+        }
+        Cookie[] cookies = request.getCookies();
+        if (cookies != null) {
+            for (Cookie cookie : cookies) {
+                if ("token".equals(cookie.getName())) {
+                    return cookie.getValue();
+                }
+            }
+        }
+        return null;
     }
 }

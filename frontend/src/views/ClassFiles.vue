@@ -100,6 +100,13 @@
         <!-- 加载状态 -->
         <div v-if="questionsLoading" class="loading-center"><div class="spinner"></div></div>
         
+        <!-- 空题目 -->
+        <div v-else-if="questions.length === 0" class="empty-state">
+          <div class="empty-state-icon">&#128220;</div>
+          <div class="empty-state-text">该试卷暂无题目</div>
+          <div class="empty-state-hint">请先为试卷添加题目</div>
+        </div>
+
         <!-- 做题模式 -->
         <div v-else-if="examMode === 'practice'" class="practice-mode">
           <!-- 进度条 -->
@@ -117,7 +124,10 @@
               <span class="question-type">{{ getTypeLabel(questions[currentQuestionIndex]?.questionType) }}</span>
             </div>
             <div class="question-text">{{ questions[currentQuestionIndex]?.questionText }}</div>
-            
+            <template v-if="questions[currentQuestionIndex]?.resources?.length">
+              <img v-for="img in getQuestionImages(questions[currentQuestionIndex].resources)" :key="img.url" :src="img.url" class="question-image" />
+            </template>
+
             <!-- 选择题选项 -->
             <div v-if="hasOptions(questions[currentQuestionIndex])" class="question-options">
               <div 
@@ -125,14 +135,20 @@
                 :key="oi" 
                 class="option-item"
                 :class="{ 
-                  selected: userAnswers[currentQuestionIndex] === String.fromCharCode(65 + oi),
-                  correct: showAnswer && (String.fromCharCode(65 + oi) === getCorrectAnswer(questions[currentQuestionIndex]) || opt === getCorrectAnswer(questions[currentQuestionIndex]))
+                  selected: isOptionSelected(currentQuestionIndex, String.fromCharCode(65 + oi)),
+                  correct: showAnswer && isOptionCorrect(questions[currentQuestionIndex], String.fromCharCode(65 + oi), oi),
+                  wrong: showAnswer && isOptionSelected(currentQuestionIndex, String.fromCharCode(65 + oi)) && !isOptionCorrect(questions[currentQuestionIndex], String.fromCharCode(65 + oi), oi)
                 }"
                 @click="selectAnswer(String.fromCharCode(65 + oi))"
               >
                 <span class="option-label">{{ String.fromCharCode(65 + oi) }}.</span>
                 <span class="option-text">{{ opt }}</span>
               </div>
+            </div>
+
+            <!-- 多选题确认按钮 -->
+            <div v-if="!showAnswer && isMultipleChoice(questions[currentQuestionIndex]) && userAnswers[currentQuestionIndex]" class="submit-answer">
+              <button class="btn btn-primary" @click="submitChoiceAnswer">确认答案</button>
             </div>
 
             <!-- 简答题/计算题 输入框 -->
@@ -199,6 +215,9 @@
                 <span class="question-type">{{ getTypeLabel(q.questionType) }}</span>
               </div>
               <div class="question-text">{{ q.questionText }}</div>
+              <template v-if="q.resources?.length">
+                <img v-for="img in getQuestionImages(q.resources)" :key="img.url" :src="img.url" class="question-image" />
+              </template>
               <div v-if="getOptions(q).length" class="question-options">
                 <div v-for="(opt, oi) in getOptions(q)" :key="oi" class="option">
                   {{ String.fromCharCode(65 + oi) }}. {{ opt }}
@@ -232,6 +251,9 @@
                 <label>题目内容：</label>
                 <textarea v-model="q.questionText" class="edit-textarea" rows="3"></textarea>
               </div>
+              <template v-if="q.resources?.length">
+                <img v-for="img in getQuestionImages(q.resources)" :key="img.url" :src="img.url" class="question-image" />
+              </template>
               <div v-if="needsOptions(q.questionType)" class="edit-field">
                 <label>选项：</label>
                 <div v-for="(_, oi) in getOptionsForEdit(q)" :key="oi" class="option-edit-row">
@@ -329,10 +351,11 @@
 
 <script setup lang="ts">
 import { ref, onMounted, reactive, watch } from 'vue'
-import { apiGetClassPublicFiles, apiGetPublicRubrics, apiGetQuestionsByRubricId, apiAiSolveQuestion, apiDeleteFile, apiBatchSaveQuestions } from '@/api'
+import { apiGetClassPublicFiles, apiGetPublicRubrics, apiGetQuestionsByRubricId, apiAiSolveQuestion, apiDeleteFile, apiBatchSaveQuestions, apiAddWrongQuestion } from '@/api'
 import { useUserStore } from '@/stores/user'
 import type { HtmlFileItem, RubricItem, RubricQuestion } from '@/types'
 import FileCard from '@/components/FileCard.vue'
+import { getQuestionImages } from '@/composables/useQuestionResources'
 
 const userStore = useUserStore()
 
@@ -463,8 +486,7 @@ async function generateAiAll(idx: number) {
       questionText: q.questionText,
       questionType: q.questionType,
       optionsJson: q.optionsJson,
-      generateType: 'all',
-      userId: userStore.userId!
+      generateType: 'all'
     })
     if (res.code === 200) {
       const data = JSON.parse(res.data)
@@ -570,6 +592,7 @@ async function saveAllQuestions() {
       answer: q.answer,
       explanation: q.explanation,
       calculationStepsJson: q.calculationStepsJson,
+      resources: q.resources || [],
       orderIndex: idx + 1
     }))
     
@@ -758,29 +781,85 @@ function isTextQuestion(q: RubricQuestion): boolean {
   return q.questionType === 'short_answer' || q.questionType === 'calculation'
 }
 
-// 选择答案
+// 判断是否为多选题
+function isMultipleChoice(q: RubricQuestion): boolean {
+  return q?.questionType === 'multiple_choice'
+}
+
+// 判断选项是否被用户选中（支持多选答案如 "A,C"）
+function isOptionSelected(index: number, optionLetter: string): boolean {
+  const answer = userAnswers.value[index]
+  if (!answer) return false
+  return answer.split(',').map(s => s.trim()).includes(optionLetter)
+}
+
+// 判断选项是否为正确答案
+function isOptionCorrect(q: RubricQuestion, optionLetter: string, optionIndex: number): boolean {
+  const options = getOptions(q)
+  const correctAnswer = getCorrectAnswer(q)
+  return optionLetter === correctAnswer || options[optionIndex] === correctAnswer ||
+    correctAnswer.split(',').map(s => s.trim()).includes(optionLetter)
+}
+
+// 选择答案（单选直接判断，多选 toggle）
 function selectAnswer(answer: string) {
   if (showAnswer.value) return
-  userAnswers.value[currentQuestionIndex.value] = answer
-  
   const q = questions.value[currentQuestionIndex.value]
-  if (hasOptions(q)) {
-    const options = getOptions(q)
-    const selectedIndex = answer.charCodeAt(0) - 65
-    const selectedContent = options[selectedIndex]
-    const isCorrect = answer === q.answer || selectedContent === q.answer
-    if (isCorrect) {
-      setTimeout(() => {
-        if (currentQuestionIndex.value < questions.value.length - 1) {
-          currentQuestionIndex.value++
-          showAnswer.value = false
-        } else {
-          showRubricDetail.value = false
-        }
-      }, 300)
+
+  if (isMultipleChoice(q)) {
+    // 多选题：toggle 选项
+    const current = userAnswers.value[currentQuestionIndex.value] || ''
+    const selected = current ? current.split(',').map(s => s.trim()) : []
+    const idx = selected.indexOf(answer)
+    if (idx >= 0) {
+      selected.splice(idx, 1)
     } else {
-      showAnswer.value = true
+      selected.push(answer)
     }
+    selected.sort()
+    userAnswers.value[currentQuestionIndex.value] = selected.join(',')
+  } else {
+    // 单选题/判断题：直接判断
+    userAnswers.value[currentQuestionIndex.value] = answer
+    if (hasOptions(q)) {
+      const options = getOptions(q)
+      const selectedIndex = answer.charCodeAt(0) - 65
+      const selectedContent = options[selectedIndex]
+      const isCorrect = answer === q.answer || selectedContent === q.answer
+      if (isCorrect) {
+        setTimeout(() => {
+          if (currentQuestionIndex.value < questions.value.length - 1) {
+            currentQuestionIndex.value++
+            showAnswer.value = false
+          } else {
+            showRubricDetail.value = false
+          }
+        }, 300)
+      } else {
+        showAnswer.value = true
+        // 答错时自动添加到错题本
+        apiAddWrongQuestion({
+          questionId: q.id!,
+          rubricId: currentRubric.value?.id || 0,
+          userAnswer: answer
+        }).catch(e => console.error('添加错题失败', e))
+      }
+    }
+  }
+}
+
+// 多选题确认答案
+function submitChoiceAnswer() {
+  const q = questions.value[currentQuestionIndex.value]
+  if (!q || !userAnswers.value[currentQuestionIndex.value]) return
+  showAnswer.value = true
+  // 答错时自动添加到错题本
+  if (!isCurrentAnswerCorrect()) {
+    apiAddWrongQuestion({
+      questionId: q.id!,
+      rubricId: currentRubric.value?.id || 0,
+      userAnswer: userAnswers.value[currentQuestionIndex.value]
+    }).catch(e => console.error('添加错题失败', e))
   }
 }
 
@@ -791,6 +870,14 @@ function submitAnswer() {
     userAnswers.value[currentQuestionIndex.value] = userTextAnswers.value[currentQuestionIndex.value]
   }
   showAnswer.value = true
+  // 简答题/计算题答错时自动添加到错题本
+  if (q && !isCurrentAnswerCorrect()) {
+    apiAddWrongQuestion({
+      questionId: q.id!,
+      rubricId: currentRubric.value?.id || 0,
+      userAnswer: userTextAnswers.value[currentQuestionIndex.value] || ''
+    }).catch(e => console.error('添加错题失败', e))
+  }
 }
 
 // 判断当前答案是否正确
@@ -801,12 +888,23 @@ function isCurrentAnswerCorrect(): boolean {
   if (!userAnswer) return false
   
   if (hasOptions(q)) {
+    if (isMultipleChoice(q)) {
+      // 多选题：将用户答案和正确答案都拆分为集合比较
+      const userSet = new Set(userAnswer.split(',').map(s => s.trim().toUpperCase()))
+      const correctAnswer = q.answer || ''
+      const correctSet = new Set(correctAnswer.split(',').map(s => s.trim().toUpperCase()))
+      if (userSet.size !== correctSet.size) return false
+      for (const item of userSet) {
+        if (!correctSet.has(item)) return false
+      }
+      return true
+    }
     const options = getOptions(q)
     const selectedIndex = userAnswer.charCodeAt(0) - 65
     const selectedContent = options[selectedIndex]
     return userAnswer === q.answer || selectedContent === q.answer
   }
-  return userAnswer === q.answer
+  return userAnswer.trim() === q.answer?.trim()
 }
 
 // 上一题
@@ -912,12 +1010,14 @@ function getTypeLabel(type: string): string {
 .question-num { font-weight: 600; font-size: 16px; }
 .question-type { font-size: 12px; padding: 6px 14px; background: var(--accent-light); color: var(--accent); border-radius: 20px; border: 1px solid var(--accent-border); }
 .question-text { font-size: 18px; line-height: 1.8; margin-bottom: 20px; }
+.question-image { max-width: 100%; max-height: 300px; border-radius: 8px; margin-top: 8px; }
 
 .question-options { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; }
 .option-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border: 1px solid var(--border-glass); border-radius: 14px; cursor: pointer; transition: all 0.3s ease; color: var(--text-primary); }
 .option-item:hover { border-color: var(--accent); background: rgba(99,102,241,0.05); }
 .option-item.selected { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
 .option-item.correct { border-color: var(--success); background: var(--success-light); color: var(--success); }
+.option-item.wrong { border-color: #ef4444; background: rgba(239,68,68,0.1); color: #ef4444; }
 .option-label { font-weight: 600; width: 24px; }
 
 .true-false-options { display: flex; gap: 16px; margin-bottom: 20px; }

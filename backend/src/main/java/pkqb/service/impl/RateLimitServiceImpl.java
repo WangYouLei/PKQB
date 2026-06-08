@@ -2,6 +2,7 @@ package pkqb.service.impl;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import pkqb.common.Result;
 import pkqb.service.RateLimitService;
@@ -9,8 +10,9 @@ import pkqb.service.UserApiKeyService;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -27,9 +29,46 @@ public class RateLimitServiceImpl implements RateLimitService {
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final String KEY_PREFIX = "rate_limit:";
 
+    /**
+     * Lua脚本：原子地检查并增加使用次数
+     * KEYS[1] = 限流key
+     * ARGV[1] = 限制次数
+     * ARGV[2] = 过期时间（秒）
+     * 返回值：-1 表示超限，否则返回当前使用次数
+     */
+    private static final String CHECK_AND_INCREMENT_SCRIPT =
+            "local current = redis.call('GET', KEYS[1]) " +
+            "if current and tonumber(current) >= tonumber(ARGV[1]) then " +
+            "  return -1 " +
+            "end " +
+            "local result = redis.call('INCR', KEYS[1]) " +
+            "if result == 1 then " +
+            "  redis.call('EXPIRE', KEYS[1], ARGV[2]) " +
+            "end " +
+            "return result";
+
+    private static final String INCREMENT_AND_EXPIRE_SCRIPT =
+            "local result = redis.call('INCR', KEYS[1]) " +
+            "if result == 1 then " +
+            "  local seconds = tonumber(ARGV[1]) " +
+            "  redis.call('EXPIRE', KEYS[1], seconds) " +
+            "end " +
+            "return result";
+
+    private final DefaultRedisScript<Long> checkAndIncrementScript;
+    private final DefaultRedisScript<Long> incrementAndExpireScript;
+
     public RateLimitServiceImpl(StringRedisTemplate stringRedisTemplate, UserApiKeyService userApiKeyService) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.userApiKeyService = userApiKeyService;
+
+        this.checkAndIncrementScript = new DefaultRedisScript<>();
+        this.checkAndIncrementScript.setScriptText(CHECK_AND_INCREMENT_SCRIPT);
+        this.checkAndIncrementScript.setResultType(Long.class);
+
+        this.incrementAndExpireScript = new DefaultRedisScript<>();
+        this.incrementAndExpireScript.setScriptText(INCREMENT_AND_EXPIRE_SCRIPT);
+        this.incrementAndExpireScript.setResultType(Long.class);
     }
 
     @Override
@@ -37,8 +76,15 @@ public class RateLimitServiceImpl implements RateLimitService {
         if (!shouldRateLimit(userId)) {
             return null;
         }
-        Long currentUsage = getTodayUsage(userId, feature);
-        if (currentUsage >= limit) {
+        String key = buildKey(userId, feature);
+        long secondsUntilMidnight = getSecondsUntilMidnight();
+        Long result = stringRedisTemplate.execute(
+                checkAndIncrementScript,
+                Collections.singletonList(key),
+                String.valueOf(limit),
+                String.valueOf(secondsUntilMidnight)
+        );
+        if (result != null && result == -1) {
             return Result.error("今日使用次数已达上限(" + limit + "次)，请明天再试");
         }
         return null;
@@ -50,10 +96,12 @@ public class RateLimitServiceImpl implements RateLimitService {
             return;
         }
         String key = buildKey(userId, feature);
-        Long increment = stringRedisTemplate.opsForValue().increment(key);
-        if (increment != null && increment == 1) {
-            setExpiryToMidnight(key);
-        }
+        long secondsUntilMidnight = getSecondsUntilMidnight();
+        stringRedisTemplate.execute(
+                incrementAndExpireScript,
+                Collections.singletonList(key),
+                String.valueOf(secondsUntilMidnight)
+        );
     }
 
     @Override
@@ -89,7 +137,8 @@ public class RateLimitServiceImpl implements RateLimitService {
         LocalDate now = LocalDate.now();
         LocalDateTime nowDateTime = LocalDateTime.now();
         LocalDateTime midnight = now.plusDays(1).atStartOfDay();
-        long seconds = midnight.toEpochSecond(ZoneOffset.ofHours(8)) - nowDateTime.toEpochSecond(ZoneOffset.ofHours(8));
+        ZoneId zone = ZoneId.systemDefault();
+        long seconds = midnight.atZone(zone).toEpochSecond() - nowDateTime.atZone(zone).toEpochSecond();
         return seconds;
     }
 }

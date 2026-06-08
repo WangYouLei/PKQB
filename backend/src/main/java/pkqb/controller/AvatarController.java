@@ -3,6 +3,7 @@ package pkqb.controller;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -39,7 +40,7 @@ public class AvatarController {
     @Operation(summary = "更新头像", description = "更新用户头像（上传后调用，传入MinIO对象路径）")
     public Result<String> updateAvatar(
             @Parameter(description = "用户ID") @RequestAttribute("userId") Long userId,
-            @RequestBody AvatarUpdateRequest request) {
+            @Valid @RequestBody AvatarUpdateRequest request) {
         String avatarUrl = userService.updateAvatar(userId, request.getObjectKey());
         return Result.success("头像更新成功", avatarUrl);
     }

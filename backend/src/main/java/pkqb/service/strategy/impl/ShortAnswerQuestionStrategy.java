@@ -15,12 +15,16 @@ public class ShortAnswerQuestionStrategy implements QuestionExtractStrategy {
     
     @Override
     public boolean canHandle(String questionText, Matcher questionMatcher) {
+        if (questionText == null) return false;
         return questionText.contains("简答题") || questionText.contains("论述题")
                 || questionText.contains("问答");
     }
     
     @Override
     public QuestionExtractResult extract(String questionText, Matcher questionMatcher) {
+        if (questionText == null) {
+            return null;
+        }
         log.debug("[简答题策略] 处理题目: {}", questionText);
         
         QuestionExtractResult result = new QuestionExtractResult();

@@ -16,6 +16,7 @@ public class SingleChoiceQuestionStrategy implements QuestionExtractStrategy {
     
     @Override
     public boolean canHandle(String questionText, Matcher questionMatcher) {
+        if (questionText == null) return false;
         Matcher answerInBrackets = QuestionExtractContext.getAnswerInBracketsPattern().matcher(questionText);
         if (answerInBrackets.matches()) {
             String answerLetters = answerInBrackets.group(1);
@@ -32,6 +33,9 @@ public class SingleChoiceQuestionStrategy implements QuestionExtractStrategy {
     
     @Override
     public QuestionExtractResult extract(String questionText, Matcher questionMatcher) {
+        if (questionText == null) {
+            return null;
+        }
         log.debug("[单选题策略] 处理题目: {}", questionText);
         
         QuestionExtractResult result = new QuestionExtractResult();

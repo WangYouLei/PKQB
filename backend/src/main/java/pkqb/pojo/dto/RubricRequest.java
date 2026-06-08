@@ -1,8 +1,10 @@
 package pkqb.pojo.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.util.List;
@@ -19,14 +21,17 @@ public class RubricRequest {
     private Long id;
     
     @NotBlank(message = "试卷标题不能为空")
+    @Size(max = 200, message = "试卷标题长度不能超过200个字符")
+    @Pattern(regexp = "^[^<>]*$", message = "试卷标题不能包含<>字符")
     @Schema(description = "试卷标题", example = "2024年期末考试卷")
     private String title;
-    
+
     @NotBlank(message = "班级名称不能为空")
+    @Size(max = 100, message = "班级名称长度不能超过100个字符")
+    @Pattern(regexp = "^[^<>]*$", message = "班级名称不能包含<>字符")
     @Schema(description = "班级名称", example = "计算机1班")
     private String className;
     
-    @NotNull(message = "创建者ID不能为空")
     @Schema(description = "创建者ID")
     private Long createId;
     
@@ -34,8 +39,9 @@ public class RubricRequest {
     private String createStudentNo;
     
     @Schema(description = "是否私有：true=私有（仅自己可见），false=公开（班级可见）")
-    private Boolean isPrivate;
+    private Boolean isPrivate = false;
     
     @Schema(description = "题目列表")
+    @Valid
     private List<AiRubric> rubrics;
 }

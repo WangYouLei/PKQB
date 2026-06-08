@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import pkqb.config.DashScopeModelFactory;
 import pkqb.enums.ApiKeyMode;
+import pkqb.enums.ModelType;
 import pkqb.mapper.ModelsMapper;
 import pkqb.mapper.UserMapper;
 import pkqb.pojo.entity.ModelsEntity;
@@ -42,6 +43,7 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
     private static final String PLAIN_API_KEY_SUFFIX = ":plain_api_key";
     private static final String MAIN_MODEL_SUFFIX = ":main_model";
     private static final String ASSISTANT_MODELS_SUFFIX = ":assistant_models";
+    private static final String VISION_MODEL_SUFFIX = ":vision_model";
     private static final String ALL_MODELS_SUFFIX = ":all_models";
     
     private static final long CACHE_EXPIRE_HOURS = 24;
@@ -61,6 +63,7 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void saveApiKey(Long userId, String apiKey) {
         String encryptedKey = apiKeyEncryptor.encrypt(apiKey);
         
@@ -78,41 +81,47 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void deleteApiKey(Long userId) {
         LambdaUpdateWrapper<UserEntity> updateWrapper = new LambdaUpdateWrapper<>();
         updateWrapper.eq(UserEntity::getId, userId)
                 .set(UserEntity::getApiKey, null);
-        
+
         userMapper.update(null, updateWrapper);
+
+        // 级联删除该用户的所有模型
+        LambdaQueryWrapper<ModelsEntity> modelsDeleteWrapper = new LambdaQueryWrapper<>();
+        modelsDeleteWrapper.eq(ModelsEntity::getUserId, userId);
+        modelsMapper.delete(modelsDeleteWrapper);
+
         clearUserCache(userId);
-        log.info("[API Key管理] 用户 {} 删除 API Key 成功", userId);
+        log.info("[API Key管理] 用户 {} 删除 API Key 及关联模型成功", userId);
     }
 
     @Override
     public String getPlainApiKey(Long userId) {
         String cacheKey = CACHE_PREFIX + userId + PLAIN_API_KEY_SUFFIX;
         String cached = stringRedisTemplate.opsForValue().get(cacheKey);
-        
+
         if (cached != null) {
-            if ("null".equals(cached)) {
-                return null;
-            }
             return cached;
         }
-        
+
         LambdaQueryWrapper<UserEntity> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(UserEntity::getId, userId)
                 .select(UserEntity::getApiKey);
-        
+
         UserEntity user = userMapper.selectOne(queryWrapper);
         String result = null;
         if (user != null && user.getApiKey() != null && !user.getApiKey().isEmpty()) {
             result = apiKeyEncryptor.decrypt(user.getApiKey());
         }
-        
-        stringRedisTemplate.opsForValue().set(cacheKey, result != null ? result : "null", 
-                CACHE_EXPIRE_HOURS, TimeUnit.HOURS);
-        
+
+        if (result != null) {
+            stringRedisTemplate.opsForValue().set(cacheKey, result,
+                    CACHE_EXPIRE_HOURS, TimeUnit.HOURS);
+        }
+
         return result;
     }
 
@@ -163,7 +172,7 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
         log.info("[模型管理] 获取用户 {} 的所有模型", userId);
         LambdaQueryWrapper<ModelsEntity> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(ModelsEntity::getUserId, userId)
-                .orderByDesc(ModelsEntity::getIsMain)
+                .orderByAsc(ModelsEntity::getModelType)
                 .orderByDesc(ModelsEntity::getCreateTime);
         List<ModelsEntity> result = modelsMapper.selectList(queryWrapper);
         
@@ -181,32 +190,31 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
     public ModelsEntity getMainModel(Long userId) {
         String cacheKey = CACHE_PREFIX + userId + MAIN_MODEL_SUFFIX;
         String cached = stringRedisTemplate.opsForValue().get(cacheKey);
-        
+
         if (cached != null) {
-            if ("null".equals(cached)) {
-                return null;
-            }
             try {
                 return objectMapper.readValue(cached, ModelsEntity.class);
             } catch (JsonProcessingException e) {
                 log.warn("[模型管理] 解析主模型缓存失败: {}", e.getMessage());
             }
         }
-        
+
         log.info("[模型管理] 获取用户 {} 的主模型", userId);
         LambdaQueryWrapper<ModelsEntity> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(ModelsEntity::getUserId, userId)
-                .eq(ModelsEntity::getIsMain, 1);
+                .eq(ModelsEntity::getModelType, ModelType.MAIN.getCode());
         ModelsEntity result = modelsMapper.selectOne(queryWrapper);
-        
-        try {
-            stringRedisTemplate.opsForValue().set(cacheKey, 
-                    result != null ? objectMapper.writeValueAsString(result) : "null", 
-                    CACHE_EXPIRE_HOURS, TimeUnit.HOURS);
-        } catch (JsonProcessingException e) {
-            log.warn("[模型管理] 缓存序列化失败: {}", e.getMessage());
+
+        if (result != null) {
+            try {
+                stringRedisTemplate.opsForValue().set(cacheKey,
+                        objectMapper.writeValueAsString(result),
+                        CACHE_EXPIRE_HOURS, TimeUnit.HOURS);
+            } catch (JsonProcessingException e) {
+                log.warn("[模型管理] 缓存序列化失败: {}", e.getMessage());
+            }
         }
-        
+
         return result;
     }
 
@@ -226,12 +234,12 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
         log.info("[模型管理] 获取用户 {} 的辅助模型", userId);
         LambdaQueryWrapper<ModelsEntity> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(ModelsEntity::getUserId, userId)
-                .eq(ModelsEntity::getIsMain, 0)
+                .eq(ModelsEntity::getModelType, ModelType.ASSISTANT.getCode())
                 .orderByDesc(ModelsEntity::getCreateTime);
         List<ModelsEntity> allAssistantModels = modelsMapper.selectList(queryWrapper);
         
         List<ModelsEntity> result = allAssistantModels.stream()
-                .limit(2)
+                .limit(MAX_ASSISTANT_MODEL_COUNT)
                 .collect(Collectors.toList());
         
         try {
@@ -245,40 +253,86 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
     }
 
     @Override
+    public ModelsEntity getVisionModel(Long userId) {
+        String cacheKey = CACHE_PREFIX + userId + VISION_MODEL_SUFFIX;
+        String cached = stringRedisTemplate.opsForValue().get(cacheKey);
+
+        if (cached != null) {
+            try {
+                return objectMapper.readValue(cached, ModelsEntity.class);
+            } catch (JsonProcessingException e) {
+                log.warn("[模型管理] 解析视觉模型缓存失败: {}", e.getMessage());
+            }
+        }
+
+        log.info("[模型管理] 获取用户 {} 的视觉模型", userId);
+        LambdaQueryWrapper<ModelsEntity> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(ModelsEntity::getUserId, userId)
+                .eq(ModelsEntity::getModelType, ModelType.VISION.getCode());
+        ModelsEntity result = modelsMapper.selectOne(queryWrapper);
+
+        if (result != null) {
+            try {
+                stringRedisTemplate.opsForValue().set(cacheKey,
+                        objectMapper.writeValueAsString(result),
+                        CACHE_EXPIRE_HOURS, TimeUnit.HOURS);
+            } catch (JsonProcessingException e) {
+                log.warn("[模型管理] 缓存序列化失败: {}", e.getMessage());
+            }
+        }
+
+        return result;
+    }
+
+    @Override
     public void saveUserModel(ModelsEntity model) {
-        log.info("[模型管理] 保存用户模型, userId={}, modelName={}, isMain={}", 
-                model.getUserId(), model.getModelName(), model.getIsMain());
+        log.info("[模型管理] 保存用户模型, userId={}, modelName={}, modelType={}", 
+                model.getUserId(), model.getModelName(), model.getModelType());
         modelsMapper.insert(model);
         clearUserCache(model.getUserId());
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void deleteUserModel(Long modelId, Long userId) {
         log.info("[模型管理] 删除用户模型, modelId={}, userId={}", modelId, userId);
         LambdaQueryWrapper<ModelsEntity> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(ModelsEntity::getId, modelId)
                 .eq(ModelsEntity::getUserId, userId);
-        modelsMapper.delete(queryWrapper);
+        int deleted = modelsMapper.delete(queryWrapper);
+        if (deleted == 0) {
+            throw new IllegalArgumentException("模型不存在");
+        }
         clearUserCache(userId);
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void setMainModel(Long modelId, Long userId) {
         log.info("[模型管理] 设置主模型, modelId={}, userId={}", modelId, userId);
-        
+
+        // 先校验目标模型存在且属于当前用户
+        LambdaQueryWrapper<ModelsEntity> checkWrapper = new LambdaQueryWrapper<>();
+        checkWrapper.eq(ModelsEntity::getId, modelId)
+                .eq(ModelsEntity::getUserId, userId);
+        ModelsEntity target = modelsMapper.selectOne(checkWrapper);
+        if (target == null) {
+            throw new IllegalArgumentException("模型不存在");
+        }
+
+        // 先将该用户所有模型设为辅助模型
         LambdaUpdateWrapper<ModelsEntity> clearWrapper = new LambdaUpdateWrapper<>();
         clearWrapper.eq(ModelsEntity::getUserId, userId)
-                .set(ModelsEntity::getIsMain, 0);
+                .set(ModelsEntity::getModelType, ModelType.ASSISTANT.getCode());
         modelsMapper.update(null, clearWrapper);
-        
+
+        // 再将指定模型设为主模型
         LambdaUpdateWrapper<ModelsEntity> setWrapper = new LambdaUpdateWrapper<>();
         setWrapper.eq(ModelsEntity::getId, modelId)
                 .eq(ModelsEntity::getUserId, userId)
-                .set(ModelsEntity::getIsMain, 1);
+                .set(ModelsEntity::getModelType, ModelType.MAIN.getCode());
         modelsMapper.update(null, setWrapper);
-        
+
         clearUserCache(userId);
         log.info("[模型管理] 主模型设置完成, modelId={}", modelId);
     }
@@ -287,6 +341,15 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
     public boolean canAddModel(Long userId) {
         List<ModelsEntity> models = getUserModels(userId);
         return models.size() < MAX_MODEL_COUNT;
+    }
+
+    @Override
+    public boolean canAddModel(Long userId, ModelType modelType) {
+        List<ModelsEntity> models = getUserModels(userId);
+        long currentCount = models.stream()
+                .filter(m -> m.getModelType().equals(modelType.getCode()))
+                .count();
+        return currentCount < modelType.getMaxCount();
     }
 
     @Override
@@ -305,8 +368,8 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
     }
 
     @Override
-    public String validateModel(String apiKey, String modelName) {
-        log.info("[模型验证] 开始验证模型: {}", modelName);
+    public String validateModel(String apiKey, String modelName, int modelType) {
+        log.info("[模型验证] 开始验证模型: {}, modelType: {}", modelName, modelType);
         
         if (apiKey == null || apiKey.trim().isEmpty()) {
             log.warn("[模型验证] API Key 为空");
@@ -319,17 +382,25 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
         }
         
         try {
-            ChatModel chatModel = dashScopeModelFactory.createChatModel(apiKey.trim(), modelName.trim(), 100);
-            
-            Prompt prompt = new Prompt("你好");
-            ChatResponse response = chatModel.call(prompt);
-            
-            if (response != null && response.getResult() != null) {
-                log.info("[模型验证] 模型 {} 验证成功", modelName);
+            if (modelType == ModelType.VISION.getCode()) {
+                // 视觉模型跳过调用验证，直接保存
+                // 原因：不同系列视觉模型（qwen-vl、qwen-omni等）走不同API端点，
+                // 统一验证容易误判，使用时如果报错用户可自行修改模型名称
+                log.info("[模型验证] 视觉模型 {} 跳过调用验证，直接保存", modelName);
                 return null;
             } else {
-                log.warn("[模型验证] 模型 {} 验证失败：响应为空", modelName);
-                return "请检查模型名称或API Key是否有误";
+                // 主模型/辅助模型：纯文本验证
+                ChatModel chatModel = dashScopeModelFactory.createChatModel(apiKey.trim(), modelName.trim(), 100);
+                Prompt prompt = new Prompt("你好");
+                ChatResponse response = chatModel.call(prompt);
+                
+                if (response != null && response.getResult() != null) {
+                    log.info("[模型验证] 模型 {} 验证成功", modelName);
+                    return null;
+                } else {
+                    log.warn("[模型验证] 模型 {} 验证失败：响应为空", modelName);
+                    return "请检查模型名称或API Key是否有误";
+                }
             }
         } catch (Exception e) {
             log.error("[模型验证] 模型 {} 验证失败: {}", modelName, e.getMessage());
@@ -353,11 +424,14 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
     
     private void clearUserCache(Long userId) {
         String prefix = CACHE_PREFIX + userId;
-        stringRedisTemplate.delete(prefix + HAS_API_KEY_SUFFIX);
-        stringRedisTemplate.delete(prefix + PLAIN_API_KEY_SUFFIX);
-        stringRedisTemplate.delete(prefix + MAIN_MODEL_SUFFIX);
-        stringRedisTemplate.delete(prefix + ASSISTANT_MODELS_SUFFIX);
-        stringRedisTemplate.delete(prefix + ALL_MODELS_SUFFIX);
+        stringRedisTemplate.delete(List.of(
+                prefix + HAS_API_KEY_SUFFIX,
+                prefix + PLAIN_API_KEY_SUFFIX,
+                prefix + MAIN_MODEL_SUFFIX,
+                prefix + ASSISTANT_MODELS_SUFFIX,
+                prefix + VISION_MODEL_SUFFIX,
+                prefix + ALL_MODELS_SUFFIX
+        ));
         log.info("[缓存管理] 清除用户 {} 的Redis缓存", userId);
     }
 }

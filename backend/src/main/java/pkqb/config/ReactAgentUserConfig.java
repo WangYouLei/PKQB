@@ -9,9 +9,12 @@ import com.alibaba.cloud.ai.graph.agent.hook.summarization.SummarizationHook;
 import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.stereotype.Component;
 import pkqb.pojo.entity.ModelsEntity;
+import pkqb.service.MinioService;
+import pkqb.tool.ImageViewTool;
 
 import java.util.List;
 
@@ -72,11 +75,13 @@ public class ReactAgentUserConfig {
     private final DashScopeModelFactory modelFactory;
     private final MemorySaver memorySaver;
     private final VectorStore vectorStore;
+    private final MinioService minioService;
 
-    public ReactAgentUserConfig(DashScopeModelFactory modelFactory, MemorySaver memorySaver, VectorStore vectorStore) {
+    public ReactAgentUserConfig(DashScopeModelFactory modelFactory, MemorySaver memorySaver, VectorStore vectorStore, MinioService minioService) {
         this.modelFactory = modelFactory;
         this.memorySaver = memorySaver;
         this.vectorStore = vectorStore;
+        this.minioService = minioService;
     }
 
     public ReactAgent createUserChatReactAgent(String apiKey) {
@@ -255,6 +260,30 @@ public class ReactAgentUserConfig {
     private ModelCallLimitHook createModelCallLimitHook() {
         return ModelCallLimitHook.builder()
                 .runLimit(MODEL_CALL_LIMIT)
+                .build();
+    }
+
+    public ReactAgent createRubricParseAgent(String apiKey, String model) {
+        return createRubricParseAgent(apiKey, model, null);
+    }
+
+    public ReactAgent createRubricParseAgent(String apiKey, String model, String visionModelName) {
+        String actualModel = (model != null && !model.isEmpty()) ? model : modelFactory.getDefaultModel();
+        log.info("[ReactAgent用户配置] 为用户创建 RubricParseAgent，模型: {}, 视觉模型: {}", actualModel, visionModelName);
+        ChatModel chatModel = modelFactory.createChatModel(apiKey, actualModel);
+        ChatModel visionChatModel = (visionModelName != null && !visionModelName.isEmpty())
+                ? modelFactory.createVisionChatModel(apiKey, visionModelName)
+                : modelFactory.createVisionChatModel();
+        FunctionToolCallback imageViewTool = ImageViewTool.createTool(minioService, visionChatModel);
+        ModelCallLimitHook limitHook = ModelCallLimitHook.builder().runLimit(5).build();
+
+        return ReactAgent.builder()
+                .name("rubric_parse_agent")
+                .model(chatModel)
+                .systemPrompt(AiConstants.RUBRIC_PARSE_SYSTEM_PROMPT)
+                .tools(imageViewTool)
+                .hooks(limitHook)
+                .saver(memorySaver)
                 .build();
     }
 }
