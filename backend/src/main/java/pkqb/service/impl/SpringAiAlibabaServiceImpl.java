@@ -44,6 +44,7 @@ import pkqb.service.OssService;
 import pkqb.service.RateLimitService;
 import pkqb.service.SpringAiAlibabaService;
 import pkqb.service.UserApiKeyService;
+import pkqb.service.DashScopeRerankService;
 import pkqb.service.strategy.QuestionExtractContext;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -89,6 +90,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     private final UserApiKeyService userApiKeyService;
     private final FileMapper fileMapper;
     private final OssService ossService;
+    private final DashScopeRerankService rerankService;
     
     private static final ExecutorService AI_EXECUTOR = new ThreadPoolExecutor(
             6, 6, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
@@ -199,7 +201,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                                       NotificationService notificationService,
                                       UserApiKeyService userApiKeyService,
                                       FileMapper fileMapper,
-                                      OssService ossService) {
+                                      OssService ossService,
+                                      DashScopeRerankService rerankService) {
         this.vectorStore = vectorStore;
         this.redisTemplate = redisTemplate;
         this.stringRedisTemplate = stringRedisTemplate;
@@ -213,6 +216,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         this.userApiKeyService = userApiKeyService;
         this.fileMapper = fileMapper;
         this.ossService = ossService;
+        this.rerankService = rerankService;
     }
 
     @jakarta.annotation.PreDestroy
@@ -359,7 +363,6 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             log.info("[知识库-{}] 已写入 {}/{} 个文档片段", operationType, end, totalSize);
         }
         log.info("[知识库-{}] 成功写入向量库，共处理 {} 个文档片段", operationType, totalSize);
-        
         return Result.success("成功上传文件并添加到向量数据库，共处理了 " +
                 totalSize + " 个文档片段");
     }
@@ -719,9 +722,9 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             byte[] fileBytes = file.getBytes();
 
             // Step 1+2: 一次打开PDF，同时渲染页面图片和提取嵌入图片，上传OSS
-            List<String> pageImageUrls;
-            List<ExtractedImage> extractedImages;
-            try (PDDocument document = Loader.loadPDF(fileBytes)) {
+                List<String> pageImageUrls;
+                List<ExtractedImage> extractedImages;
+                try (PDDocument document = Loader.loadPDF(fileBytes)) {
                 pageImageUrls = renderPdfPagesToOss(document, userId);
                 extractedImages = extractImagesFromPdf(document, userId);
             }
@@ -1603,10 +1606,11 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     
     private String searchVectorStore(String query, Long userId) {
         try {
+            // 粗排：扩大召回，为精排提供更多候选
             SearchRequest searchRequest = SearchRequest.builder()
                     .query(query)
-                    .topK(5)
-                    .similarityThreshold(0.7)
+                    .topK(20)
+                    .similarityThreshold(0.5)
                     .build();
             
             List<Document> documents = vectorStore.similaritySearch(searchRequest);
@@ -1616,7 +1620,12 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                 return null;
             }
             
-            String result = documents.stream()
+            log.info("[AI解答-向量检索] 粗排召回 {} 个候选文档，开始精排", documents.size());
+
+            // 精排：使用 qwen3-rerank 重排序，取 Top5
+            List<Document> rerankedDocs = rerankService.rerank(query, documents, 5);
+
+            String result = rerankedDocs.stream()
                     .map(doc -> {
                         String content = doc.getText();
                         String source = doc.getMetadata() != null ? 
@@ -1625,7 +1634,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                     })
                     .collect(Collectors.joining("\n\n---\n\n"));
             
-            log.info("[AI解答-向量检索] 找到 {} 个相关文档片段", documents.size());
+            log.info("[AI解答-向量检索] 精排完成，保留 {} 个文档片段", rerankedDocs.size());
             return result;
         } catch (Exception e) {
             log.warn("[AI解答-向量检索] 检索失败: {}", e.getMessage());

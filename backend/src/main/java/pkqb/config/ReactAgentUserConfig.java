@@ -13,6 +13,7 @@ import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.stereotype.Component;
 import pkqb.pojo.entity.ModelsEntity;
+import pkqb.service.DashScopeRerankService;
 import pkqb.service.MinioService;
 import pkqb.tool.ImageViewTool;
 
@@ -76,12 +77,16 @@ public class ReactAgentUserConfig {
     private final MemorySaver memorySaver;
     private final VectorStore vectorStore;
     private final MinioService minioService;
+    private final DashScopeRerankService rerankService;
 
-    public ReactAgentUserConfig(DashScopeModelFactory modelFactory, MemorySaver memorySaver, VectorStore vectorStore, MinioService minioService) {
+    public ReactAgentUserConfig(DashScopeModelFactory modelFactory, MemorySaver memorySaver,
+                                VectorStore vectorStore, MinioService minioService,
+                                DashScopeRerankService rerankService) {
         this.modelFactory = modelFactory;
         this.memorySaver = memorySaver;
         this.vectorStore = vectorStore;
         this.minioService = minioService;
+        this.rerankService = rerankService;
     }
 
     public ReactAgent createUserChatReactAgent(String apiKey) {
@@ -115,7 +120,7 @@ public class ReactAgentUserConfig {
 
         //ModelCallLimitHook limitHook = createModelCallLimitHook();
         ModelCallLimitHook limitHook = ModelCallLimitHook.builder().runLimit(1).build();
-        RagAgentHook ragHook = new RagAgentHook(vectorStore);
+        RagAgentHook ragHook = new RagAgentHook(vectorStore, rerankService);
         return ReactAgent.builder()
                 .name("rag_agent_user")
                 .model(chatModel)

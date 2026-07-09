@@ -63,6 +63,14 @@
         .option.selected { border-color: var(--accent); background: var(--accent-light); color: var(--accent); transform: scale(1.02); }
         .option.correct { background: var(--answer-bg); border-color: var(--answer-border); color: var(--answer-color); }
         .option.incorrect { background: linear-gradient(135deg, #fee2e2, #fecaca); border-color: #ef4444; color: #991b1b; }
+        .option-disabled { cursor: default !important; }
+        .option-disabled:hover { background: var(--bg-body) !important; border-color: var(--border-color) !important; transform: none !important; color: var(--text-secondary) !important; }
+        .submit-btn { display: block; margin: 15px 0; padding: 12px 30px; border: none; border-radius: 25px; font-size: 15px; font-weight: 700; cursor: pointer; background: linear-gradient(135deg, #ff6b6b, #ffa8a8); color: white; box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3); transition: all 0.3s ease; }
+        .submit-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(255, 107, 107, 0.4); }
+        .question-image { margin: 15px 0; text-align: center; }
+        .question-image img { max-width: 100%; height: auto; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .option-image { max-width: 100%; height: auto; border-radius: 8px; margin-top: 8px; vertical-align: middle; }
+        .answer-image, .explanation-image { max-width: 100%; height: auto; border-radius: 8px; margin-top: 8px; }
         
         .mode-buttons { display: flex; gap: 15px; justify-content: center; margin-bottom: 40px; flex-wrap: wrap; }
         .mode-btn { padding: 15px 35px; border: none; border-radius: 30px; font-size: 16px; font-weight: 700; cursor: pointer; transition: all 0.3s ease; background: var(--card-bg); color: var(--accent); box-shadow: 0 5px 20px rgba(255, 107, 107, 0.2); }
@@ -145,11 +153,15 @@
                 document.querySelectorAll('.answer').forEach(el => el.classList.add('show'));
                 document.querySelectorAll('.explanation').forEach(el => el.classList.add('show'));
                 document.querySelectorAll('.option').forEach(el => el.style.pointerEvents = 'none');
+                document.querySelectorAll('.submit-btn').forEach(el => el.style.display = 'none');
                 document.querySelectorAll('.question-item').forEach(item => {
                     const answer = item.getAttribute('data-answer');
                     const options = item.querySelectorAll('.option');
+                    // 多选题答案格式为 "A,B,C"，需拆分后逐个匹配
+                    const correctAnswers = answer.split(/[,，\s]+/).map(s => s.trim()).filter(s => s);
                     options.forEach(opt => {
-                        if (opt.textContent.trim().startsWith(answer)) {
+                        const optText = opt.textContent.trim();
+                        if (correctAnswers.some(ans => optText.startsWith(ans))) {
                             opt.classList.add('correct');
                         }
                     });
@@ -161,6 +173,7 @@
                     el.classList.remove('selected', 'correct', 'incorrect');
                     el.style.pointerEvents = 'auto';
                 });
+                document.querySelectorAll('.submit-btn').forEach(el => el.style.display = 'none');
             }
         }
         
@@ -168,12 +181,23 @@
             if (currentMode !== 'quiz') return;
             
             const questionItem = element.closest('.question-item');
+            const questionType = questionItem.getAttribute('data-question-type');
             const options = questionItem.querySelectorAll('.option');
             const answerEl = questionItem.querySelector('.answer');
             const explanationEl = questionItem.querySelector('.explanation');
             
             if (answerEl && answerEl.classList.contains('show')) return;
             
+            // 多选题：toggle 选项，不自动判断，需点击确认按钮
+            if (questionType === 'multiple_choice') {
+                element.classList.toggle('selected');
+                const submitBtn = questionItem.querySelector('.submit-btn');
+                const hasSelected = questionItem.querySelectorAll('.option.selected').length > 0;
+                if (submitBtn) submitBtn.style.display = hasSelected ? 'block' : 'none';
+                return;
+            }
+
+            // 单选题：点击即判断
             options.forEach(opt => opt.classList.remove('selected', 'correct', 'incorrect'));
             element.classList.add('selected');
             
@@ -195,6 +219,41 @@
                 setTimeout(() => {
                     answerEl.classList.add('show');
                     if (explanationEl) explanationEl.classList.add('show');
+                }, 400);
+            }
+        }
+
+        // 多选题确认答案
+        function submitMultipleChoice(questionItem) {
+            const answerEl = questionItem.querySelector('.answer');
+            const explanationEl = questionItem.querySelector('.explanation');
+            const options = questionItem.querySelectorAll('.option');
+            const answer = questionItem.getAttribute('data-answer');
+
+            if (answerEl && answerEl.classList.contains('show')) return;
+
+            // 多选题答案格式为 "A,B,C"
+            const correctAnswers = answer.split(/[,，\s]+/).map(s => s.trim()).filter(s => s);
+
+            options.forEach(opt => {
+                const optText = opt.textContent.trim();
+                const isSelected = opt.classList.contains('selected');
+                const isCorrect = correctAnswers.some(ans => optText.startsWith(ans));
+
+                opt.classList.remove('selected');
+                if (isCorrect) {
+                    opt.classList.add('correct');
+                } else if (isSelected) {
+                    opt.classList.add('incorrect');
+                }
+            });
+
+            if (answerEl) {
+                setTimeout(() => {
+                    answerEl.classList.add('show');
+                    if (explanationEl) explanationEl.classList.add('show');
+                    const submitBtn = questionItem.querySelector('.submit-btn');
+                    if (submitBtn) submitBtn.style.display = 'none';
                 }, 400);
             }
         }

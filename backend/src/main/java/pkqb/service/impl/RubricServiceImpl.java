@@ -35,8 +35,11 @@ import pkqb.service.RubricService;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -538,37 +541,90 @@ public class RubricServiceImpl implements RubricService {
             template = template.replace("{{title}}", title);
             template = template.replace("{{questionCount}}", questionCount);
 
-            // 4. 生成题目列表
+            // 4. 批量查询所有题目的图片资源
+            List<Long> questionIds = questions.stream().map(QuestionEntity::getId).collect(Collectors.toList());
+            Map<Long, List<QuestionResourceEntity>> resourcesMap = questionResourceService.getByQuestionIds(questionIds);
+
+            // 5. 生成题目列表
             StringBuilder questionsHtml = new StringBuilder();
             for (int i = 0; i < questions.size(); i++) {
                 QuestionEntity q = questions.get(i);
                 String questionText = q.getQuestionText();
-                String questionType = getTypeLabel(q.getQuestionType());
+                String questionTypeLabel = getTypeLabel(q.getQuestionType());
+                String questionTypeRaw = q.getQuestionType();
                 String answer = q.getAnswer();
                 String explanation = q.getExplanation();
                 
                 // 解析选项
                 List<String> options = parseOptions(q.getOptionsJson());
                 
-                questionsHtml.append("            <div class=\"question-item\" data-question-index=\"").append(i).append("\" data-answer=\"").append(answer).append("\">\n");
+                // 只有单选题和多选题可以答题
+                boolean canAnswer = "single_choice".equals(questionTypeRaw) || "multiple_choice".equals(questionTypeRaw);
+                boolean isMultipleChoice = "multiple_choice".equals(questionTypeRaw);
+
+                // 获取该题目的图片资源
+                List<QuestionResourceEntity> resources = resourcesMap.getOrDefault(q.getId(), List.of());
+                List<QuestionResourceEntity> questionImages = resources.stream().filter(r -> "question_image".equals(r.getType())).collect(Collectors.toList());
+                List<QuestionResourceEntity> answerImages = resources.stream().filter(r -> "answer_image".equals(r.getType())).collect(Collectors.toList());
+                List<QuestionResourceEntity> explanationImages = resources.stream().filter(r -> "explanation_image".equals(r.getType())).collect(Collectors.toList());
+                Map<String, List<QuestionResourceEntity>> optionImagesMap = resources.stream()
+                        .filter(r -> "option_image".equals(r.getType()) && r.getLabel() != null)
+                        .collect(Collectors.groupingBy(r -> r.getLabel().toUpperCase()));
+
+                questionsHtml.append("            <div class=\"question-item\" data-question-index=\"").append(i).append("\" data-answer=\"").append(answer).append("\" data-question-type=\"").append(questionTypeRaw).append("\">\n");
                 questionsHtml.append("                <div class=\"question-header\">\n");
                 questionsHtml.append("                    <h3>").append(i + 1).append(". ").append(questionText).append("</h3>\n");
-                questionsHtml.append("                    <span class=\"question-type\">").append(questionType).append("</span>\n");
+                questionsHtml.append("                    <span class=\"question-type\">").append(questionTypeLabel).append("</span>\n");
                 questionsHtml.append("                </div>\n");
                 
+                // 题目图片
+                for (QuestionResourceEntity img : questionImages) {
+                    String base64 = downloadImageAsBase64(img.getUrl(), img.getMimeType());
+                    if (base64 != null) {
+                        questionsHtml.append("                <div class=\"question-image\"><img src=\"").append(base64).append("\" alt=\"题目图片\"></div>\n");
+                    }
+                }
+
                 // 选项
                 if (options != null && !options.isEmpty()) {
                     questionsHtml.append("                <div class=\"options\">\n");
                     for (String option : options) {
-                        questionsHtml.append("                    <div class=\"option\" onclick=\"selectOption(this, '").append(option).append("')\">").append(option).append("</div>\n");
+                        // 查找该选项对应的图片（通过选项首字母匹配 label）
+                        String optionLabel = option.trim().substring(0, 1).toUpperCase();
+                        List<QuestionResourceEntity> optionImages = optionImagesMap.get(optionLabel);
+                        StringBuilder optionContent = new StringBuilder(option);
+                        if (optionImages != null) {
+                            for (QuestionResourceEntity img : optionImages) {
+                                String base64 = downloadImageAsBase64(img.getUrl(), img.getMimeType());
+                                if (base64 != null) {
+                                    optionContent.append("<br><img class=\"option-image\" src=\"").append(base64).append("\" alt=\"选项").append(optionLabel).append("图片\">");
+                                }
+                            }
+                        }
+                        if (canAnswer) {
+                            questionsHtml.append("                    <div class=\"option\" onclick=\"selectOption(this, '").append(option).append("')\">").append(optionContent).append("</div>\n");
+                        } else {
+                            questionsHtml.append("                    <div class=\"option option-disabled\">").append(optionContent).append("</div>\n");
+                        }
                     }
                     questionsHtml.append("                </div>\n");
                 }
                 
+                // 多选题确认按钮
+                if (isMultipleChoice) {
+                    questionsHtml.append("                <button class=\"submit-btn\" style=\"display:none;\" onclick=\"submitMultipleChoice(this.closest('.question-item'))\">确认答案</button>\n");
+                }
+
                 // 答案
                 if (answer != null && !answer.isEmpty()) {
                     questionsHtml.append("                <div class=\"answer\">\n");
                     questionsHtml.append("                    ✓ 答案：").append(answer).append("\n");
+                    for (QuestionResourceEntity img : answerImages) {
+                        String base64 = downloadImageAsBase64(img.getUrl(), img.getMimeType());
+                        if (base64 != null) {
+                            questionsHtml.append("                    <br><img class=\"answer-image\" src=\"").append(base64).append("\" alt=\"答案图片\">\n");
+                        }
+                    }
                     questionsHtml.append("                </div>\n");
                 }
                 
@@ -576,13 +632,19 @@ public class RubricServiceImpl implements RubricService {
                 if (explanation != null && !explanation.isEmpty()) {
                     questionsHtml.append("                <div class=\"explanation\">\n");
                     questionsHtml.append("                    💡 解析：").append(explanation).append("\n");
+                    for (QuestionResourceEntity img : explanationImages) {
+                        String base64 = downloadImageAsBase64(img.getUrl(), img.getMimeType());
+                        if (base64 != null) {
+                            questionsHtml.append("                    <br><img class=\"explanation-image\" src=\"").append(base64).append("\" alt=\"解析图片\">\n");
+                        }
+                    }
                     questionsHtml.append("                </div>\n");
                 }
                 
                 questionsHtml.append("            </div>\n");
             }
             
-            // 5. 替换题目列表
+            // 6. 替换题目列表
             template = template.replace("{{questions}}", questionsHtml.toString());
             
             return template;
@@ -593,6 +655,82 @@ public class RubricServiceImpl implements RubricService {
         }
     }
     
+    /**
+     * 下载图片并转为 Base64 data URI
+     */
+    private String downloadImageAsBase64(String imageUrl, String mimeType) {
+        if (imageUrl == null || imageUrl.isEmpty()) return null;
+        try {
+            byte[] imageBytes = null;
+            String detectedMimeType = mimeType;
+
+            // 优先从 MinIO 下载
+            if (isMinioUrl(imageUrl)) {
+                String objectKey = extractMinioObjectKey(imageUrl);
+                if (objectKey != null) {
+                    imageBytes = minioService.getFile(objectKey);
+                }
+            }
+            // 其次从 OSS 下载
+            else if (ossService.isOssUrl(imageUrl)) {
+                String objectKey = ossService.extractObjectKeyFromUrl(imageUrl);
+                if (objectKey != null) {
+                    OssService.OssFileData fileData = ossService.download(objectKey);
+                    imageBytes = fileData.getData();
+                    if (detectedMimeType == null || detectedMimeType.isEmpty()) {
+                        detectedMimeType = fileData.getContentType();
+                    }
+                }
+            }
+            // 兜底：直接从 URL 下载
+            if (imageBytes == null) {
+                HttpURLConnection conn = (HttpURLConnection) new URL(imageUrl).openConnection();
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(10000);
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0");
+                try (InputStream is = conn.getInputStream()) {
+                    imageBytes = is.readAllBytes();
+                    if (detectedMimeType == null || detectedMimeType.isEmpty()) {
+                        detectedMimeType = conn.getContentType();
+                    }
+                } finally {
+                    conn.disconnect();
+                }
+            }
+
+            if (imageBytes == null || imageBytes.length == 0) return null;
+            if (detectedMimeType == null || detectedMimeType.isEmpty()) {
+                detectedMimeType = "image/png";
+            }
+            return "data:" + detectedMimeType + ";base64," + Base64.getEncoder().encodeToString(imageBytes);
+        } catch (Exception e) {
+            log.warn("下载图片失败，跳过: url={}, error={}", imageUrl, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 判断是否为 MinIO URL
+     */
+    private boolean isMinioUrl(String url) {
+        if (url == null || url.isEmpty()) return false;
+        String baseEndpoint = minioEndpoint.replaceAll("/+$", "");
+        String prefix = baseEndpoint + "/" + bucketName + "/";
+        return url.startsWith(prefix);
+    }
+
+    /**
+     * 从 MinIO URL 中提取 objectKey
+     */
+    private String extractMinioObjectKey(String url) {
+        String baseEndpoint = minioEndpoint.replaceAll("/+$", "");
+        String prefix = baseEndpoint + "/" + bucketName + "/";
+        if (url.startsWith(prefix)) {
+            return url.substring(prefix.length());
+        }
+        return null;
+    }
+
     /**
      * 降级方案：生成简单HTML
      */

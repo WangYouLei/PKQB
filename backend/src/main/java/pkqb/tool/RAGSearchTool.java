@@ -7,6 +7,7 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import pkqb.service.DashScopeRerankService;
 
 import java.util.List;
 import java.util.function.BiFunction;
@@ -17,6 +18,7 @@ import java.util.stream.Collectors;
 public class RAGSearchTool implements BiFunction<String, ToolContext, String> {
 
     private final VectorStore vectorStore;
+    private final DashScopeRerankService rerankService;
     private final Long userId;
     private final Integer classId;
     private final String scope;
@@ -28,10 +30,11 @@ public class RAGSearchTool implements BiFunction<String, ToolContext, String> {
         String filterExpression = buildFilterExpression();
         log.info("[RAG工具] 过滤表达式: {}", filterExpression);
         
+        // 粗排：扩大召回，为精排提供更多候选
         SearchRequest.Builder searchRequestBuilder = SearchRequest.builder()
                 .query(query)
-                .topK(5)
-                .similarityThreshold(0.7);
+                .topK(20)
+                .similarityThreshold(0.5);
         
         if (filterExpression != null && !filterExpression.isEmpty()) {
             searchRequestBuilder.filterExpression(filterExpression);
@@ -44,7 +47,12 @@ public class RAGSearchTool implements BiFunction<String, ToolContext, String> {
             return "未在知识库中找到相关内容";
         }
         
-        String result = documents.stream()
+        log.info("[RAG工具] 粗排召回 {} 个候选文档，开始精排", documents.size());
+
+        // 精排：使用 qwen3-rerank 重排序，取 Top5
+        List<Document> rerankedDocs = rerankService.rerank(query, documents, 5);
+
+        String result = rerankedDocs.stream()
                 .map(doc -> {
                     String content = doc.getText();
                     String source = doc.getMetadata() != null ? 
@@ -53,7 +61,7 @@ public class RAGSearchTool implements BiFunction<String, ToolContext, String> {
                 })
                 .collect(Collectors.joining("\n\n---\n\n"));
         
-        log.info("[RAG工具] 找到 {} 个相关文档片段", documents.size());
+        log.info("[RAG工具] 精排完成，保留 {} 个文档片段", rerankedDocs.size());
         return "知识库检索结果：\n\n" + result;
     }
     
@@ -69,8 +77,9 @@ public class RAGSearchTool implements BiFunction<String, ToolContext, String> {
         }
     }
     
-    public static FunctionToolCallback createTool(VectorStore vectorStore, Long userId, Integer classId, String scope) {
-        RAGSearchTool tool = new RAGSearchTool(vectorStore, userId, classId, scope);
+    public static FunctionToolCallback createTool(VectorStore vectorStore, DashScopeRerankService rerankService,
+                                                  Long userId, Integer classId, String scope) {
+        RAGSearchTool tool = new RAGSearchTool(vectorStore, rerankService, userId, classId, scope);
         return FunctionToolCallback.builder("rag_search", tool)
                 .description("搜索知识库获取相关信息。当用户问题可能涉及已上传的文档、知识点或学习资料时使用此工具。")
                 .inputType(String.class)
