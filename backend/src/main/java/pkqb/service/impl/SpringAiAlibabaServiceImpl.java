@@ -58,10 +58,16 @@ import org.apache.pdfbox.pdmodel.graphics.PDXObject;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.rendering.PDFRenderer;
 
+import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageWriteParam;
+import javax.imageio.ImageWriter;
+import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -717,29 +723,40 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
      * 使用视觉模型解析PDF文件：PDF页面渲染为图片→上传OSS→URL传给视觉模型→结构化输出+嵌入图片提取映射
      */
     private Result<List<AiRubric>> handleRubricFileWithVision(MultipartFile file, Long userId) {
+        // 提到 try 外，便于降级时清理已上传的 OSS 图片
+        List<String> pageImageUrls = null;
+        List<ExtractedImage> extractedImages = null;
         try {
             log.info("[题目文件解析-视觉] 使用视觉模型解析PDF文件");
             byte[] fileBytes = file.getBytes();
 
-            // Step 1+2: 一次打开PDF，同时渲染页面图片和提取嵌入图片，上传OSS
-                List<String> pageImageUrls;
-                List<ExtractedImage> extractedImages;
-                try (PDDocument document = Loader.loadPDF(fileBytes)) {
-                pageImageUrls = renderPdfPagesToOss(document, userId);
-                extractedImages = extractImagesFromPdf(document, userId);
+            // Step 1: 串行渲染页面 + 提取嵌入图片（共享 PDDocument，PDFBox 非线程安全）
+            List<PageImage> pageImages;
+            try (PDDocument document = Loader.loadPDF(fileBytes)) {
+                pageImages = renderPdfPagesToBytes(document);
+                extractedImages = extractImagesFromPdfToBytes(document);
             }
 
-            if (pageImageUrls.isEmpty()) {
+            if (pageImages.isEmpty()) {
                 log.warn("[题目文件解析-视觉] PDF页面渲染失败，降级到纯文本模式");
                 return handleRubricFileWithText(file, userId);
             }
             log.info("[题目文件解析-视觉] PDF渲染为 {} 张页面图片，提取到 {} 张嵌入图片",
-                    pageImageUrls.size(), extractedImages.size());
+                    pageImages.size(), extractedImages.size());
+
+            // Step 2: 并行上传所有图片到 OSS
+            pageImageUrls = uploadAllImagesParallel(pageImages, extractedImages, userId);
+            if (pageImageUrls.isEmpty()) {
+                log.warn("[题目文件解析-视觉] 全部页面图片上传失败，降级到纯文本模式");
+                cleanupOssImages(pageImageUrls, extractedImages);
+                return handleRubricFileWithText(file, userId);
+            }
 
             // Step 3: 将页面图片URL发给视觉模型，获取结构化题目
             List<AiRubric> aiRubrics = callVisionModelForQuestions(pageImageUrls, extractedImages, userId);
             if (aiRubrics == null || aiRubrics.isEmpty()) {
                 log.warn("[题目文件解析-视觉] 视觉模型返回为空，降级到纯文本模式");
+                cleanupOssImages(pageImageUrls, extractedImages);
                 return handleRubricFileWithText(file, userId);
             }
 
@@ -751,33 +768,75 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             return Result.success(aiRubrics);
         } catch (Exception e) {
             log.error("[题目文件解析-视觉] 视觉识别失败: {}，降级到纯文本模式", e.getMessage());
-            // OssService 暂无 delete 方法，已上传的 OSS 页面/嵌入图片无法清理，记录日志
-            log.warn("[题目文件解析-视觉] 降级到纯文本模式，已上传的OSS资源可能孤立，待后续清理");
+            cleanupOssImages(pageImageUrls, extractedImages);
             return handleRubricFileWithText(file, userId);
         }
     }
 
     /**
-     * 将PDF每页渲染为图片并上传到OSS
+     * 将PDF每页渲染为JPEG字节数组（DPI=135），不上传OSS。
+     * 渲染阶段保持串行：PDFBox 的 PDFRenderer 对同一 PDDocument 非线程安全。
      */
-    private List<String> renderPdfPagesToOss(PDDocument document, Long userId) {
-        List<String> urls = new ArrayList<>();
+    private List<PageImage> renderPdfPagesToBytes(PDDocument document) {
+        List<PageImage> images = new ArrayList<>();
         try {
             PDFRenderer renderer = new PDFRenderer(document);
             for (int i = 0; i < document.getNumberOfPages(); i++) {
-                BufferedImage pageImage = renderer.renderImageWithDPI(i, 150);
-                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                ImageIO.write(pageImage, "png", baos);
-                byte[] imageBytes = baos.toByteArray();
-
-                String objectKey = "question-image/" + userId + "/page-" + i + "-" + UUID.randomUUID() + ".png";
-                String url = ossService.upload(objectKey, imageBytes, "image/png");
-                urls.add(url);
+                BufferedImage pageImage = renderer.renderImageWithDPI(i, 135);
+                byte[] imageBytes = writeJpeg(pageImage, 0.8f);
+                images.add(new PageImage(i, imageBytes));
             }
         } catch (Exception e) {
             log.error("[PDF页面渲染] 渲染PDF页面失败: {}", e.getMessage());
         }
-        return urls;
+        return images;
+    }
+
+    /**
+     * 将 BufferedImage 写入 JPEG 字节数组。
+     * 自动把带 alpha 通道的图片转为白底 RGB，避免 JPEG 编码异常/背景变黑。
+     */
+    private byte[] writeJpeg(BufferedImage image, float quality) throws IOException {
+        BufferedImage rgb = flattenToRgb(image);
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ImageWriter writer = ImageIO.getImageWritersByFormatName("jpg").next();
+        try {
+            ImageWriteParam param = writer.getDefaultWriteParam();
+            param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+            param.setCompressionQuality(quality);
+            writer.setOutput(ImageIO.createImageOutputStream(baos));
+            writer.write(null, new IIOImage(rgb, null, null), param);
+        } finally {
+            writer.dispose();
+        }
+        return baos.toByteArray();
+    }
+
+    private BufferedImage flattenToRgb(BufferedImage src) {
+        if (!src.getColorModel().hasAlpha()) {
+            return src;
+        }
+        BufferedImage rgb = new BufferedImage(src.getWidth(), src.getHeight(), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = rgb.createGraphics();
+        try {
+            g.setColor(Color.WHITE);
+            g.fillRect(0, 0, src.getWidth(), src.getHeight());
+            g.drawImage(src, 0, 0, null);
+        } finally {
+            g.dispose();
+        }
+        return rgb;
+    }
+
+    /** 渲染后的页面图片字节（未上传） */
+    private static class PageImage {
+        final int pageIndex;
+        final byte[] imageBytes;
+
+        PageImage(int pageIndex, byte[] imageBytes) {
+            this.pageIndex = pageIndex;
+            this.imageBytes = imageBytes;
+        }
     }
 
     /**
@@ -823,7 +882,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                         u.text(promptText);
                         for (String url : pageImageUrls) {
                             try {
-                                u.media(org.springframework.util.MimeTypeUtils.IMAGE_PNG,
+                                u.media(org.springframework.util.MimeTypeUtils.IMAGE_JPEG,
                                         new org.springframework.core.io.UrlResource(url));
                             } catch (java.net.MalformedURLException e) {
                                 log.warn("[题目文件解析-视觉] 图片URL格式错误: {}", url);
@@ -857,15 +916,20 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         int index;
         String url;
         int pageIndex;
+        byte[] imageBytes;
 
-        ExtractedImage(int index, String url, int pageIndex) {
+        ExtractedImage(int index, String url, int pageIndex, byte[] imageBytes) {
             this.index = index;
             this.url = url;
             this.pageIndex = pageIndex;
+            this.imageBytes = imageBytes;
         }
     }
 
-    private List<ExtractedImage> extractImagesFromPdf(PDDocument document, Long userId) {
+    /**
+     * 提取PDF嵌入图片为JPEG字节数组（不上传OSS），按页码去重排序后统一编号。
+     */
+    private List<ExtractedImage> extractImagesFromPdfToBytes(PDDocument document) {
         List<ExtractedImage> images = new ArrayList<>();
         Set<String> uploadedHashes = new HashSet<>();
         int pageIndex = 0;
@@ -880,20 +944,13 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                         BufferedImage bufferedImage = pdImage.getImage();
                         if (bufferedImage.getWidth() < 50 || bufferedImage.getHeight() < 50) continue;
 
-                        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                        ImageIO.write(bufferedImage, "png", baos);
-                        byte[] imageBytes = baos.toByteArray();
-
+                        byte[] imageBytes = writeJpeg(bufferedImage, 0.8f);
                         String hash = DigestUtils.md5Hex(imageBytes);
                         if (uploadedHashes.contains(hash)) continue;
                         uploadedHashes.add(hash);
 
-                        // 上传到OSS（公网可达，供DashScope模型和前端访问）
-                        String objectKey = "question-image/" + userId + "/" + UUID.randomUUID() + ".png";
-                        String url = ossService.upload(objectKey, imageBytes, "image/png");
-
-                        // 临时用-1作为index，排序后重新编号
-                        images.add(new ExtractedImage(-1, url, pageIndex));
+                        // 暂不上传，只保存字节；index 临时用-1，排序后重新编号
+                        images.add(new ExtractedImage(-1, null, pageIndex, imageBytes));
                     }
                 } catch (Exception e) {
                     log.debug("[PDF图片提取] 跳过无法处理的图片: {}", e.getMessage());
@@ -911,6 +968,87 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         }
 
         return images;
+    }
+
+    /**
+     * 并行上传页面图片和嵌入图片到 OSS。
+     * 单张上传失败不中断整体流程：页面图片失败的条目被过滤，嵌入图片 url 保持 null（后续映射时跳过）。
+     * @return 页面图片URL列表（按页码顺序）
+     */
+    private List<String> uploadAllImagesParallel(List<PageImage> pageImages,
+                                                 List<ExtractedImage> extractedImages,
+                                                 Long userId) {
+        // 页面图片并行上传
+        List<CompletableFuture<String>> pageFutures = new ArrayList<>();
+        for (PageImage pi : pageImages) {
+            String objectKey = "question-image/" + userId + "/page-" + pi.pageIndex + "-" + UUID.randomUUID() + ".jpg";
+            pageFutures.add(CompletableFuture.supplyAsync(
+                    () -> ossService.upload(objectKey, pi.imageBytes, "image/jpeg"), AI_EXECUTOR)
+                    .exceptionally(ex -> {
+                        log.warn("[OSS并行上传] 页面图片上传失败, pageIndex={}, error={}", pi.pageIndex, ex.getMessage());
+                        return null;
+                    }));
+        }
+
+        // 嵌入图片并行上传，回填 url
+        List<CompletableFuture<Void>> extractFutures = new ArrayList<>();
+        for (ExtractedImage img : extractedImages) {
+            String objectKey = "question-image/" + userId + "/" + UUID.randomUUID() + ".jpg";
+            extractFutures.add(CompletableFuture.runAsync(() -> {
+                img.url = ossService.upload(objectKey, img.imageBytes, "image/jpeg");
+            }, AI_EXECUTOR).exceptionally(ex -> {
+                log.warn("[OSS并行上传] 嵌入图片上传失败, index={}, error={}", img.index, ex.getMessage());
+                return null;
+            }));
+        }
+
+        // 等待全部完成
+        CompletableFuture.allOf(pageFutures.toArray(new CompletableFuture[0])).join();
+        CompletableFuture.allOf(extractFutures.toArray(new CompletableFuture[0])).join();
+
+        // 按顺序收集页面URL（过滤失败的 null）
+        List<String> urls = new ArrayList<>(pageFutures.size());
+        for (CompletableFuture<String> f : pageFutures) {
+            String url = f.join();
+            if (url != null) {
+                urls.add(url);
+            }
+        }
+        long extractOk = extractedImages.stream().filter(i -> i.url != null).count();
+        log.info("[OSS并行上传] 完成, 页面图片成功 {}/{}, 嵌入图片成功 {}/{}",
+                urls.size(), pageImages.size(), extractOk, extractedImages.size());
+        return urls;
+    }
+
+    /**
+     * 降级时清理已上传到 OSS 的页面图片和嵌入图片，避免资源孤立。
+     * 入参允许为 null（异常发生在上传之前时）。
+     */
+    private void cleanupOssImages(List<String> pageImageUrls, List<ExtractedImage> extractedImages) {
+        int deleted = 0;
+        if (pageImageUrls != null) {
+            for (String url : pageImageUrls) {
+                String key = ossService.extractObjectKeyFromUrl(url);
+                if (key != null) {
+                    ossService.delete(key);
+                    deleted++;
+                }
+            }
+        }
+        if (extractedImages != null) {
+            for (ExtractedImage img : extractedImages) {
+                if (img.url != null) {
+                    String key = ossService.extractObjectKeyFromUrl(img.url);
+                    if (key != null) {
+                        ossService.delete(key);
+                        deleted++;
+                    }
+                }
+            }
+        }
+        if (deleted > 0) {
+            log.info("[题目文件解析-视觉] 降级清理：已删除 {} 个OSS图片", deleted);
+        }
     }
 
     private void mapImageReferencesToUrls(List<AiRubric> aiRubrics, List<ExtractedImage> extractedImages) {
