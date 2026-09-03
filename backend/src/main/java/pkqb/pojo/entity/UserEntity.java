@@ -2,6 +2,7 @@ package pkqb.pojo.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
@@ -29,6 +30,13 @@ public class UserEntity {
     private String apiKey;
 
     private String avatarUrl;
+
+    /** 角色：0普通用户 1管理员 */
+    private Integer role;
+
+    /** 逻辑删除：0未删除 1已删除 */
+    @TableLogic
+    private Integer deleted;
 
     private LocalDateTime createTime;
 

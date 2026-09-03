@@ -6,6 +6,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import pkqb.interceptor.AdminInterceptor;
 import pkqb.interceptor.JwtInterceptor;
 import pkqb.interceptor.LogInterceptor;
 
@@ -20,8 +21,9 @@ public class WebConfig implements WebMvcConfigurer {
 
     private final JwtInterceptor jwtInterceptor;
     private final LogInterceptor logInterceptor;
+    private final AdminInterceptor adminInterceptor;
 
-    @Value("${cors.allowed-origins:http://localhost:3000,http://localhost:5173,http://localhost:5555}")
+    @Value("${cors.allowed-origins:http://localhost:3000,http://localhost:3001,http://localhost:5173,http://localhost:5555}")
     private String allowedOrigins;
 
     @Override
@@ -55,7 +57,8 @@ public class WebConfig implements WebMvcConfigurer {
         registry.addInterceptor(jwtInterceptor)
                 .addPathPatterns("/**")
                 .excludePathPatterns(
-                        "/api/auth/**", 
+                        "/api/auth/**",
+                        "/api/admin/auth/**",
                         "/ws/**",
                         "/swagger-ui/**",
                         "/swagger-ui.html",
@@ -65,5 +68,10 @@ public class WebConfig implements WebMvcConfigurer {
                         "/doc.html",
                         "/favicon.ico"
                 );
+
+        // 管理端权限拦截器（在JWT之后执行，校验 role=1）
+        registry.addInterceptor(adminInterceptor)
+                .addPathPatterns("/api/admin/**")
+                .excludePathPatterns("/api/admin/auth/**");
     }
 }

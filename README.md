@@ -46,6 +46,7 @@ PKQB（智能题库生成系统）是一个前后端分离的 AI 教育应用，
 | **班级管理** | 班级创建、文件共享、公开题库 |
 | **历史管理** | 聊天历史保存、删除、重新生成回复、用量统计 |
 | **审计日志** | AOP 切面记录关键操作，接口限流保护 |
+| **管理端** | 独立管理后台（admin-frontend），管理员独立登录接口，账号管理（分页查询/新增/编辑/逻辑删除/重置密码）、班级管理（CRUD） |
 
 ---
 
@@ -58,9 +59,9 @@ PKQB（智能题库生成系统）是一个前后端分离的 AI 教育应用，
 系统采用分层架构：
 
 - **客户端层**：浏览器 / 移动端
-- **前端展示层**：Vue 3 + TypeScript + Vite + Pinia + Axios
+- **前端展示层**：学生端 Vue 3 + TypeScript + Vite + Pinia + Axios；管理端独立项目 admin-frontend（同技术栈，端口 3001）
 - **网关代理层**：Nginx 反向代理 + 静态托管
-- **后端服务层**：Spring Boot 3.2（端口 5555），含 Auth / File / AI / Rubric / Wrong / Notification / User 7 大业务模块
+- **后端服务层**：Spring Boot 3.2（端口 5555），含 Auth / File / AI / Rubric / Wrong / Notification / User 7 大业务模块 + admin 管理端模块
 - **AI 能力层**：Spring AI Alibaba / DashScope / ReactAgent / RAG
 - **数据存储层**：MySQL 8.0（业务数据）+ Redis（缓存/向量库/会话记忆）+ MinIO/OSS（对象存储）
 
@@ -231,6 +232,7 @@ QuestionExtractStrategy (接口)
 | **接口限流** | [RateLimitService](backend/src/main/java/pkqb/service/RateLimitService.java) 基于 Redis 的滑动窗口限流 |
 | **异常处理** | `@RestControllerAdvice` 全局异常处理 + `Result<T>` 统一响应封装 |
 | **软删除** | 试卷、题目采用 `deleted` 字段软删除，避免误删数据丢失 |
+| **管理端权限** | `AdminInterceptor` 拦截 `/api/admin/**`，校验 `role=1`；管理员登录独立接口，不与学生端 `/auth/login` 复用；用户表 `deleted` 字段逻辑删除（`@TableLogic`） |
 
 ---
 
@@ -245,7 +247,7 @@ QuestionExtractStrategy (接口)
 | 表名 | 说明 | 关键字段 |
 |------|------|----------|
 | `class` | 班级表 | id, class_name |
-| `user` | 用户表 | id, username, password_hash, student_no, class_id |
+| `user` | 用户表 | id, username, password_hash, student_no, class_id, role（0普通/1管理员）, deleted（逻辑删除） |
 | `rubric` | 试卷表（软删除） | id, title, create_id, is_private, question_count |
 | `question` | 题目表（软删除） | id, rubric_id, question_type, options_json, answer, explanation |
 | `question_resource` | 题目资源表 | 题目配图、选项图片、答案图片等 |
@@ -271,18 +273,19 @@ PKQB/
 │   ├── src/main/java/pkqb/
 │   │   ├── PkqbApplication.java      # 启动类
 │   │   ├── controller/               # 控制器层（7 个 Controller）
+│   │   │   └── admin/               # 管理端控制器（AdminAuth/AdminUser/AdminClass）
 │   │   ├── service/                  # 业务服务层
 │   │   │   ├── impl/                 # 服务实现
 │   │   │   └── strategy/             # 策略模式（题型解析）
 │   │   ├── config/                   # 配置类（AI/WebSocket/Redis/MinIO/Swagger）
 │   │   ├── tool/                     # AI 工具（RAGSearchTool/ImageViewTool）
-│   │   ├── interceptor/              # 拦截器（JWT/Log）
+│   │   ├── interceptor/              # 拦截器（JWT/Log/Admin 权限）
 │   │   ├── aspect/                   # AOP 切面（审计日志）
 │   │   ├── annotation/               # 自定义注解（@AuditLog）
 │   │   ├── mapper/                   # MyBatis-Plus Mapper
 │   │   ├── pojo/                     # 实体与 DTO
 │   │   │   ├── entity/               # 数据库实体
-│   │   │   └── dto/                  # 数据传输对象
+│   │   │   └── dto/                  # 数据传输对象（含 admin 子包）
 │   │   ├── enums/                    # 枚举（题型/模型类型等）
 │   │   ├── common/                   # 公共类（Result/常量）
 │   │   └── util/                     # 工具类（JWT/Argon2id/ApiKeyEncryptor）
@@ -312,6 +315,16 @@ PKQB/
 │   │   ├── router/                   # 路由配置
 │   │   └── types/                    # TypeScript 类型
 │   └── public/                       # 静态资源（PWA manifest/sw.js）
+│
+├── admin-frontend/                   # 管理端应用（独立项目）
+│   └── src/
+│       ├── views/                    # 页面（Login/AdminUsers/AdminClasses/Layout）
+│       ├── components/               # 通用组件（ToastContainer）
+│       ├── composables/              # 组合式函数（useToast）
+│       ├── stores/                   # Pinia 状态（auth 管理员登录态）
+│       ├── api/                      # Axios 封装与管理端接口定义
+│       ├── router/                   # 路由配置（含登录守卫）
+│       └── types/                    # TypeScript 类型
 │
 └── docs/                             # 项目文档
     ├── 系统框架图.puml / .png
@@ -378,13 +391,23 @@ npm install
 npm run dev
 ```
 
-前端运行在 http://localhost:5173
+学生端前端运行在 http://localhost:5173
+
+### 5. 启动管理端前端
+
+```bash
+cd admin-frontend
+npm install
+npm run dev
+```
+
+管理端前端运行在 http://localhost:3001 ，默认管理员账号见 `application.yml` 初始化数据或使用已存在的 role=1 账号登录。
 
 ---
 
 ## API 接口概览
 
-系统提供 RESTful API，共 7 大模块 40+ 接口，完整文档可通过 Swagger UI 查看。
+系统提供 RESTful API，共 8 大模块 40+ 接口，完整文档可通过 Swagger UI 查看。
 
 ### 认证
 
@@ -475,6 +498,19 @@ npm run dev
 | `/api/notification/read-all` | PUT | 全部标记已读 |
 | `/api/notification/{id}` | DELETE | 删除通知 |
 
+### 管理端（需 role=1，由 AdminInterceptor 校验）
+
+| 端点 | 方法 | 描述 |
+|------|------|------|
+| `/api/admin/auth/login` | POST | 管理员登录（独立接口，不复用 `/auth/login`） |
+| `/api/admin/user/page` | GET | 账号分页查询（支持关键字/班级/角色筛选） |
+| `/api/admin/user` | POST | 新增账号（含初始密码） |
+| `/api/admin/user/{id}` | PUT | 修改账号（用户名/学号/班级/角色） |
+| `/api/admin/user/{id}` | DELETE | 删除账号（逻辑删除，deleted=1） |
+| `/api/admin/user/{id}/password` | PUT | 重置账号密码 |
+| `/api/admin/class` | GET/POST | 查询全部班级 / 新增班级 |
+| `/api/admin/class/{id}` | PUT/DELETE | 修改班级 / 删除班级（物理删除，有账号引用时拒绝） |
+
 ---
 
 ## 部署说明
@@ -485,8 +521,11 @@ npm run dev
 # 终端 1: 启动后端
 cd backend && ./mvnw spring-boot:run
 
-# 终端 2: 启动前端
+# 终端 2: 启动学生端前端
 cd frontend && npm run dev
+
+# 终端 3: 启动管理端前端
+cd admin-frontend && npm run dev
 ```
 
 ### 生产环境
@@ -494,18 +533,27 @@ cd frontend && npm run dev
 1. **构建前端**：
 
 ```bash
-cd frontend
-npm run build
+# 学生端
+cd frontend && npm run build
+
+# 管理端
+cd ../admin-frontend && npm run build
 ```
 
-2. **部署前端**：将 `frontend/dist/` 部署到 Nginx，配置反向代理：
+2. **部署前端**：将 `frontend/dist/` 与 `admin-frontend/dist/` 分别部署到 Nginx，配置反向代理：
 
 ```nginx
 server {
     listen 80;
     server_name your-domain.com;
 
-    # 前端静态资源
+    # 管理端静态资源（独立路径，避免与学生端冲突）
+    location /admin/ {
+        alias /path/to/admin-frontend/dist/;
+        try_files $uri $uri/ /admin/index.html;
+    }
+
+    # 学生端静态资源
     location / {
         root /path/to/frontend/dist;
         try_files $uri $uri/ /index.html;
