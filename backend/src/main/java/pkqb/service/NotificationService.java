@@ -7,7 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import pkqb.config.NotificationWebSocketHandler;
+import pkqb.config.NotificationSseManager;
 import pkqb.mapper.NotificationMapper;
 import pkqb.pojo.entity.NotificationEntity;
 
@@ -21,7 +21,7 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class NotificationService {
 
-    private final NotificationWebSocketHandler webSocketHandler;
+    private final NotificationSseManager sseManager;
     private final NotificationMapper notificationMapper;
     private final ObjectMapper objectMapper;
 
@@ -40,7 +40,7 @@ public class NotificationService {
             log.error("[通知] 保存到数据库失败, userId={}, type={}", userId, type, e);
         }
 
-        // 2. WebSocket 实时推送
+        // 2. SSE 实时推送
         try {
             Map<String, Object> payload = new HashMap<>();
             payload.put("id", entity.getId());
@@ -51,7 +51,7 @@ public class NotificationService {
             payload.put("read", false);
 
             String json = objectMapper.writeValueAsString(payload);
-            boolean sent = webSocketHandler.sendToUser(userId, json);
+            boolean sent = sseManager.sendToUser(userId, json);
 
             if (sent) {
                 log.info("[通知推送] userId={}, type={}, title={}", userId, type, title);
@@ -63,14 +63,24 @@ public class NotificationService {
         }
     }
 
-    public void notifyRubricParseComplete(Long userId, String rubricTitle) {
+    public void notifyRubricParseComplete(Long userId, String finalMethod) {
         notify(userId, "RUBRIC_PARSE_COMPLETE", "题目解析完成",
-                "试卷「" + rubricTitle + "」AI 解析已完成，请查看结果");
+                "本次采用「" + finalMethod + "」解析完成，请查看结果");
+    }
+
+    /**
+     * 解析过程中发生降级但最终成功：告知用户失败的模型及原因、最终采用的解析方式，并提示检查模型额度
+     */
+    public void notifyRubricParseCompleteWithFallback(Long userId, String failedModel, String failReason, String finalMethod) {
+        notify(userId, "RUBRIC_PARSE_COMPLETE", "题目解析完成（已自动降级）",
+                failedModel + "解析失败：" + failReason
+                        + "，已自动降级为「" + finalMethod + "」并解析成功，请查看结果。"
+                        + "建议检查" + failedModel + "是否还有额度");
     }
 
     public void notifyRubricParseFailed(Long userId, String reason) {
         notify(userId, "RUBRIC_PARSE_FAILED", "题目解析失败",
-                "AI 解析失败：" + reason);
+                "AI 解析失败：" + reason + "。建议检查对应模型是否还有额度");
     }
 
     public void notifyHtmlGenerateComplete(Long userId, String rubricTitle) {
@@ -88,15 +98,6 @@ public class NotificationService {
                 "文档「" + fileName + "」上传失败：" + reason);
     }
 
-    public void notifyAiSolveComplete(Long userId) {
-        notify(userId, "AI_SOLVE_COMPLETE", "AI解题完成",
-                "AI 解题已完成，请查看结果");
-    }
-
-    public void notifySystem(Long userId, String message) {
-        notify(userId, "SYSTEM", "系统通知", message);
-    }
-
     // ========== REST API 方法 ==========
 
     public List<NotificationEntity> getNotifications(Long userId) {
@@ -105,13 +106,6 @@ public class NotificationService {
                .orderByDesc(NotificationEntity::getCreateTime)
                .last("LIMIT 100");
         return notificationMapper.selectList(wrapper);
-    }
-
-    public long getUnreadCount(Long userId) {
-        LambdaQueryWrapper<NotificationEntity> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(NotificationEntity::getUserId, userId)
-               .eq(NotificationEntity::getIsRead, false);
-        return notificationMapper.selectCount(wrapper);
     }
 
     public void markAsRead(Long notificationId, Long userId) {

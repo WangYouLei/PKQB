@@ -2,7 +2,6 @@ package pkqb.service;
 
 import pkqb.pojo.dto.FileResponse;
 import pkqb.pojo.entity.FileEntity;
-import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
@@ -11,19 +10,6 @@ import java.util.List;
  * 提供文件上传、下载、删除、更新等核心业务功能
  */
 public interface FileService {
-
-    /**
-     * 上传文件
-     * 将文件上传到MinIO对象存储，并记录文件信息到数据库
-     *
-     * @param file 上传的文件
-     * @param userId 用户ID
-     * @param fileName 文件显示名称
-     * @param isPrivate 是否私有
-     * @return 文件响应信息
-     * @throws IllegalArgumentException 当文件或文件名为空时抛出
-     */
-    FileResponse uploadFile(MultipartFile file, Long userId,String fileName, boolean isPrivate);
 
     /**
      * 获取用户文件列表

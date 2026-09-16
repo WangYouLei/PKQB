@@ -6,7 +6,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.multipart.MultipartFile;
 import pkqb.config.GlobalExceptionHandler.ResourceNotFoundException;
 import pkqb.config.GlobalExceptionHandler.PermissionDeniedException;
 import pkqb.mapper.FileMapper;
@@ -40,41 +39,6 @@ public class FileServiceImpl implements FileService {
 
     @Value("${minio.bucket-name}")
     private String bucketName;
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public FileResponse uploadFile(MultipartFile file, Long userId, String fileName, boolean isPrivate) {
-        if (file == null || file.isEmpty()) {
-            throw new IllegalArgumentException("文件不能为空");
-        }
-        if (fileName == null || fileName.trim().isEmpty()) {
-            throw new IllegalArgumentException("文件名不能为空");
-        }
-
-        String originalFilename = file.getOriginalFilename();
-        String extension = originalFilename != null && originalFilename.contains(".")
-                ? originalFilename.substring(originalFilename.lastIndexOf("."))
-                : ".text";
-        String objectKey = "file/" + userId + "/" + UUID.randomUUID() + extension;
-
-        try {
-            minioService.upload(objectKey, file.getInputStream(), file.getContentType(), file.getSize());
-        } catch (RuntimeException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new RuntimeException("读取文件失败: " + e.getMessage(), e);
-        }
-
-        FileEntity entity = new FileEntity();
-        entity.setUserId(userId);
-        entity.setFileName(fileName);
-        entity.setMinioKey(objectKey);
-        entity.setIsPrivate(isPrivate);
-
-        fileMapper.insert(entity);
-
-        return toResponse(entity);
-    }
 
     @Override
     public List<FileResponse> getUserFiles(Long userId) {

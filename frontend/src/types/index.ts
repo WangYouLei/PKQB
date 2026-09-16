@@ -68,18 +68,6 @@ export interface QuestionItem {
   resources?: QuestionResource[]
 }
 
-export interface ChatMessage {
-  role: 'user' | 'assistant'
-  content: string
-  timestamp: number
-}
-
-export interface HistorySession {
-  sessionId: string
-  messages: ChatMessage[]
-  createTime: string
-}
-
 // ========== 试卷相关类型 ==========
 
 export interface RubricItem {

@@ -3,14 +3,17 @@ package pkqb.controller;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import pkqb.common.Result;
+import pkqb.config.NotificationSseManager;
 import pkqb.pojo.entity.NotificationEntity;
 import pkqb.service.NotificationService;
 
 import java.util.List;
-import java.util.Map;
 
 @RestController
 @RequestMapping("/api/notification")
@@ -19,6 +22,16 @@ import java.util.Map;
 public class NotificationController {
 
     private final NotificationService notificationService;
+    private final NotificationSseManager sseManager;
+
+    @GetMapping(value = "/subscribe", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @Operation(summary = "订阅通知", description = "建立 SSE 连接，实时接收通知推送")
+    public SseEmitter subscribe(HttpServletRequest request, HttpServletResponse response) {
+        // 禁用 Nginx 等反向代理的响应缓冲，否则事件流会被缓冲导致通知延迟
+        response.setHeader("X-Accel-Buffering", "no");
+        Long userId = (Long) request.getAttribute("userId");
+        return sseManager.register(userId);
+    }
 
     @GetMapping("/list")
     @Operation(summary = "获取通知列表", description = "获取当前用户的通知列表")
@@ -29,17 +42,6 @@ public class NotificationController {
         }
         List<NotificationEntity> list = notificationService.getNotifications(userId);
         return Result.success(list);
-    }
-
-    @GetMapping("/unread-count")
-    @Operation(summary = "获取未读数量", description = "获取当前用户的未读通知数量")
-    public Result<Map<String, Long>> getUnreadCount(HttpServletRequest request) {
-        Long userId = (Long) request.getAttribute("userId");
-        if (userId == null) {
-            return Result.error("未登录或登录已过期");
-        }
-        long count = notificationService.getUnreadCount(userId);
-        return Result.success(Map.of("unreadCount", count));
     }
 
     @PutMapping("/read/{id}")

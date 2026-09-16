@@ -69,7 +69,13 @@ public class JwtInterceptor implements HandlerInterceptor {
         if (token != null) {
             return token;
         }
-        
+
+        // SSE 的 EventSource 无法自定义请求头，从 URL 参数获取
+        token = request.getParameter("token");
+        if (token != null) {
+            return token;
+        }
+
         Cookie[] cookies = request.getCookies();
         if (cookies != null) {
             for (Cookie cookie : cookies) {

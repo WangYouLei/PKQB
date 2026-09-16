@@ -337,12 +337,6 @@ export const apiGetNotifications = async () => {
   return res
 }
 
-/** 获取未读数量 */
-export const apiGetUnreadCount = async () => {
-  const res = await get<{ unreadCount: number }>('/notification/unread-count')
-  return res
-}
-
 /** 标记已读 */
 export const apiMarkNotificationRead = async (id: number) => {
   const res = await put<void>(`/notification/read/${id}`)

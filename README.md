@@ -27,7 +27,7 @@ PKQB（智能题库生成系统）是一个前后端分离的 AI 教育应用，
 2. **RAG 知识库问答**：学生上传学习资料构建私有/班级知识库，基于两阶段检索（向量粗排 + qwen3-rerank 精排）的 RAG 进行精准答疑。
 3. **错题间隔复习**：基于 SM-2 记忆曲线算法，对做错的题目自动收集并安排科学的复习计划。
 
-系统采用 **Spring Boot 3.2 + Vue 3** 技术栈，集成 **Spring AI Alibaba 1.1.2** 的 ReactAgent 多 Agent 框架，通过 SSE 流式输出 + WebSocket 实时通知双通道实现良好的实时交互体验。
+系统采用 **Spring Boot 3.2 + Vue 3** 技术栈，集成 **Spring AI Alibaba 1.1.2** 的 ReactAgent 多 Agent 框架，通过 SSE（Server-Sent Events）实现 AI 流式对话输出与实时通知推送。
 
 ---
 
@@ -42,7 +42,7 @@ PKQB（智能题库生成系统）是一个前后端分离的 AI 教育应用，
 | **AI 对话** | ReactAgent 多 Agent 对话 + RAG 知识库问答，SSE 流式输出 |
 | **AI 解题** | 拍照/上传题目，AI 识别并给出答案与解析 |
 | **错题本** | 错题自动收集、SM-2 间隔重复复习、4 级掌握度统计 |
-| **通知系统** | WebSocket 实时推送，7 种通知类型，消息中心管理 |
+| **通知系统** | SSE 实时推送，7 种通知类型，消息中心管理 |
 | **班级管理** | 班级创建、文件共享、公开题库 |
 | **历史管理** | 聊天历史保存、删除、重新生成回复、用量统计 |
 | **审计日志** | AOP 切面记录关键操作，接口限流保护 |
@@ -88,7 +88,7 @@ PKQB（智能题库生成系统）是一个前后端分离的 AI 教育应用，
 | **文档解析** | Apache POI / PDFBox | 5.4.0 / 3.0.1 | Word / PDF 文档解析 |
 | **认证** | JJWT | 0.12.5 | JWT Token 生成与校验 |
 | **密码加密** | Argon2 (argon2-jvm) | 2.11 | PHC 冠军密码哈希算法 |
-| **实时通信** | Spring WebSocket | - | 通知实时推送 |
+| **实时通信** | SseEmitter (Spring MVC) | - | 通知实时推送（Server-Sent Events） |
 | **API 文档** | springdoc-openapi | 2.5.0 | OpenAPI 3.0 文档 |
 | **AOP** | spring-boot-starter-aop | - | 审计日志切面 |
 
@@ -204,22 +204,24 @@ QuestionExtractStrategy (接口)
 
 详见 [WrongQuestionServiceImpl.java](backend/src/main/java/pkqb/service/impl/WrongQuestionServiceImpl.java)。
 
-### 6. SSE + WebSocket 双通道实时通信
+### 6. SSE 统一实时通信方案
 
-针对不同实时场景选择最优技术方案：
+针对不同实时场景均采用与场景匹配的技术方案：
 
-| 通道 | 技术 | 场景 | 理由 |
-|------|------|------|------|
-| **SSE** | Fetch + ReadableStream | AI 流式对话 | 单向流式输出，SSE 是最佳场景 |
-| **WebSocket** | Spring WebSocket | 服务端推送通知 | 需要服务端主动推送，双向通信 |
+| 场景 | 技术 | 理由 |
+|------|------|------|
+| AI 流式对话 | Fetch + ReadableStream（SSE 格式） | 单向流式输出，支持自定义请求头 |
+| 实时通知推送 | SseEmitter + EventSource | 服务端单向推送，浏览器原生自动重连 |
 
-**WebSocket 实现**：
-- 端点 `/ws/notification`，JWT 握手认证（优先级：Header > Cookie > URL 参数）
-- `CopyOnWriteArrayList` 支持同一用户多端连接
+**通知 SSE 实现**：
+- 端点 `GET /api/notification/subscribe`（`text/event-stream`），复用 JWT 拦截器认证（token 优先级：Header > URL 参数 > Cookie）
+- `CopyOnWriteArrayList<SseEmitter>` 支持同一用户多端连接，死连接自动清理
+- 服务端 25s 间隔心跳（注释行 `:ping`），防止 Nginx 等代理空闲超时断连
+- 响应头 `X-Accel-Buffering: no` 禁用反向代理缓冲，保证事件实时下发
 - 7 种通知类型：题目解析完成/失败、HTML 生成完成、知识库上传完成/失败、AI 解题完成、系统通知
-- 前端指数退避自动重连（1s → 2s → 4s → 最大 30s），ws/wss 协议自适应
+- 前端使用浏览器原生 `EventSource`，断线自动重连；token 失效（连接被拒）时用 localStorage 最新 token 手动重建
 
-详见 [WebSocketConfig.java](backend/src/main/java/pkqb/config/WebSocketConfig.java) 与 [useWebSocket.ts](frontend/src/composables/useWebSocket.ts)。
+详见 [NotificationSseManager.java](backend/src/main/java/pkqb/config/NotificationSseManager.java)、[NotificationController.java](backend/src/main/java/pkqb/controller/NotificationController.java) 与 [useWebSocket.ts](frontend/src/composables/useWebSocket.ts)。
 
 ### 7. 安全设计
 
@@ -227,7 +229,7 @@ QuestionExtractStrategy (接口)
 |------|------|
 | **密码加密** | Argon2id（2025 年 PHC 冠军算法），抗 GPU/ASIC 破解 |
 | **API Key 保护** | 用户 API Key 加密存储（[ApiKeyEncryptor](backend/src/main/java/pkqb/util/ApiKeyEncryptor.java)），不明文落库 |
-| **认证** | JWT Token，拦截器统一校验，WebSocket 独立握手认证 |
+| **认证** | JWT Token，拦截器统一校验（REST 与 SSE 订阅共用） |
 | **审计日志** | `@AuditLog` 注解 + AOP 切面（[AuditLogAspect](backend/src/main/java/pkqb/aspect/AuditLogAspect.java)）记录关键操作 |
 | **接口限流** | [RateLimitService](backend/src/main/java/pkqb/service/RateLimitService.java) 基于 Redis 的滑动窗口限流 |
 | **异常处理** | `@RestControllerAdvice` 全局异常处理 + `Result<T>` 统一响应封装 |
@@ -277,7 +279,7 @@ PKQB/
 │   │   ├── service/                  # 业务服务层
 │   │   │   ├── impl/                 # 服务实现
 │   │   │   └── strategy/             # 策略模式（题型解析）
-│   │   ├── config/                   # 配置类（AI/WebSocket/Redis/MinIO/Swagger）
+│   │   ├── config/                   # 配置类（AI/SSE/Redis/MinIO/Swagger）
 │   │   ├── tool/                     # AI 工具（RAGSearchTool/ImageViewTool）
 │   │   ├── interceptor/              # 拦截器（JWT/Log/Admin 权限）
 │   │   ├── aspect/                   # AOP 切面（审计日志）
@@ -492,6 +494,7 @@ npm run dev
 
 | 端点 | 方法 | 描述 |
 |------|------|------|
+| `/api/notification/subscribe` | GET | SSE 订阅通知（实时推送） |
 | `/api/notification/list` | GET | 获取通知列表 |
 | `/api/notification/unread-count` | GET | 获取未读通知数 |
 | `/api/notification/read/{id}` | PUT | 标记通知已读 |
@@ -564,15 +567,11 @@ server {
         proxy_pass http://backend:5555;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-    }
-
-    # WebSocket 代理（通知实时推送）
-    location /ws/ {
-        proxy_pass http://backend:5555;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
+        # SSE 通知推送：禁用缓冲、延长读超时
+        proxy_buffering off;
         proxy_read_timeout 86400;
+        proxy_set_header Connection "";
+        proxy_http_version 1.1;
     }
 }
 ```
@@ -588,6 +587,6 @@ java -jar target/pkqb-0.0.1-SNAPSHOT.jar
 ### 部署注意事项
 
 1. **数据库迁移**：首次部署需依次执行 `docs/` 下的建表 SQL。
-2. **WebSocket 代理**：Nginx 需配置 WebSocket 升级支持（见上方配置）。
-3. **HTTPS 环境**：WebSocket 已自动适配 `wss://` 协议，无需额外配置。
+2. **SSE 代理配置**：Nginx 反代 API 时需 `proxy_buffering off` 并延长 `proxy_read_timeout`（见上方配置），否则通知事件流会被缓冲导致延迟或断连。
+3. **HTTPS 环境**：SSE 基于普通 HTTP，自动适配 `https://`，无需额外配置。
 4. **DashScope API Key**：需在阿里云百炼平台申请，配置到 `application.yml`。

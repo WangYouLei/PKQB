@@ -12,9 +12,7 @@ interface WsNotification {
 }
 
 const notifications = ref<NotificationItem[]>([])
-const ws = ref<WebSocket | null>(null)
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-let reconnectAttempts = 0
+const es = ref<EventSource | null>(null)
 let intentionalClose = false
 
 const unreadCount = computed(() => notifications.value.filter(n => !n.isRead).length)
@@ -23,33 +21,19 @@ function connect() {
   const token = localStorage.getItem('token')
   if (!token) return
 
-  // 如果已有连接（含正在关闭的旧连接），先断开再重建
-  if (ws.value) {
+  // 如果已有连接，先断开再重建
+  if (es.value) {
     intentionalClose = true
-    ws.value.close()
-    ws.value = null
-  }
-
-  // 清除待执行的重连定时器
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer)
-    reconnectTimer = null
+    es.value.close()
+    es.value = null
   }
 
   intentionalClose = false
-  reconnectAttempts = 0
 
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const host = window.location.host
-  const wsUrl = `${protocol}//${host}/ws/notification?token=${encodeURIComponent(token)}`
+  const sseUrl = `/api/notification/subscribe?token=${encodeURIComponent(token)}`
+  const source = new EventSource(sseUrl)
 
-  const socket = new WebSocket(wsUrl)
-
-  socket.onopen = () => {
-    loadNotifications()
-  }
-
-  socket.onmessage = (event) => {
+  source.addEventListener('notification', (event) => {
     try {
       const data: WsNotification = JSON.parse(event.data)
       const item: NotificationItem = {
@@ -66,22 +50,29 @@ function connect() {
         notifications.value = notifications.value.slice(0, 100)
       }
     } catch (e) {
-      console.error('[WebSocket] 解析消息失败', e)
+      console.error('[SSE] 解析消息失败', e)
+    }
+  })
+
+  source.onopen = () => {
+    loadNotifications()
+  }
+
+  source.onerror = () => {
+    // EventSource 原生自动重连（CONNECTING 状态）
+    // 但服务器拒绝连接（如 token 失效返回 401）时会进入 CLOSED，
+    // 此时需用 localStorage 的最新 token 手动重建连接
+    if (source.readyState === EventSource.CLOSED) {
+      es.value = null
+      if (!intentionalClose) {
+        setTimeout(() => {
+          if (!intentionalClose) connect()
+        }, 3000)
+      }
     }
   }
 
-  socket.onclose = () => {
-    ws.value = null
-    if (!intentionalClose) {
-      scheduleReconnect()
-    }
-  }
-
-  socket.onerror = () => {
-    socket.close()
-  }
-
-  ws.value = socket
+  es.value = source
 }
 
 async function loadNotifications() {
@@ -95,28 +86,13 @@ async function loadNotifications() {
   }
 }
 
-function scheduleReconnect() {
-  if (reconnectTimer) return
-  reconnectAttempts++
-  const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000)
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null
-    connect()
-  }, delay)
-}
-
 function disconnect() {
   intentionalClose = true
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer)
-    reconnectTimer = null
-  }
-  if (ws.value) {
-    ws.value.close()
-    ws.value = null
+  if (es.value) {
+    es.value.close()
+    es.value = null
   }
   notifications.value = []
-  reconnectAttempts = 0
 }
 
 async function markAsRead(id: number) {

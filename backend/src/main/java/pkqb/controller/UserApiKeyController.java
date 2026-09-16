@@ -218,30 +218,4 @@ public class UserApiKeyController {
             return Result.error("设置主模型失败: " + e.getMessage());
         }
     }
-
-    @GetMapping("/models")
-    @Operation(summary = "获取模型列表", description = "获取用户的所有模型列表")
-    public Result<Map<String, Object>> getUserModels(HttpServletRequest httpRequest) {
-        Long userId = (Long) httpRequest.getAttribute("userId");
-        if (userId == null) {
-            return Result.error(401, "未登录或登录已过期");
-        }
-        Map<String, Object> result = new HashMap<>();
-        
-        ModelsEntity mainModel = userApiKeyService.getMainModel(userId);
-        List<ModelsEntity> assistantModels = userApiKeyService.getAssistantModels(userId);
-        ModelsEntity visionModel = userApiKeyService.getVisionModel(userId);
-        List<ModelsEntity> allModels = userApiKeyService.getUserModels(userId);
-
-        result.put("mainModel", mainModel);
-        result.put("assistantModels", assistantModels);
-        result.put("visionModel", visionModel);
-        result.put("allModels", allModels);
-        result.put("modelCount", allModels.size());
-        result.put("maxModelCount", UserApiKeyService.MAX_MODEL_COUNT);
-        result.put("canAddModel", userApiKeyService.canAddModel(userId));
-        result.put("supportsMultiModel", userApiKeyService.supportsMultiModel(userId));
-        
-        return Result.success(result);
-    }
 }

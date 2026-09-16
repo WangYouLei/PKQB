@@ -378,34 +378,6 @@ public class RubricServiceImpl implements RubricService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public Result<?> updateQuestion(QuestionEntity questionEntity, Long userId) {
-        QuestionEntity question = questionMapper.selectById(questionEntity.getId());
-        if (question == null) {
-            throw new IllegalArgumentException("题目不存在");
-        }
-
-        RubricEntity rubric = rubricMapper.selectById(question.getRubricId());
-        if (rubric == null) {
-            throw new IllegalArgumentException("试卷不存在");
-        }
-        if (!rubric.getCreateId().equals(userId)) {
-            throw new IllegalArgumentException("只有创建者可以修改题目");
-        }
-
-        question.setQuestionText(HtmlUtils.htmlEscape(questionEntity.getQuestionText()));
-        question.setQuestionType(questionEntity.getQuestionType());
-        question.setOptionsJson(questionEntity.getOptionsJson());
-        question.setAnswer(HtmlUtils.htmlEscape(questionEntity.getAnswer()));
-        question.setExplanation(HtmlUtils.htmlEscape(questionEntity.getExplanation()));
-        question.setCalculationStepsJson(questionEntity.getCalculationStepsJson());
-        question.setUpdateTime(LocalDateTime.now());
-        questionMapper.updateById(question);
-
-        return Result.success("修改题目成功");
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
     public Result<?> batchSaveQuestions(Long rubricId, List<QuestionEntity> questions, Long userId) {
         RubricEntity rubric = rubricMapper.selectById(rubricId);
         if (rubric == null) {

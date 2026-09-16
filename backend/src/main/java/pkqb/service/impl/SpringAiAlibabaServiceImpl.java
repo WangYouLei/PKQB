@@ -739,7 +739,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
 
             if (pageImages.isEmpty()) {
                 log.warn("[题目文件解析-视觉] PDF页面渲染失败，降级到纯文本模式");
-                return handleRubricFileWithText(file, userId);
+                return handleRubricFileWithText(file, userId, "PDF页面渲染失败");
             }
             log.info("[题目文件解析-视觉] PDF渲染为 {} 张页面图片，提取到 {} 张嵌入图片",
                     pageImages.size(), extractedImages.size());
@@ -749,7 +749,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             if (pageImageUrls.isEmpty()) {
                 log.warn("[题目文件解析-视觉] 全部页面图片上传失败，降级到纯文本模式");
                 cleanupOssImages(pageImageUrls, extractedImages);
-                return handleRubricFileWithText(file, userId);
+                return handleRubricFileWithText(file, userId, "页面图片上传失败");
             }
 
             // Step 3: 将页面图片URL发给视觉模型，获取结构化题目
@@ -757,19 +757,19 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             if (aiRubrics == null || aiRubrics.isEmpty()) {
                 log.warn("[题目文件解析-视觉] 视觉模型返回为空，降级到纯文本模式");
                 cleanupOssImages(pageImageUrls, extractedImages);
-                return handleRubricFileWithText(file, userId);
+                return handleRubricFileWithText(file, userId, "视觉模型返回结果为空");
             }
 
             // Step 4: 将图片编号映射为实际URL
             mapImageReferencesToUrls(aiRubrics, extractedImages);
 
             log.info("[题目文件解析-视觉] 解析完成，共提取 {} 道题目", aiRubrics.size());
-            notificationService.notifyRubricParseComplete(userId, "AI视觉解析");
+            notificationService.notifyRubricParseComplete(userId, "视觉模型");
             return Result.success(aiRubrics);
         } catch (Exception e) {
             log.error("[题目文件解析-视觉] 视觉识别失败: {}，降级到纯文本模式", e.getMessage());
             cleanupOssImages(pageImageUrls, extractedImages);
-            return handleRubricFileWithText(file, userId);
+            return handleRubricFileWithText(file, userId, e.getMessage());
         }
     }
 
@@ -1102,6 +1102,15 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
      * 使用纯文本提取流程（原有逻辑）
      */
     private Result<List<AiRubric>> handleRubricFileWithText(MultipartFile file, Long userId) {
+        return handleRubricFileWithText(file, userId, null);
+    }
+
+    /**
+     * 使用纯文本提取流程（原有逻辑）
+     *
+     * @param visionFailReason 视觉模型解析失败的原因；非空表示本次是视觉解析失败后的自动降级
+     */
+    private Result<List<AiRubric>> handleRubricFileWithText(MultipartFile file, Long userId, String visionFailReason) {
         try {
             List<Document> documents = getDocuments(file);
             if (documents == null || documents.isEmpty()) {
@@ -1135,11 +1144,18 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                 }
 
                 log.info("[题目文件解析-AI] 解析完成，共提取 {} 道题目", aiRubrics.size());
-                notificationService.notifyRubricParseComplete(userId, "AI文本解析");
+                if (visionFailReason != null) {
+                    notificationService.notifyRubricParseCompleteWithFallback(userId, "视觉模型", visionFailReason, "文本模型");
+                } else {
+                    notificationService.notifyRubricParseComplete(userId, "文本模型");
+                }
                 return Result.success(aiRubrics);
             } catch (Exception e) {
                 log.error("[题目文件解析-AI] AI解析失败: {}", e.getMessage(), e);
-                notificationService.notifyRubricParseFailed(userId, e.getMessage());
+                String failReason = visionFailReason != null
+                        ? "视觉模型解析失败：" + visionFailReason + "，自动降级后文本模型也解析失败：" + e.getMessage()
+                        : e.getMessage();
+                notificationService.notifyRubricParseFailed(userId, failReason);
                 return Result.error("AI解析失败，可能原因：题目数量过多等，可以尝试减少题目数量或者使用\"本地解析题目\"功能");
             }
         } catch (Exception e) {

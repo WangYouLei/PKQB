@@ -15,7 +15,6 @@ import org.springframework.stereotype.Service;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
-import java.util.Date;
 import java.util.List;
 
 /**
@@ -104,18 +103,6 @@ public class OssService {
     public String getPublicUrl(String objectKey) {
         String ep = endpoint.replaceFirst("^https?://", "");
         return "https://" + bucketName + "." + ep + "/" + objectKey;
-    }
-
-    /**
-     * 生成预签名URL（带过期时间）
-     *
-     * @param objectKey 对象Key
-     * @param expireMinutes 过期时间（分钟）
-     * @return 预签名URL
-     */
-    public String generatePresignedUrl(String objectKey, int expireMinutes) {
-        Date expiration = new Date(System.currentTimeMillis() + expireMinutes * 60 * 1000L);
-        return ossClient.generatePresignedUrl(bucketName, objectKey, expiration).toString();
     }
 
     /**

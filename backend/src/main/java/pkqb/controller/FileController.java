@@ -10,7 +10,6 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.multipart.MultipartFile;
 import pkqb.common.Result;
 import pkqb.pojo.dto.FileResponse;
 import pkqb.pojo.entity.FileEntity;
@@ -25,32 +24,6 @@ import java.util.List;
 public class FileController {
 
     private final FileService fileService;
-
-    @PostMapping("/upload")
-    @Operation(summary = "上传文件", description = "上传文件到MinIO存储")
-    public Result<FileResponse> upload(
-            @Parameter(description = "文件") @RequestParam("file") MultipartFile file,
-            @Parameter(description = "用户ID") @RequestAttribute("userId") Long userId,
-            @Parameter(description = "文件名") @RequestParam("file_name") String fileName,
-            @Parameter(description = "是否私有") @RequestParam("is_private") boolean isPrivate
-    ) {
-        // 文件类型白名单
-        String originalFilename = file.getOriginalFilename();
-        if (originalFilename == null) {
-            return Result.error("文件名不能为空");
-        }
-        String extension = originalFilename.substring(originalFilename.lastIndexOf(".") + 1).toLowerCase();
-        java.util.Set<String> allowedExtensions = java.util.Set.of(
-            "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-            "txt", "md", "csv",
-            "jpg", "jpeg", "png", "gif", "bmp", "webp"
-        );
-        if (!allowedExtensions.contains(extension)) {
-            return Result.error("不支持的文件类型: " + extension);
-        }
-        FileResponse response = fileService.uploadFile(file, userId,fileName,isPrivate);
-        return Result.success("上传成功", response);
-    }
 
     @GetMapping("/my")
     @Operation(summary = "获取我的文件列表", description = "获取当前用户上传的文件列表")

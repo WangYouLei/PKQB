@@ -102,16 +102,6 @@ public class RubricController {
         return rubricService.deleteRubric(rubricId, userId);
     }
     
-    @PutMapping("/question/update")
-    @Operation(summary = "修改题目", description = "修改试卷中的题目")
-    public Result<?> updateQuestion(@Valid @RequestBody QuestionEntity questionEntity, HttpServletRequest request) {
-        Long userId = (Long) request.getAttribute("userId");
-        if (userId == null) {
-            return Result.error("未登录或登录已过期");
-        }
-        return rubricService.updateQuestion(questionEntity, userId);
-    }
-    
     @PostMapping("/{rubricId}/questions/batch")
     @Operation(summary = "批量保存题目", description = "批量保存试卷题目（先删除再添加）")
     public Result<?> batchSaveQuestions(
