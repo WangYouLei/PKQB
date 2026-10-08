@@ -6,6 +6,7 @@ import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import pkqb.pojo.entity.ModelsEntity;
 
 @Component
 public class DashScopeModelFactory {
@@ -36,18 +37,42 @@ public class DashScopeModelFactory {
     }
 
     public ChatModel createChatModel(String apiKey, String model, int maxTokens) {
+        return createChatModel(apiKey, model, maxTokens, null, false);
+    }
+
+    public ChatModel createChatModel(String apiKey, String model, int maxTokens, Boolean enableThinking) {
+        return createChatModel(apiKey, model, maxTokens, enableThinking, false);
+    }
+
+    public ChatModel createChatModel(String apiKey, String model, int maxTokens, Boolean enableThinking, boolean multiModel) {
         String actualModel = (model != null && !model.isEmpty()) ? model : defaultModel;
         DashScopeApi dashScopeApi = DashScopeApi.builder()
                 .apiKey(apiKey)
                 .build();
+        // 不设置 temperature：部分模型（如 kimi-k3）不支持指定值，不传时由服务端使用模型默认值
         return DashScopeChatModel.builder()
                 .dashScopeApi(dashScopeApi)
                 .defaultOptions(DashScopeChatOptions.builder()
                         .withModel(actualModel)
                         .withMaxToken(maxTokens)
-                        .withTemperature(0.7)
+                        .withEnableThinking(enableThinking)
+                        .withMultiModel(multiModel)
                         .build())
                 .build();
+    }
+
+    /**
+     * 按用户模型配置创建 ChatModel（应用 models 表中探测到的调用方式）
+     *
+     * @param model 用户模型实体，为 null 时使用系统默认模型和默认调用方式
+     */
+    public ChatModel createChatModel(String apiKey, ModelsEntity model) {
+        if (model == null) {
+            return createChatModel(apiKey, defaultModel, personalMaxTokens, null, false);
+        }
+        return createChatModel(apiKey, model.getModelName(), personalMaxTokens,
+                Boolean.TRUE.equals(model.getEnableThinking()) ? Boolean.TRUE : null,
+                Boolean.TRUE.equals(model.getMultiModel()));
     }
 
     public String getDefaultModel() {

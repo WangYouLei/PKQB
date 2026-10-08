@@ -123,13 +123,12 @@ public class ReactAgentFactory {
         return userChatAgentCache.computeIfAbsent(userId, id -> {
             String apiKey = userApiKeyService.getPlainApiKey(id);
             ModelsEntity mainModel = userApiKeyService.getMainModel(id);
-            String modelName = mainModel != null ? mainModel.getModelName() : null;
-            
+
             if (apiKey == null) {
                 log.warn("[ReactAgent工厂] 用户 {} 没有个人 API Key，使用默认 ChatReactAgent", id);
                 return chatReactAgent;
             }
-            return reactAgentUserConfig.createUserChatReactAgent(apiKey, modelName);
+            return reactAgentUserConfig.createUserChatReactAgent(apiKey, mainModel);
         });
     }
 
@@ -138,13 +137,12 @@ public class ReactAgentFactory {
         return userRagAgentCache.computeIfAbsent(userId, id -> {
             String apiKey = userApiKeyService.getPlainApiKey(id);
             ModelsEntity mainModel = userApiKeyService.getMainModel(id);
-            String modelName = mainModel != null ? mainModel.getModelName() : null;
-            
+
             if (apiKey == null) {
                 log.warn("[ReactAgent工厂] 用户 {} 没有个人 API Key，使用默认 RagReactAgent", id);
                 return ragReactAgent;
             }
-            return reactAgentUserConfig.createUserRagReactAgent(apiKey, modelName);
+            return reactAgentUserConfig.createUserRagReactAgent(apiKey, mainModel);
         });
     }
 
@@ -153,13 +151,12 @@ public class ReactAgentFactory {
         return userSimpleAgentCache.computeIfAbsent(userId, id -> {
             String apiKey = userApiKeyService.getPlainApiKey(id);
             ModelsEntity mainModel = userApiKeyService.getMainModel(id);
-            String modelName = mainModel != null ? mainModel.getModelName() : null;
-            
+
             if (apiKey == null) {
                 log.warn("[ReactAgent工厂] 用户 {} 没有个人 API Key，使用默认 SimpleReactAgent", id);
                 return simpleReactAgent;
             }
-            return reactAgentUserConfig.createUserSimpleReactAgent(apiKey, modelName);
+            return reactAgentUserConfig.createUserSimpleReactAgent(apiKey, mainModel);
         });
     }
 
@@ -185,7 +182,7 @@ public class ReactAgentFactory {
             List<ModelsEntity> assistantModels = userApiKeyService.getAssistantModels(id);
             if (assistantModels.isEmpty()) {
                 log.info("[ReactAgent工厂] 用户 {} 没有辅助模型，使用单模型模式", id);
-                return reactAgentUserConfig.createUserRagReactAgent(apiKey, mainModel.getModelName());
+                return reactAgentUserConfig.createUserRagReactAgent(apiKey, mainModel);
             }
             
             log.info("[ReactAgent工厂] 用户 {} 使用多模型模式，主模型: {}, 辅助模型数量: {}", 
@@ -222,15 +219,13 @@ public class ReactAgentFactory {
         return userRubricParseAgentCache.computeIfAbsent(userId, id -> {
             String apiKey = userApiKeyService.getPlainApiKey(id);
             ModelsEntity mainModel = userApiKeyService.getMainModel(id);
-            String modelName = mainModel != null ? mainModel.getModelName() : null;
             ModelsEntity visionModel = userApiKeyService.getVisionModel(id);
-            String visionModelName = visionModel != null ? visionModel.getModelName() : null;
 
             if (apiKey == null) {
                 log.warn("[ReactAgent工厂] 用户 {} 没有个人 API Key，使用默认 apiKey 创建 RubricParseAgent", id);
                 apiKey = dashScopeModelFactory.getDefaultApiKey();
             }
-            return reactAgentUserConfig.createRubricParseAgent(apiKey, modelName, visionModelName);
+            return reactAgentUserConfig.createRubricParseAgent(apiKey, mainModel, visionModel);
         });
     }
 }

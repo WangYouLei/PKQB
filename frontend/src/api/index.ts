@@ -218,6 +218,12 @@ export const apiDeleteModel = async (modelId: number) => {
   return res
 }
 
+/** 修改用户模型名称 */
+export const apiUpdateModelName = async (modelId: number, modelName: string) => {
+  const res = await put<string>('/apikey/model', null, { modelId, modelName })
+  return res
+}
+
 /** 设置主模型 */
 export const apiSetMainModel = async (modelId: number) => {
   const res = await put<string>('/apikey/model/main', null, { modelId })

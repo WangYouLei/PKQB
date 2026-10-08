@@ -3,6 +3,7 @@ package pkqb.service;
 import pkqb.enums.ApiKeyMode;
 import pkqb.enums.ModelType;
 import pkqb.pojo.entity.ModelsEntity;
+import pkqb.pojo.dto.ModelValidationResult;
 
 import java.util.List;
 
@@ -68,6 +69,14 @@ public interface UserApiKeyService {
     void deleteUserModel(Long modelId, Long userId);
 
     /**
+     * 修改模型名称（模型不存在时不进行修改）
+     * @param modelId 模型ID
+     * @param userId 用户ID
+     * @param newModelName 新模型名称
+     */
+    void updateUserModelName(Long modelId, Long userId, String newModelName);
+
+    /**
      * 设置主模型
      * @param modelId 模型ID
      * @param userId 用户ID
@@ -97,11 +106,11 @@ public interface UserApiKeyService {
     boolean supportsMultiModel(Long userId);
 
     /**
-     * 验证模型和API Key是否有效
+     * 验证模型和API Key是否有效，并探测模型的调用配置（端点、思考模式）
      * @param apiKey API Key
      * @param modelName 模型名称
      * @param modelType 模型类型（0=主模型，1=辅助模型，2=视觉模型）
-     * @return 验证结果，null表示验证通过，否则返回错误信息
+     * @return 验证结果，isSuccess()为true表示验证通过（含探测到的调用配置），否则含错误信息
      */
-    String validateModel(String apiKey, String modelName, int modelType);
+    ModelValidationResult validateModel(String apiKey, String modelName, int modelType);
 }

@@ -379,7 +379,8 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useUserStore } from '@/stores/user'
-import { apiGetApiKeyStatus, apiSaveApiKey, apiDeleteApiKey, apiAddModel, apiDeleteModel, apiSetMainModel, apiGetAvatarUploadPath, apiUpdateAvatar, apiUpdateUsername, apiUpdatePassword } from '@/api'
+import { useToast } from '@/composables/useToast'
+import { apiGetApiKeyStatus, apiSaveApiKey, apiDeleteApiKey, apiAddModel, apiDeleteModel, apiUpdateModelName, apiSetMainModel, apiGetAvatarUploadPath, apiUpdateAvatar, apiUpdateUsername, apiUpdatePassword } from '@/api'
 import type { ApiKeyStatus, ModelsEntity } from '@/types'
 
 const userStore = useUserStore()
@@ -536,37 +537,41 @@ async function handleSetMainModel(modelId: number) {
   }
 }
 
+const toast = useToast()
+
 function handleEditModel(model: ModelsEntity) {
   const newName = prompt('请输入新的模型名称：', model.modelName)
-  if (!newName || !newName.trim() || newName.trim() === model.modelName) return
-  // 先删除旧模型，再添加新模型（保持类型不变）
+  if (!newName || !newName.trim()) return
+  if (newName.trim() === model.modelName) {
+    toast.warning('模型名称未变化')
+    return
+  }
   editingModelId.value = model.id
-  editingModelType.value = model.modelType
   editingModelNewName.value = newName.trim()
   doEditModel()
 }
 
 const editingModelId = ref<number | null>(null)
-const editingModelType = ref<number>(0)
 const editingModelNewName = ref('')
 
 async function doEditModel() {
-  if (!userStore.userId || editingModelId.value === null) return
+  if (!userStore.userId || editingModelId.value === null) {
+    toast.error('登录状态异常，请重新登录后再试')
+    return
+  }
   try {
-    // 删除旧模型
-    await apiDeleteModel(editingModelId.value)
-    // 添加新模型（保持原类型）
-    const res = await apiAddModel(editingModelNewName.value, editingModelType.value)
+    const res = await apiUpdateModelName(editingModelId.value, editingModelNewName.value)
     if (res.code === 200) {
-      alert('模型修改成功')
+      toast.success('模型修改成功')
       await loadStatus()
     } else {
-      alert(res.message || '模型修改失败')
+      toast.error(res.message || '模型修改失败')
       await loadStatus()
     }
   } catch (error) {
     console.error('模型修改失败:', error)
-    alert('模型修改失败')
+    const err = error as { message?: string }
+    toast.error(err?.message || '模型修改失败')
     await loadStatus()
   } finally {
     editingModelId.value = null

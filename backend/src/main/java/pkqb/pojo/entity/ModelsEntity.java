@@ -27,6 +27,16 @@ public class ModelsEntity {
      */
     private Integer modelType;
 
+    /**
+     * 是否走 multimodal-generation 端点（新架构模型如 kimi-k3 需要）
+     */
+    private Boolean multiModel;
+
+    /**
+     * 是否需要显式开启思考模式（强制思考模型如 glm 系列）
+     */
+    private Boolean enableThinking;
+
     private LocalDateTime createTime;
 
     private LocalDateTime updateTime;

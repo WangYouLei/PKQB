@@ -19,11 +19,13 @@ import pkqb.mapper.ModelsMapper;
 import pkqb.mapper.UserMapper;
 import pkqb.pojo.entity.ModelsEntity;
 import pkqb.pojo.entity.UserEntity;
+import pkqb.pojo.dto.ModelValidationResult;
 import pkqb.service.UserApiKeyService;
 import pkqb.util.ApiKeyEncryptor;
 
 import java.util.Collections;
 import java.util.List;
+import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -308,6 +310,42 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public void updateUserModelName(Long modelId, Long userId, String newModelName) {
+        log.info("[模型管理] 修改模型名称, modelId={}, userId={}, newModelName={}", modelId, userId, newModelName);
+
+        // 先校验模型存在且属于当前用户，不存在则不进行修改
+        LambdaQueryWrapper<ModelsEntity> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(ModelsEntity::getId, modelId)
+                .eq(ModelsEntity::getUserId, userId);
+        ModelsEntity model = modelsMapper.selectOne(queryWrapper);
+        if (model == null) {
+            throw new IllegalArgumentException("模型不存在");
+        }
+
+        // 校验新模型名称在 AI 服务商处有效（与添加模型一致），并同步更新调用配置
+        String apiKey = getPlainApiKey(userId);
+        ModelValidationResult result = validateModel(apiKey, newModelName, model.getModelType());
+        if (!result.isSuccess()) {
+            log.warn("[模型管理] 修改模型名称验证失败: userId={}, modelId={}, newModelName={}, error={}",
+                    userId, modelId, newModelName, result.error());
+            throw new IllegalArgumentException(result.error());
+        }
+
+        // 验证通过后才执行 update（含探测到的调用配置）
+        LambdaUpdateWrapper<ModelsEntity> updateWrapper = new LambdaUpdateWrapper<>();
+        updateWrapper.eq(ModelsEntity::getId, modelId)
+                .eq(ModelsEntity::getUserId, userId)
+                .set(ModelsEntity::getModelName, newModelName)
+                .set(ModelsEntity::getMultiModel, result.multiModel())
+                .set(ModelsEntity::getEnableThinking, result.enableThinking());
+        modelsMapper.update(null, updateWrapper);
+
+        clearUserCache(userId);
+        log.info("[模型管理] 模型名称修改完成, modelId={}", modelId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public void setMainModel(Long modelId, Long userId) {
         log.info("[模型管理] 设置主模型, modelId={}, userId={}", modelId, userId);
 
@@ -368,60 +406,99 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
     }
 
     @Override
-    public String validateModel(String apiKey, String modelName, int modelType) {
+    public ModelValidationResult validateModel(String apiKey, String modelName, int modelType) {
         log.info("[模型验证] 开始验证模型: {}, modelType: {}", modelName, modelType);
-        
+
         if (apiKey == null || apiKey.trim().isEmpty()) {
             log.warn("[模型验证] API Key 为空");
-            return "API Key 不能为空";
+            return ModelValidationResult.fail("API Key 不能为空");
         }
-        
+
         if (modelName == null || modelName.trim().isEmpty()) {
             log.warn("[模型验证] 模型名称为空");
-            return "模型名称不能为空";
+            return ModelValidationResult.fail("模型名称不能为空");
         }
-        
-        try {
-            if (modelType == ModelType.VISION.getCode()) {
-                // 视觉模型跳过调用验证，直接保存
-                // 原因：不同系列视觉模型（qwen-vl、qwen-omni等）走不同API端点，
-                // 统一验证容易误判，使用时如果报错用户可自行修改模型名称
-                log.info("[模型验证] 视觉模型 {} 跳过调用验证，直接保存", modelName);
-                return null;
-            } else {
-                // 主模型/辅助模型：纯文本验证
-                ChatModel chatModel = dashScopeModelFactory.createChatModel(apiKey.trim(), modelName.trim(), 100);
-                Prompt prompt = new Prompt("你好");
-                ChatResponse response = chatModel.call(prompt);
-                
+
+        if (modelType == ModelType.VISION.getCode()) {
+            // 视觉模型跳过调用验证，直接保存
+            // 原因：视觉模型统一走 multimodal 端点（createVisionChatModel 已处理），
+            // 不同系列参数差异大，统一验证容易误判
+            log.info("[模型验证] 视觉模型 {} 跳过调用验证，直接保存", modelName);
+            return ModelValidationResult.success(false, false);
+        }
+
+        // 主模型/辅助模型：流式探测调用
+        // 百炼模型的调用方式差异（通过错误信息驱动自动切换重试）：
+        // - 端点：text-generation（默认）/ multimodal-generation（报 url error 的新架构模型如 kimi-k3）
+        // - 思考模式：强制思考模型（报 enable_thinking restricted 的如 glm 系列）必须显式开启
+        Boolean enableThinking = null;
+        boolean multiModel = false;
+        String lastErrorMessage = null;
+
+        while (true) {
+            try {
+                // maxTokens 需给足：思考型模型的思考过程会消耗大量 token
+                ChatResponse response = doModelValidationCall(apiKey, modelName, enableThinking, multiModel);
                 if (response != null && response.getResult() != null) {
-                    log.info("[模型验证] 模型 {} 验证成功", modelName);
-                    return null;
-                } else {
-                    log.warn("[模型验证] 模型 {} 验证失败：响应为空", modelName);
-                    return "请检查模型名称或API Key是否有误";
+                    log.info("[模型验证] 模型 {} 验证成功, multiModel={}, enableThinking={}",
+                            modelName, multiModel, enableThinking);
+                    return ModelValidationResult.success(multiModel, Boolean.TRUE.equals(enableThinking));
+                }
+                log.warn("[模型验证] 模型 {} 验证失败：响应为空", modelName);
+                return ModelValidationResult.fail("请检查模型名称或API Key是否有误");
+            } catch (Exception e) {
+                lastErrorMessage = e.getMessage();
+                log.warn("[模型验证] 模型 {} 验证尝试失败 (multiModel={}, enableThinking={}): {}",
+                        modelName, multiModel, enableThinking, lastErrorMessage);
+
+                boolean needThinking = lastErrorMessage != null && lastErrorMessage.contains("enable_thinking");
+                boolean needMulti = lastErrorMessage != null && lastErrorMessage.contains("url error");
+                if (!needThinking && !needMulti) {
+                    break; // 其他错误（Key无效/模型不存在等）切换配置也无法解决
+                }
+
+                boolean changed = false;
+                if (needThinking && enableThinking == null) {
+                    enableThinking = Boolean.TRUE;
+                    changed = true;
+                }
+                if (needMulti && !multiModel) {
+                    multiModel = true;
+                    changed = true;
+                }
+                if (!changed) {
+                    break; // 配置已到位仍失败，不再重试
                 }
             }
-        } catch (Exception e) {
-            log.error("[模型验证] 模型 {} 验证失败: {}", modelName, e.getMessage());
-            
-            String errorMessage = e.getMessage();
-            if (errorMessage != null) {
-                if (errorMessage.contains("InvalidParameter") || errorMessage.contains("url error")) {
-                    return "请检查模型名称或API Key是否有误";
-                }
-                if (errorMessage.contains("InvalidApiKey") || errorMessage.contains("api key")) {
-                    return "API Key 无效，请检查";
-                }
-                if (errorMessage.contains("ModelNotFound") || errorMessage.contains("model not found")) {
-                    return "模型不存在，请检查模型名称";
-                }
-            }
-            
-            return "请检查模型名称或API Key是否有误";
         }
+
+        log.error("[模型验证] 模型 {} 验证失败: {}", modelName, lastErrorMessage);
+
+        if (lastErrorMessage != null) {
+            if (lastErrorMessage.contains("InvalidApiKey") || lastErrorMessage.contains("api key")) {
+                return ModelValidationResult.fail("API Key 无效，请检查");
+            }
+            if (lastErrorMessage.contains("ModelNotFound") || lastErrorMessage.contains("model not found")) {
+                return ModelValidationResult.fail("模型不存在，请检查模型名称");
+            }
+        }
+
+        return ModelValidationResult.fail("请检查模型名称或API Key是否有误");
     }
     
+    /**
+     * 发起一次模型验证调用（流式）
+     *
+     * @param enableThinking 为 null 时不设置该参数；强制思考型模型需传 Boolean.TRUE
+     * @param multiModel true 走 multimodal-generation 端点（新架构模型如 kimi-k3）
+     */
+    private ChatResponse doModelValidationCall(String apiKey, String modelName, Boolean enableThinking, boolean multiModel) {
+        ChatModel chatModel = dashScopeModelFactory.createChatModel(
+                apiKey.trim(), modelName.trim(), 2048, enableThinking, multiModel);
+        Prompt prompt = new Prompt("你好");
+        return chatModel.stream(prompt).blockLast(Duration.ofSeconds(60));
+    }
+
     private void clearUserCache(Long userId) {
         String prefix = CACHE_PREFIX + userId;
         stringRedisTemplate.delete(List.of(

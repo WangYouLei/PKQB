@@ -14,6 +14,7 @@ import pkqb.enums.ApiKeyMode;
 import pkqb.enums.ModelType;
 import pkqb.pojo.dto.SaveApiKeyRequest;
 import pkqb.pojo.entity.ModelsEntity;
+import pkqb.pojo.dto.ModelValidationResult;
 import pkqb.service.RateLimitService;
 import pkqb.service.UserApiKeyService;
 
@@ -148,17 +149,20 @@ public class UserApiKeyController {
         }
         
         String apiKey = userApiKeyService.getPlainApiKey(userId);
-        String validationError = userApiKeyService.validateModel(apiKey, safeModelName, type.getCode());
-        if (validationError != null) {
-            log.warn("[模型管理] 模型验证失败: userId={}, modelName={}, error={}", userId, safeModelName, validationError);
-            return Result.error(400, validationError);
+        ModelValidationResult validationResult = userApiKeyService.validateModel(apiKey, safeModelName, type.getCode());
+        if (!validationResult.isSuccess()) {
+            log.warn("[模型管理] 模型验证失败: userId={}, modelName={}, error={}", userId, safeModelName, validationResult.error());
+            return Result.error(400, validationResult.error());
         }
-        
+
         try {
             ModelsEntity model = new ModelsEntity();
             model.setUserId(userId);
             model.setModelName(safeModelName);
             model.setModelType(type.getCode());
+            // 保存探测到的调用配置（端点、思考模式）
+            model.setMultiModel(validationResult.multiModel());
+            model.setEnableThinking(validationResult.enableThinking());
             
             // 如果用户没有任何模型，强制设为主模型
             List<ModelsEntity> existingModels = userApiKeyService.getUserModels(userId);
@@ -195,6 +199,40 @@ public class UserApiKeyController {
         } catch (Exception e) {
             log.error("[模型管理] 删除模型失败: {}", e.getMessage());
             return Result.error("删除模型失败: " + e.getMessage());
+        }
+    }
+
+    @PutMapping("/model")
+    @Operation(summary = "修改模型名称", description = "修改用户指定模型的名称（模型不存在时不进行修改）")
+    public Result<String> updateModelName(
+            HttpServletRequest httpRequest,
+            @Parameter(description = "模型ID") @RequestParam Long modelId,
+            @Parameter(description = "新模型名称") @RequestParam String modelName) {
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        if (userId == null) {
+            return Result.error(401, "未登录或登录已过期");
+        }
+        if (modelName == null || modelName.trim().isEmpty()) {
+            return Result.error(400, "模型名称不能为空");
+        }
+
+        // 校验模型名称长度
+        if (modelName.trim().length() > 100) {
+            return Result.error(400, "模型名称长度不能超过100个字符");
+        }
+
+        // XSS防护 - 转义HTML特殊字符
+        String safeModelName = HtmlUtils.htmlEscape(modelName.trim());
+
+        try {
+            userApiKeyService.updateUserModelName(modelId, userId, safeModelName);
+            reactAgentFactory.clearUserCache(userId);
+            return Result.success("模型名称修改成功");
+        } catch (IllegalArgumentException e) {
+            return Result.error(400, e.getMessage());
+        } catch (Exception e) {
+            log.error("[模型管理] 修改模型名称失败: {}", e.getMessage());
+            return Result.error("修改模型名称失败: " + e.getMessage());
         }
     }
 

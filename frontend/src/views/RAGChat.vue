@@ -165,6 +165,18 @@
               @mouseenter="hoveredMessageIdx = idx"
               @mouseleave="hoveredMessageIdx = -1"
             >
+              <div v-if="msg.thinking" class="thinking-block">
+                <div class="thinking-header" @click="msg.thinkingExpanded = !msg.thinkingExpanded">
+                  <svg class="thinking-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"></path>
+                  </svg>
+                  <span>深度思考</span>
+                  <svg class="chevron" :class="{ collapsed: !msg.thinkingExpanded }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </div>
+                <div v-show="msg.thinkingExpanded" class="thinking-content">{{ msg.thinking }}</div>
+              </div>
               <div class="message-content" v-html="formatContent(msg.content)"></div>
               <div class="message-time">{{ formatTime(msg.timestamp) }}</div>
               <!-- 用户消息操作按钮 -->
@@ -258,7 +270,26 @@ import { apiGetHistoryList, apiGetHistoryBySessionId, apiDeleteHistory, apiGetUs
 interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
+  thinking?: string
+  thinkingExpanded?: boolean
   timestamp: number
+}
+
+// 处理流式chunk：正文为纯字符串，思考内容为 {thinking:true,text:...} 对象
+function appendStreamChunk(msg: ChatMessage, jsonStr: string) {
+  try {
+    const content = JSON.parse(jsonStr)
+    if (typeof content === 'string') {
+      msg.content += content
+      // 正文开始输出后自动收起思考区块
+      if (msg.thinking && msg.thinkingExpanded) msg.thinkingExpanded = false
+    } else if (content && typeof content === 'object' && content.thinking) {
+      msg.thinking = (msg.thinking || '') + content.text
+      if (msg.thinkingExpanded === undefined) msg.thinkingExpanded = true
+    }
+  } catch (e) {
+    msg.content += jsonStr
+  }
 }
 
 const userStore = useUserStore()
@@ -572,12 +603,7 @@ async function regenerateMessage(aiMsgIdx: number) {
           const jsonStr = line.substring(5).trim()
           if (jsonStr === '[DONE]') continue
           if (!jsonStr) continue
-          try {
-            const content = JSON.parse(jsonStr)
-            assistantMsg.content += content
-          } catch (e) {
-            assistantMsg.content += jsonStr
-          }
+          appendStreamChunk(assistantMsg, jsonStr)
           messages.value = [...messages.value]
           scrollToBottom()
         }
@@ -689,12 +715,7 @@ async function sendMessage() {
           const jsonStr = line.substring(5).trim()
           if (jsonStr === '[DONE]') continue
           if (!jsonStr) continue
-          try {
-            const content = JSON.parse(jsonStr)
-            assistantMsg.content += content
-          } catch (e) {
-            assistantMsg.content += jsonStr
-          }
+          appendStreamChunk(assistantMsg, jsonStr)
           messages.value = [...messages.value]
           scrollToBottom()
         }
@@ -827,6 +848,14 @@ onMounted(() => {
 .message-bubble.selected { box-shadow: 0 0 0 2px var(--tertiary); }
 .message.assistant .message-bubble { background: var(--card-bg); border: 1px solid var(--border-glass); border-radius: 18px 18px 18px 4px; }
 .message.user .message-bubble { background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%); color: #fff; border-radius: 18px 18px 4px 18px; }
+.thinking-block { margin-bottom: 10px; border: 1px solid var(--border-glass); border-radius: 10px; background: rgba(127, 127, 127, 0.06); overflow: hidden; }
+.thinking-header { display: flex; align-items: center; gap: 6px; padding: 7px 12px; cursor: pointer; font-size: 12px; color: var(--text-secondary); user-select: none; }
+.thinking-header:hover { background: rgba(127, 127, 127, 0.08); }
+.thinking-icon { width: 14px; height: 14px; flex-shrink: 0; }
+.chevron { margin-left: auto; width: 14px; height: 14px; transition: transform 0.2s; }
+.chevron.collapsed { transform: rotate(-90deg); }
+.thinking-content { padding: 0 12px 10px; font-size: 12px; line-height: 1.7; color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto; }
+
 .message-content { font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
 .message.user .message-content { color: #fff; }
 .message-content code { background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px; font-size: 13px; }

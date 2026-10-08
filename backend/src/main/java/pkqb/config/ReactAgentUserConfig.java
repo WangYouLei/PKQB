@@ -90,7 +90,7 @@ public class ReactAgentUserConfig {
     }
 
     public ReactAgent createUserChatReactAgent(String apiKey) {
-        return createUserChatReactAgent(apiKey, null);
+        return createUserChatReactAgent(apiKey, (ModelsEntity) null);
     }
 
     public ReactAgent createUserChatReactAgent(String apiKey, String model) {
@@ -108,8 +108,23 @@ public class ReactAgentUserConfig {
                 .build();
     }
 
+    public ReactAgent createUserChatReactAgent(String apiKey, ModelsEntity model) {
+        log.info("[ReactAgent用户配置] 为用户创建个人 ChatReactAgent，模型: {}",
+                model != null ? model.getModelName() : modelFactory.getDefaultModel());
+        ChatModel chatModel = modelFactory.createChatModel(apiKey, model);
+        SummarizationHook userHook = createUserSummarizationHook(chatModel);
+        ModelCallLimitHook limitHook = createModelCallLimitHook();
+        return ReactAgent.builder()
+                .name("chat_agent_user")
+                .model(chatModel)
+                .systemPrompt(AiConstants.CHAT_SYSTEM_PROMPT)
+                .hooks(userHook, limitHook)
+                .saver(memorySaver)
+                .build();
+    }
+
     public ReactAgent createUserRagReactAgent(String apiKey) {
-        return createUserRagReactAgent(apiKey, null);
+        return createUserRagReactAgent(apiKey, (ModelsEntity) null);
     }
 
     public ReactAgent createUserRagReactAgent(String apiKey, String model) {
@@ -132,14 +147,43 @@ public class ReactAgentUserConfig {
                 .build();
     }
 
+    public ReactAgent createUserRagReactAgent(String apiKey, ModelsEntity model) {
+        log.info("[ReactAgent用户配置] 为用户创建个人 RagReactAgent，模型: {}",
+                model != null ? model.getModelName() : modelFactory.getDefaultModel());
+        ChatModel chatModel = modelFactory.createChatModel(apiKey, model);
+        SummarizationHook userHook = createUserSummarizationHook(chatModel);
+
+        ModelCallLimitHook limitHook = ModelCallLimitHook.builder().runLimit(1).build();
+        RagAgentHook ragHook = new RagAgentHook(vectorStore, rerankService);
+        return ReactAgent.builder()
+                .name("rag_agent_user")
+                .model(chatModel)
+                .systemPrompt(AiConstants.RAG_SYSTEM_PROMPT)
+                .tools()
+                .hooks(ragHook, limitHook)
+                .interceptors(new RAGContextInterceptor())
+                .saver(memorySaver)
+                .build();
+    }
+
     public ReactAgent createUserSimpleReactAgent(String apiKey) {
-        return createUserSimpleReactAgent(apiKey, null);
+        return createUserSimpleReactAgent(apiKey, (ModelsEntity) null);
     }
 
     public ReactAgent createUserSimpleReactAgent(String apiKey, String model) {
         String actualModel = (model != null && !model.isEmpty()) ? model : modelFactory.getDefaultModel();
         log.info("[ReactAgent用户配置] 为用户创建个人 SimpleReactAgent，模型: {}", actualModel);
         ChatModel chatModel = modelFactory.createChatModel(apiKey, actualModel);
+        return ReactAgent.builder()
+                .name("simple_agent_user")
+                .model(chatModel)
+                .build();
+    }
+
+    public ReactAgent createUserSimpleReactAgent(String apiKey, ModelsEntity model) {
+        log.info("[ReactAgent用户配置] 为用户创建个人 SimpleReactAgent，模型: {}",
+                model != null ? model.getModelName() : modelFactory.getDefaultModel());
+        ChatModel chatModel = modelFactory.createChatModel(apiKey, model);
         return ReactAgent.builder()
                 .name("simple_agent_user")
                 .model(chatModel)
@@ -159,7 +203,7 @@ public class ReactAgentUserConfig {
         log.info("[多模型Agent] 创建多模型Agent，主模型: {}, 辅助模型数量: {}", 
                 mainModel.getModelName(), assistantModels.size());
         
-        ChatModel mainChatModel = modelFactory.createChatModel(apiKey, mainModel.getModelName());
+        ChatModel mainChatModel = modelFactory.createChatModel(apiKey, mainModel);
         SummarizationHook userHook = createUserSummarizationHook(mainChatModel);
         ModelCallLimitHook limitHook = createModelCallLimitHook();
         
@@ -215,8 +259,8 @@ public class ReactAgentUserConfig {
         log.info("[多模型Agent] 创建单辅助模型Agent，主模型: {}, 辅助模型: {}", 
                 mainModel.getModelName(), assistantModel.getModelName());
         
-        ChatModel mainChatModel = modelFactory.createChatModel(apiKey, mainModel.getModelName());
-        ChatModel assistantChatModel = modelFactory.createChatModel(apiKey, assistantModel.getModelName());
+        ChatModel mainChatModel = modelFactory.createChatModel(apiKey, mainModel);
+        ChatModel assistantChatModel = modelFactory.createChatModel(apiKey, assistantModel);
         
         ReactAgent assistantAgent = ReactAgent.builder()
                 .name("assistant_model_1")
@@ -244,7 +288,7 @@ public class ReactAgentUserConfig {
      */
     private ReactAgent createAssistantReactAgent(String apiKey, ModelsEntity model, int index) {
         log.info("[多模型Agent] 创建辅助模型Agent {}: {}", index, model.getModelName());
-        ChatModel chatModel = modelFactory.createChatModel(apiKey, model.getModelName());
+        ChatModel chatModel = modelFactory.createChatModel(apiKey, model);
         
         return ReactAgent.builder()
                 .name("assistant_model_" + index)
@@ -278,6 +322,27 @@ public class ReactAgentUserConfig {
         ChatModel chatModel = modelFactory.createChatModel(apiKey, actualModel);
         ChatModel visionChatModel = (visionModelName != null && !visionModelName.isEmpty())
                 ? modelFactory.createVisionChatModel(apiKey, visionModelName)
+                : modelFactory.createVisionChatModel();
+        FunctionToolCallback imageViewTool = ImageViewTool.createTool(minioService, visionChatModel);
+        ModelCallLimitHook limitHook = ModelCallLimitHook.builder().runLimit(5).build();
+
+        return ReactAgent.builder()
+                .name("rubric_parse_agent")
+                .model(chatModel)
+                .systemPrompt(AiConstants.RUBRIC_PARSE_SYSTEM_PROMPT)
+                .tools(imageViewTool)
+                .hooks(limitHook)
+                .saver(memorySaver)
+                .build();
+    }
+
+    public ReactAgent createRubricParseAgent(String apiKey, ModelsEntity model, ModelsEntity visionModel) {
+        log.info("[ReactAgent用户配置] 为用户创建 RubricParseAgent，模型: {}, 视觉模型: {}",
+                model != null ? model.getModelName() : modelFactory.getDefaultModel(),
+                visionModel != null ? visionModel.getModelName() : null);
+        ChatModel chatModel = modelFactory.createChatModel(apiKey, model);
+        ChatModel visionChatModel = (visionModel != null)
+                ? modelFactory.createVisionChatModel(apiKey, visionModel.getModelName())
                 : modelFactory.createVisionChatModel();
         FunctionToolCallback imageViewTool = ImageViewTool.createTool(minioService, visionChatModel);
         ModelCallLimitHook limitHook = ModelCallLimitHook.builder().runLimit(5).build();

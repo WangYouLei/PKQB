@@ -418,16 +418,16 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                         Message message = streamingOutput.message();
                         if(type == OutputType.AGENT_MODEL_STREAMING){
                             if(message instanceof AssistantMessage){
-                                // 检查是否为 Thinking 消息
+                                // 推理模型的思考过程：单独标记推送，由前端折叠展示，不混入正式回复与历史记录
                                 Object reasoningContent = message.getMetadata().get("reasoningContent");
                                 if (reasoningContent != null && !reasoningContent.toString().isEmpty()) {
-                                    aiResponse.append(reasoningContent);
                                     try {
-                                        return Mono.just(objectMapper.writeValueAsString(reasoningContent));
+                                        return Mono.just(objectMapper.writeValueAsString(Map.of(
+                                                "thinking", true,
+                                                "text", reasoningContent.toString())));
                                     } catch (JsonProcessingException e) {
-                                        log.warn("[RAG查询] 序列化推理内容失败，使用原始内容", e);
-                                        return Mono.just(reasoningContent.toString().replace("\n", "\\n").replace("\r", "\\r"));
-
+                                        log.warn("[RAG查询] 序列化推理内容失败，跳过该段", e);
+                                        return Mono.empty();
                                     }
                                 } else {
                                     if(message.getText() != null && !message.getText().isEmpty()){
@@ -532,16 +532,16 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                         Message message = streamingOutput.message();
                         if(type == OutputType.AGENT_MODEL_STREAMING){
                             if(message instanceof AssistantMessage){
-                                // 检查是否为 Thinking 消息
+                                // 推理模型的思考过程：单独标记推送，由前端折叠展示，不混入正式回复与历史记录
                                 Object reasoningContent = message.getMetadata().get("reasoningContent");
                                 if (reasoningContent != null && !reasoningContent.toString().isEmpty()) {
-                                   aiResponse.append(reasoningContent);
                                     try {
-                                        return Mono.just(objectMapper.writeValueAsString(reasoningContent));
+                                        return Mono.just(objectMapper.writeValueAsString(Map.of(
+                                                "thinking", true,
+                                                "text", reasoningContent.toString())));
                                     } catch (JsonProcessingException e) {
-                                        log.warn("[AI对话] 序列化推理内容失败，使用原始内容", e);
-                                        return Mono.just(reasoningContent.toString().replace("\n", "\\n").replace("\r", "\\r"));
-
+                                        log.warn("[AI对话] 序列化推理内容失败，跳过该段", e);
+                                        return Mono.empty();
                                     }
                                 } else {
                                     if(message.getText() != null && !message.getText().isEmpty()){
@@ -1315,14 +1315,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             Optional<OverAllState> invoke = agent.invoke(prompt, config);
 
             if (invoke.isPresent()) {
-                OverAllState state = invoke.get();
-                // 访问第最后一个Agent（也就是总结模型）的输出
-                state.value("final_answer").ifPresent(finalAnswer -> {
-                    if (finalAnswer instanceof AssistantMessage) {
-                        String text = ((AssistantMessage) finalAnswer).getText();
-                        result.append(text);
-                    }
-                });
+                // 多模型并行模式（两个辅助模型）时输出各模型回答，否则输出最终答案
+                result.append(buildAgentFinalOutput(invoke.get(), userId));
             }
            /* agent.stream(prompt, config)
                     .filter(output -> output instanceof StreamingOutput<?>)
@@ -1403,17 +1397,21 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             Optional<OverAllState> invoke = agent.invoke(prompt, config);
             if (invoke.isPresent()) {
                 OverAllState state = invoke.get();
-                state.value("final_answer").ifPresent(finalAnswer -> {
-                    if (finalAnswer instanceof AssistantMessage) {
-                        String text = ((AssistantMessage) finalAnswer).getText();
-                        result.append(text);
-                    }
-                });
+                state.value("final_answer").ifPresent(finalAnswer ->
+                        result.append(extractMessageText(finalAnswer)));
             }
-            
+
             String aiResponse = result.toString().trim();
             Map<String, String> results = parseAllInOneResponse(aiResponse, questionType);
-            
+
+            // 多模型并行模式（两个辅助模型）时，将各模型回答附加到解析中，并标注总结模型
+            if (invoke.isPresent() && isDualAssistantMode(invoke.get())) {
+                String[] names = getDualAssistantModelNames(userId);
+                results.put("explanation", "【" + names[2] + " 的总结】\n"
+                        + results.get("explanation") + "\n\n"
+                        + buildAssistantAnswersText(names, invoke.get()));
+            }
+
             String jsonResult = objectMapper.writeValueAsString(results);
             log.info("[AI解答] 单次调用完成");
             return Result.success(jsonResult);
@@ -1525,27 +1523,24 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     
     private Result<String> aiSolveAllParallel(String questionText, String questionType, String optionsJson, String ragContext, Long userId) {
         try {
-            CompletableFuture<String> answerFuture = CompletableFuture.supplyAsync(() -> {
+            CompletableFuture<String[]> answerFuture = CompletableFuture.supplyAsync(() -> {
                 String prompt = buildAiSolvePromptWithRagContext(questionText, questionType, optionsJson, "answer", ragContext);
-                if (prompt == null) return "";
-                String result = callMultiModelReactAgent(prompt, userId);
-                return result != null ? result.trim() : "";
+                if (prompt == null) return new String[]{"", ""};
+                return callMultiModelReactAgent(prompt, userId);
             }, AI_EXECUTOR);
-            
-            CompletableFuture<String> explanationFuture = CompletableFuture.supplyAsync(() -> {
+
+            CompletableFuture<String[]> explanationFuture = CompletableFuture.supplyAsync(() -> {
                 String prompt = buildAiSolvePromptWithRagContext(questionText, questionType, optionsJson, "explanation", ragContext);
-                if (prompt == null) return "";
-                String result = callMultiModelReactAgent(prompt, userId);
-                return result != null ? result.trim() : "";
+                if (prompt == null) return new String[]{"", ""};
+                return callMultiModelReactAgent(prompt, userId);
             }, AI_EXECUTOR);
-            
-            CompletableFuture<String> stepsFuture = CompletableFuture.completedFuture("");
+
+            CompletableFuture<String[]> stepsFuture = CompletableFuture.completedFuture(new String[]{"", ""});
             if ("calculation".equals(questionType)) {
                 stepsFuture = CompletableFuture.supplyAsync(() -> {
                     String prompt = buildAiSolvePromptWithRagContext(questionText, questionType, optionsJson, "steps", ragContext);
-                    if (prompt == null) return "";
-                    String result = callMultiModelReactAgent(prompt, userId);
-                    return result != null ? result.trim() : "";
+                    if (prompt == null) return new String[]{"", ""};
+                    return callMultiModelReactAgent(prompt, userId);
                 }, AI_EXECUTOR);
             }
             
@@ -1563,10 +1558,18 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             }
             
             Map<String, String> results = new HashMap<>();
-            results.put("answer", answerFuture.get());
-            results.put("explanation", explanationFuture.get());
-            results.put("steps", stepsFuture.get());
-            
+            results.put("answer", answerFuture.get()[1]);
+            results.put("explanation", explanationFuture.get()[1]);
+            results.put("steps", stepsFuture.get()[1]);
+
+            // 多模型并行模式（两个辅助模型）时，仅将辅助模型的回答附加到解析字段，避免答案/步骤字段重复冗余
+            String assistantText = explanationFuture.get()[0];
+            if (!assistantText.isEmpty()) {
+                String[] names = getDualAssistantModelNames(userId);
+                results.put("explanation", "【" + names[2] + " 的总结】\n"
+                        + results.get("explanation") + "\n\n" + assistantText);
+            }
+
             String jsonResult = objectMapper.writeValueAsString(results);
             log.info("[AI解答] 并行调用完成");
             return Result.success(jsonResult);
@@ -1665,29 +1668,87 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     }
     
     /**
-     * 调用多模型Agent（使用Multi-agent模式）
-     * 如果用户配置了主模型和辅助模型，则使用多模型模式
-     * 否则使用单模型模式
+     * 判断是否为多模型并行模式（用户配置了两个辅助模型，两个辅助Agent都产生了回答）
      */
-    private String callMultiModelReactAgent(String prompt, Long userId) {
+    private boolean isDualAssistantMode(OverAllState state) {
+        return state.value("assistant_1_response").isPresent()
+                && state.value("assistant_2_response").isPresent();
+    }
+
+    /**
+     * 提取Agent输出的文本（AssistantMessage或其他类型）
+     */
+    private String extractMessageText(Object value) {
+        if (value instanceof AssistantMessage) {
+            return ((AssistantMessage) value).getText();
+        }
+        return value != null ? value.toString() : "";
+    }
+
+    /**
+     * 获取多模型名称：[辅助模型1, 辅助模型2, 主模型]，取不到配置时使用默认名
+     */
+    private String[] getDualAssistantModelNames(Long userId) {
+        List<ModelsEntity> assistantModels = userApiKeyService.getAssistantModels(userId);
+        ModelsEntity mainModel = userApiKeyService.getMainModel(userId);
+        String name1 = (assistantModels != null && assistantModels.size() > 0 && assistantModels.get(0) != null)
+                ? assistantModels.get(0).getModelName() : "辅助模型1";
+        String name2 = (assistantModels != null && assistantModels.size() > 1 && assistantModels.get(1) != null)
+                ? assistantModels.get(1).getModelName() : "辅助模型2";
+        String mainName = (mainModel != null) ? mainModel.getModelName() : "主模型";
+        return new String[]{name1, name2, mainName};
+    }
+
+    /**
+     * 构建多模型Agent的最终输出：
+     * 多模型并行模式（两个辅助模型）时，输出两个辅助模型的回答和主模型的总结，并标注模型名称；
+     * 其他模式仅返回最终答案。
+     */
+    private String buildAgentFinalOutput(OverAllState state, Long userId) {
+        String finalAnswer = state.value("final_answer")
+                .map(this::extractMessageText).orElse("");
+        if (!isDualAssistantMode(state)) {
+            return finalAnswer;
+        }
+        String[] names = getDualAssistantModelNames(userId);
+        return buildAssistantAnswersText(names, state)
+                + "\n\n【" + names[2] + " 的总结】\n"
+                + finalAnswer;
+    }
+
+    /**
+     * 构建带模型名标注的两个辅助模型回答文本（仅在多模型并行模式下调用）
+     */
+    private String buildAssistantAnswersText(String[] names, OverAllState state) {
+        return "【" + names[0] + " 的回答】\n"
+                + extractMessageText(state.value("assistant_1_response").get())
+                + "\n\n【" + names[1] + " 的回答】\n"
+                + extractMessageText(state.value("assistant_2_response").get());
+    }
+
+    /**
+     * 调用多模型Agent（使用Multi-agent模式），返回 [辅助模型回答文本, 最终答案]。
+     * 辅助模型回答文本仅在多模型并行模式（两个辅助模型）时非空。
+     */
+    private String[] callMultiModelReactAgent(String prompt, Long userId) {
         try {
             Agent agent = reactAgentFactory.getMultiModelReactAgent(userId);
             String threadId = "ai_solve:" + userId + ":" + System.currentTimeMillis();
             RunnableConfig config = RunnableConfig.builder()
                     .threadId(threadId)
                     .build();
-            
-            StringBuilder result = new StringBuilder();
+
+            String assistantText = "";
+            String finalAnswer = "";
             Optional<OverAllState> invoke = agent.invoke(prompt, config);
             if (invoke.isPresent()) {
                 OverAllState state = invoke.get();
-                // 访问第最后一个Agent（也就是总结模型）的输出
-                state.value("final_answer").ifPresent(finalAnswer -> {
-                    if (finalAnswer instanceof AssistantMessage) {
-                        String text = ((AssistantMessage) finalAnswer).getText();
-                        result.append(text);
-                    }
-                });
+                finalAnswer = state.value("final_answer")
+                        .map(this::extractMessageText).orElse("");
+                if (isDualAssistantMode(state)) {
+                    String[] names = getDualAssistantModelNames(userId);
+                    assistantText = buildAssistantAnswersText(names, state);
+                }
             }
            /* agent.stream(prompt, config)
                     .filter(output -> output instanceof StreamingOutput<?>)
@@ -1699,8 +1760,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                         }
                     })
                     .blockLast(Duration.ofSeconds(120));*/
-            
-            return result.toString();
+
+            return new String[]{assistantText, finalAnswer};
         } catch (Exception e) {
             log.error("[ReactAgent文本调用] 调用失败: ", e);
             throw new RuntimeException("AI调用失败: " + e.getMessage(), e);
@@ -1965,8 +2026,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         if (userId != null && userApiKeyService.getApiKeyMode(userId) == ApiKeyMode.PERSONAL) {
             String apiKey = userApiKeyService.getPlainApiKey(userId);
             ModelsEntity mainModel = userApiKeyService.getMainModel(userId);
-            String modelName = mainModel != null ? mainModel.getModelName() : null;
-            chatModel = dashScopeModelFactory.createChatModel(apiKey, modelName);
+            chatModel = dashScopeModelFactory.createChatModel(apiKey, mainModel);
         } else {
             chatModel = dashScopeModelFactory.createLocalChatModel();
         }
