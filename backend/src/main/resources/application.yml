@@ -1,0 +1,82 @@
+server:
+  port: 5555
+
+spring:
+  data:
+    redis:
+      host: 192.168.236.200
+      port: 6379
+      database: 0
+      timeout: 3000
+  datasource:
+    url: jdbc:mysql://localhost:3306/pkqb?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: root
+    password: 123456
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+  servlet:
+    multipart:
+      max-file-size: 8MB
+      max-request-size: 8MB
+  ai:
+    retry:
+      max-attempts: 2
+    dashscope:
+      api-key: ${Spring_ai_alibaba}
+      chat:
+        options:
+          model: deepseek-v4-flash
+          temperature: 0.7
+          localhost-max-tokens: 1024
+          personal-max-tokens:  8192
+      vision:
+        model: qwen3.6-plus
+      embedding:
+        options:
+          model: text-embedding-v4
+          dimensions: 1024
+    vectorstore:
+      redis:
+        initialize-schema: true
+        index-name: pkqb_vector_index
+        prefix: "pkqb:"
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+
+jwt:
+  secret: pkqb-jwt-secret-key-2026-this-is-a-long-enough-secret-for-hs256
+  expiration: 604800000
+
+app:
+  api-key:
+    encrypt-secret: pkqb-api-key-encrypt-secret-32b
+
+minio:
+  endpoint: http://192.168.236.200:9000
+  access-key: minioadmin
+  secret-key: minioadmin
+  bucket-name: pkqb-files
+
+aliyun-oss:
+  endpoint: oss-cn-guangzhou.aliyuncs.com
+  access-key-id: ${AccessKey_ID}
+  access-key-secret: ${AccessKey_Secret}
+  bucket-name: pkqb-oss
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operationsSorter: method
+    tagsSorter: alpha
+    tryItOutEnabled: true
