@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import pkqb.common.Result;
 import pkqb.mapper.UserMapper;
+import pkqb.pojo.dto.AiRubric;
 import pkqb.pojo.dto.RubricGenerateRequest;
 import pkqb.pojo.dto.RubricGenerateResponse;
 import pkqb.pojo.dto.RubricRequest;
@@ -119,6 +120,25 @@ public class RubricController {
             return Result.error(400, "题目数量不能超过100个");
         }
         return rubricService.batchSaveQuestions(rubricId, questions, userId);
+    }
+
+    @PostMapping("/{rubricId}/questions/append")
+    @Operation(summary = "追加题目到已有试卷", description = "将解析的题目追加到已有试卷末尾（仅创建者可操作）")
+    public Result<?> appendQuestions(
+            @Parameter(description = "试卷ID") @PathVariable Long rubricId,
+            @RequestBody List<AiRubric> rubrics,
+            HttpServletRequest request) {
+        Long userId = (Long) request.getAttribute("userId");
+        if (userId == null) {
+            return Result.error("未登录或登录已过期");
+        }
+        if (rubrics == null || rubrics.isEmpty()) {
+            return Result.error(400, "题目列表不能为空");
+        }
+        if (rubrics.size() > 100) {
+            return Result.error(400, "题目数量不能超过100个");
+        }
+        return rubricService.appendQuestions(rubricId, rubrics, userId);
     }
 
     @PostMapping("/generate-html")

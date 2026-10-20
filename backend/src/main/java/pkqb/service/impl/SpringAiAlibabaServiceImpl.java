@@ -46,6 +46,7 @@ import pkqb.service.SpringAiAlibabaService;
 import pkqb.service.UserApiKeyService;
 import pkqb.service.DashScopeRerankService;
 import pkqb.service.strategy.QuestionExtractContext;
+import pkqb.util.LatexMathCleaner;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import org.apache.commons.codec.digest.DigestUtils;
@@ -133,6 +134,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                - 计算题：给出正确答案和详细的计算步骤
             3. explanation字段字数控制在100字以内并且在不影响表达的情况越少越好
             4. answer字段：多选题用逗号分隔如A,B,C；简答题和计算题直接写答案内容
+            5. 数学内容禁止使用LaTeX语法（如\\angle、^\\circ、\\frac、$...$），必须直接使用Unicode字符：
+               角度用∠、度数用°、乘号用×、除号用÷、不等于用≠、小于等于用≤、大于等于用≥、约等于用≈、根号用√、圆周率用π、三角形用△；分数写成a/b，幂写成x²
 
             文本内容：
             %s
@@ -866,6 +869,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                    - explanation_image：解析中的配图
                 3. 如果题目中包含图片，在question字段中用[图片N]标记图片位置，同时在resources中添加对应引用
                 4. 严格输出JSON数组，不要输出其他内容
+                5. 数学内容禁止使用LaTeX语法（如\\angle、^\\circ、\\frac、$...$），必须直接使用Unicode字符：
+                   角度用∠、度数用°、乘号用×、除号用÷、不等于用≠、小于等于用≤、大于等于用≥、约等于用≈、根号用√、圆周率用π、三角形用△；分数写成a/b，幂写成x²
                 """ + imageRef;
 
             // 获取视觉模型
@@ -904,8 +909,10 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             if (start >= 0 && end > start) {
                 jsonStr = jsonStr.substring(start, end + 1);
             }
-            return objectMapper.readValue(jsonStr,
+            List<AiRubric> rubrics = objectMapper.readValue(jsonStr,
                     objectMapper.getTypeFactory().constructCollectionType(List.class, AiRubric.class));
+            sanitizeRubricMath(rubrics);
+            return rubrics;
         } catch (Exception e) {
             log.error("[题目文件解析-视觉] 视觉模型调用失败: {}", e.getMessage());
             return null;
@@ -1412,6 +1419,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                         + buildAssistantAnswersText(names, invoke.get()));
             }
 
+            results.replaceAll((k, v) -> LatexMathCleaner.clean(v));
             String jsonResult = objectMapper.writeValueAsString(results);
             log.info("[AI解答] 单次调用完成");
             return Result.success(jsonResult);
@@ -1570,6 +1578,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                         + results.get("explanation") + "\n\n" + assistantText);
             }
 
+            results.replaceAll((k, v) -> LatexMathCleaner.clean(v));
             String jsonResult = objectMapper.writeValueAsString(results);
             log.info("[AI解答] 并行调用完成");
             return Result.success(jsonResult);
@@ -2045,7 +2054,34 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             jsonStr = jsonStr.replaceAll("^```(?:json)?\\s*", "").replaceAll("\\s*```$", "").trim();
         }
 
-        return converter.convert(jsonStr);
+        List<AiRubric> rubrics = converter.convert(jsonStr);
+        sanitizeRubricMath(rubrics);
+        return rubrics;
+    }
+
+    /**
+     * 将AI返回题目中残留的LaTeX数学语法转换为Unicode符号，避免前端纯文本展示出现乱码
+     */
+    private void sanitizeRubricMath(List<AiRubric> rubrics) {
+        if (rubrics == null) {
+            return;
+        }
+        for (AiRubric rubric : rubrics) {
+            if (rubric == null) continue;
+            rubric.setQuestion(LatexMathCleaner.clean(rubric.getQuestion()));
+            rubric.setAnswer(LatexMathCleaner.clean(rubric.getAnswer()));
+            rubric.setExplanation(LatexMathCleaner.clean(rubric.getExplanation()));
+            if (rubric.getOptions() != null) {
+                for (int i = 0; i < rubric.getOptions().length; i++) {
+                    rubric.getOptions()[i] = LatexMathCleaner.clean(rubric.getOptions()[i]);
+                }
+            }
+            if (rubric.getCalculationSteps() != null) {
+                rubric.setCalculationSteps(rubric.getCalculationSteps().stream()
+                        .map(LatexMathCleaner::clean)
+                        .collect(Collectors.toList()));
+            }
+        }
     }
 
     private boolean isApiKeyOrModelError(Throwable e) {

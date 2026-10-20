@@ -42,6 +42,7 @@ import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -160,55 +161,99 @@ public class RubricServiceImpl implements RubricService {
         Long rubricId = rubricEntity.getId();
 
         // 2. 保存题目
-        List<AiRubric> rubrics = rubricRequest.getRubrics();
-        if (rubrics != null && !rubrics.isEmpty()) {
-            for (int i = 0; i < rubrics.size(); i++) {
-                AiRubric aiRubric = rubrics.get(i);
-                QuestionEntity questionEntity = new QuestionEntity();
-                questionEntity.setRubricId(rubricId);
-                questionEntity.setOrderIndex(i + 1);
-                questionEntity.setQuestionText(HtmlUtils.htmlEscape(aiRubric.getQuestion()));
-                questionEntity.setQuestionType(aiRubric.getQuestionType());
-                questionEntity.setAnswer(HtmlUtils.htmlEscape(aiRubric.getAnswer()));
-                questionEntity.setExplanation(HtmlUtils.htmlEscape(aiRubric.getExplanation()));
-                questionEntity.setDeleted(0);
+        insertQuestions(rubricId, 1, rubricRequest.getRubrics());
 
-                // 数组转JSON
-                try {
-                    if (aiRubric.getOptions() != null) {
-                        questionEntity.setOptionsJson(objectMapper.writeValueAsString(aiRubric.getOptions()));
-                    }
-                    if (aiRubric.getCalculationSteps() != null) {
-                        questionEntity.setCalculationStepsJson(objectMapper.writeValueAsString(aiRubric.getCalculationSteps()));
-                    }
-                } catch (JsonProcessingException e) {
-                    log.error("[添加试卷] JSON序列化失败", e);
-                    throw new RuntimeException("题目数据序列化失败", e);
+        return Result.success("试卷添加成功");
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Result<?> appendQuestions(Long rubricId, List<AiRubric> rubrics, Long userId) {
+        RubricEntity rubric = rubricMapper.selectById(rubricId);
+        if (rubric == null || (rubric.getDeleted() != null && rubric.getDeleted() == 1)) {
+            throw new IllegalArgumentException("试卷不存在");
+        }
+        if (!rubric.getCreateId().equals(userId)) {
+            throw new IllegalArgumentException("只有创建者可以向试卷添加题目");
+        }
+        if (rubrics == null || rubrics.isEmpty()) {
+            throw new IllegalArgumentException("题目列表不能为空");
+        }
+
+        // 查询已有题目，计算追加的起始序号
+        LambdaQueryWrapper<QuestionEntity> existWrapper = new LambdaQueryWrapper<>();
+        existWrapper.eq(QuestionEntity::getRubricId, rubricId)
+                    .eq(QuestionEntity::getDeleted, 0);
+        List<QuestionEntity> existingQuestions = questionMapper.selectList(existWrapper);
+        int maxOrderIndex = existingQuestions.stream()
+                .map(QuestionEntity::getOrderIndex)
+                .filter(Objects::nonNull)
+                .max(Integer::compareTo)
+                .orElse(0);
+
+        // 追加题目到末尾
+        insertQuestions(rubricId, maxOrderIndex + 1, rubrics);
+
+        // 更新题目数量
+        rubric.setQuestionCount(existingQuestions.size() + rubrics.size());
+        rubric.setUpdateTime(LocalDateTime.now());
+        rubricMapper.updateById(rubric);
+
+        log.info("[追加题目] 追加成功，rubricId={}, appendCount={}, totalCount={}", rubricId, rubrics.size(), rubric.getQuestionCount());
+        return Result.success("题目添加成功");
+    }
+
+    /**
+     * 插入题目列表（从 startOrderIndex 开始编号）
+     */
+    private void insertQuestions(Long rubricId, int startOrderIndex, List<AiRubric> rubrics) {
+        if (rubrics == null || rubrics.isEmpty()) {
+            return;
+        }
+        for (int i = 0; i < rubrics.size(); i++) {
+            AiRubric aiRubric = rubrics.get(i);
+            QuestionEntity questionEntity = new QuestionEntity();
+            questionEntity.setRubricId(rubricId);
+            questionEntity.setOrderIndex(startOrderIndex + i);
+            questionEntity.setQuestionText(HtmlUtils.htmlEscape(aiRubric.getQuestion()));
+            questionEntity.setQuestionType(aiRubric.getQuestionType());
+            questionEntity.setAnswer(HtmlUtils.htmlEscape(aiRubric.getAnswer()));
+            questionEntity.setExplanation(HtmlUtils.htmlEscape(aiRubric.getExplanation()));
+            questionEntity.setDeleted(0);
+
+            // 数组转JSON
+            try {
+                if (aiRubric.getOptions() != null) {
+                    questionEntity.setOptionsJson(objectMapper.writeValueAsString(aiRubric.getOptions()));
                 }
+                if (aiRubric.getCalculationSteps() != null) {
+                    questionEntity.setCalculationStepsJson(objectMapper.writeValueAsString(aiRubric.getCalculationSteps()));
+                }
+            } catch (JsonProcessingException e) {
+                log.error("[添加试卷] JSON序列化失败", e);
+                throw new RuntimeException("题目数据序列化失败", e);
+            }
 
-                questionMapper.insert(questionEntity);
+            questionMapper.insert(questionEntity);
 
-                if (aiRubric.getResources() != null && !aiRubric.getResources().isEmpty()) {
-                    int sortOrder = 0;
-                    for (AiRubric.AiResource resource : aiRubric.getResources()) {
-                        // 将OSS图片迁移到MinIO，获取新的MinIO URL
-                        String imageUrl = resource.getUrl();
-                        imageUrl = migrateOssImageToMinio(imageUrl);
+            if (aiRubric.getResources() != null && !aiRubric.getResources().isEmpty()) {
+                int sortOrder = 0;
+                for (AiRubric.AiResource resource : aiRubric.getResources()) {
+                    // 将OSS图片迁移到MinIO，获取新的MinIO URL
+                    String imageUrl = resource.getUrl();
+                    imageUrl = migrateOssImageToMinio(imageUrl);
 
-                        questionResourceService.saveResource(
-                                questionEntity.getId(),
-                                resource.getType(),
-                                resource.getLabel(),
-                                imageUrl,
-                                null,
-                                sortOrder++
-                        );
-                    }
+                    questionResourceService.saveResource(
+                            questionEntity.getId(),
+                            resource.getType(),
+                            resource.getLabel(),
+                            imageUrl,
+                            null,
+                            sortOrder++
+                    );
                 }
             }
         }
-
-        return Result.success("试卷添加成功");
     }
 
     @Override

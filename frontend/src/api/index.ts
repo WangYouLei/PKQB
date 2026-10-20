@@ -291,6 +291,12 @@ export const apiBatchSaveQuestions = async (rubricId: number, questions: RubricQ
   return res
 }
 
+/** 追加题目到已有试卷（仅创建者可操作） */
+export const apiAppendRubricQuestions = async (rubricId: number, questions: QuestionItem[]) => {
+  const res = await post<void>(`/rubric/${rubricId}/questions/append`, questions)
+  return res
+}
+
 // ========== 错题本相关 API ==========
 
 /** 添加错题 */

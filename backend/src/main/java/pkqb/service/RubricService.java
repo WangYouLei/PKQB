@@ -1,6 +1,7 @@
 package pkqb.service;
 
 import pkqb.common.Result;
+import pkqb.pojo.dto.AiRubric;
 import pkqb.pojo.dto.RubricGenerateRequest;
 import pkqb.pojo.dto.RubricGenerateResponse;
 import pkqb.pojo.dto.RubricRequest;
@@ -17,6 +18,15 @@ public interface RubricService {
      * @return 结果
      */
     Result<?> addRubric(RubricRequest rubricRequest);
+    
+    /**
+     * 向已有试卷追加题目（仅创建者可操作）
+     * @param rubricId 试卷ID
+     * @param rubrics 题目列表
+     * @param userId 当前用户ID
+     * @return 结果
+     */
+    Result<?> appendQuestions(Long rubricId, List<AiRubric> rubrics, Long userId);
     
     /**
      * 根据用户ID获取所有Rubric

@@ -156,24 +156,49 @@
     <div v-if="showUploadModal" class="modal-overlay" @click.self="showUploadModal = false">
       <div class="modal-content">
         <h3 style="font-size:18px;margin-bottom:20px">上传题目</h3>
-        <div class="form-group">
-          <label class="form-label">试卷标题 *</label>
-          <input v-model="rubricTitle" class="form-input" placeholder="请输入试卷标题" />
+        <!-- 模式切换 -->
+        <div class="mode-switch">
+          <button type="button" class="mode-btn" :class="{ active: uploadMode === 'new' }" @click="switchUploadMode('new')">新建试卷</button>
+          <button type="button" class="mode-btn" :class="{ active: uploadMode === 'existing' }" @click="switchUploadMode('existing')">加入已有试卷</button>
         </div>
-        <div class="form-group">
-          <label class="form-label">班级名称 *</label>
-          <input v-model="rubricClassName" class="form-input" placeholder="请输入班级名称" />
-        </div>
-        <div class="form-group" style="display:flex;align-items:center;justify-content:space-between">
-          <label class="form-label" style="margin-bottom:0">是否公开（班级可见）</label>
-          <label class="toggle">
-            <input :checked="!rubricIsPrivate" @change="rubricIsPrivate = !$event.target.checked" type="checkbox" />
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
+
+        <!-- 新建试卷模式 -->
+        <template v-if="uploadMode === 'new'">
+          <div class="form-group">
+            <label class="form-label">试卷标题 *</label>
+            <input v-model="rubricTitle" class="form-input" placeholder="请输入试卷标题" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">班级名称 *</label>
+            <input v-model="rubricClassName" class="form-input" placeholder="请输入班级名称" />
+          </div>
+          <div class="form-group" style="display:flex;align-items:center;justify-content:space-between">
+            <label class="form-label" style="margin-bottom:0">是否公开（班级可见）</label>
+            <label class="toggle">
+              <input :checked="!rubricIsPrivate" @change="rubricIsPrivate = !($event.target as HTMLInputElement).checked" type="checkbox" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </template>
+
+        <!-- 加入已有试卷模式 -->
+        <template v-else>
+          <div class="form-group">
+            <label class="form-label">选择试卷 *（仅显示您创建的试卷）</label>
+            <div v-if="myRubricsLoading" style="padding:8px 0;color:var(--text-muted);font-size:14px">加载中...</div>
+            <select v-else-if="myRubrics.length" v-model="selectedRubricId" class="form-input">
+              <option :value="null" disabled>请选择要加入的试卷</option>
+              <option v-for="r in myRubrics" :key="r.id" :value="r.id">
+                {{ r.title }}（{{ r.questionCount ?? 0 }}题）
+              </option>
+            </select>
+            <p v-else class="no-rubric-tip">您还没有创建过试卷，请选择"新建试卷"</p>
+          </div>
+        </template>
+
         <div style="display:flex;gap:12px;margin-top:24px">
           <button class="btn btn-secondary" @click="showUploadModal = false">取消</button>
-          <button class="btn btn-primary" @click="handleUploadRubric" :disabled="uploadLoading || !rubricTitle.trim() || !rubricClassName.trim()">
+          <button class="btn btn-primary" @click="handleUploadRubric" :disabled="uploadLoading || !canSubmit">
             <span v-if="uploadLoading" class="spinner"></span><span v-else>确定上传</span>
           </button>
         </div>
@@ -225,10 +250,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import { apiAddRubricFile, apiAddRubricFileLocal, apiGetMyRubrics, apiGetPublicRubrics, apiUploadResourceImage } from '@/api'
+import { ref, computed } from 'vue'
+import { apiAddRubricFile, apiAddRubricFileLocal, apiAppendRubricQuestions, apiGetMyRubrics, apiGetPublicRubrics, apiUploadResourceImage } from '@/api'
 import { useUserStore } from '@/stores/user'
-import type { QuestionItem, QuestionResource } from '@/types'
+import type { QuestionItem, QuestionResource, RubricItem } from '@/types'
 import { getQuestionImages, getOptionImage, getAnswerImage, getExplanationImage } from '@/composables/useQuestionResources'
 
 const userStore = useUserStore()
@@ -253,6 +278,18 @@ const rubricClassName = ref('')
 const rubricIsPrivate = ref(false)
 const examList = ref<RubricItem[]>([])  // 试卷列表（公开+用户）
 const examListLoading = ref(false)
+
+// 上传模式：new=新建试卷，existing=加入已有试卷
+const uploadMode = ref<'new' | 'existing'>('new')
+const myRubrics = ref<RubricItem[]>([])
+const myRubricsLoading = ref(false)
+const selectedRubricId = ref<number | null>(null)
+
+const canSubmit = computed(() =>
+  uploadMode.value === 'new'
+    ? rubricTitle.value.trim() !== '' && rubricClassName.value.trim() !== ''
+    : selectedRubricId.value !== null
+)
 
 function triggerFileInput() { fileInput.value?.click() }
 function handleFileSelect(e: Event) {
@@ -318,35 +355,80 @@ function showUploadForm() {
   rubricTitle.value = ''
   rubricClassName.value = userStore.className || ''
   rubricIsPrivate.value = false
+  uploadMode.value = 'new'
+  selectedRubricId.value = null
   showUploadModal.value = true
+}
+
+// 切换上传模式（首次切换到"加入已有试卷"时加载我的试卷列表）
+async function switchUploadMode(mode: 'new' | 'existing') {
+  uploadMode.value = mode
+  if (mode === 'existing' && myRubrics.value.length === 0 && !myRubricsLoading.value) {
+    myRubricsLoading.value = true
+    try {
+      const res = await apiGetMyRubrics()
+      myRubrics.value = res.code === 200 && res.data ? res.data : []
+    } catch {
+      myRubrics.value = []
+    } finally {
+      myRubricsLoading.value = false
+    }
+  }
+}
+
+// 构造题目数据
+function buildRubricsPayload() {
+  return questions.value.map(q => ({
+    question: q.question,
+    questionType: q.questionType,
+    options: q.options || [],
+    answer: q.answer,
+    explanation: q.explanation || '',
+    calculationSteps: q.calculationSteps && q.calculationSteps.length > 0 ? q.calculationSteps : [],
+    resources: q.resources || []
+  }))
 }
 
 // 提交题目到后端
 async function handleUploadRubric() {
+  // 加入已有试卷
+  if (uploadMode.value === 'existing') {
+    if (!selectedRubricId.value) {
+      alert('请选择要加入的试卷')
+      return
+    }
+    uploadLoading.value = true
+    try {
+      const res = await apiAppendRubricQuestions(selectedRubricId.value, buildRubricsPayload())
+      if (res.code === 200) {
+        showUploadModal.value = false
+        alert('题目已成功加入所选试卷！')
+        resetForm()
+      } else {
+        alert(res.message || '上传失败')
+      }
+    } catch (e: unknown) {
+      alert((e as Error).message || '上传失败')
+    } finally {
+      uploadLoading.value = false
+    }
+    return
+  }
+
+  // 新建试卷
   if (!rubricTitle.value.trim() || !rubricClassName.value.trim()) {
     alert('请填写完整的试卷信息')
     return
   }
   uploadLoading.value = true
   try {
-    // 准备题目数据
-    const rubrics = questions.value.map(q => ({
-      question: q.question,
-      questionType: q.questionType,
-      options: q.options || [],
-      answer: q.answer,
-      explanation: q.explanation || '',
-      calculationSteps: q.calculationSteps && q.calculationSteps.length > 0 ? q.calculationSteps : [],
-      resources: q.resources || []
-    }))
-    
     const payload = {
       title: rubricTitle.value,
       className: rubricClassName.value,
       createId: userStore.userId,
       createStudentNo: userStore.studentNo,
       isPrivate: rubricIsPrivate.value,
-      rubrics: rubrics
+      rubrics: buildRubricsPayload()
     }
     
     const res = await fetch('/api/rubric/add-rubric', {
@@ -539,6 +621,10 @@ function confirmParseLocal() {
 /* 模态框样式 */
 .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .modal-content { background: var(--card-bg); border-radius: 16px; padding: 32px; width: 90%; max-width: 420px; border: 1px solid var(--border-color); }
+.mode-switch { display: flex; gap: 8px; margin-bottom: 20px; background: rgba(127,127,127,0.08); border-radius: 10px; padding: 4px; }
+.mode-btn { flex: 1; padding: 8px 0; border: none; border-radius: 8px; background: transparent; color: var(--text-muted); font-size: 14px; cursor: pointer; transition: all 0.2s; }
+.mode-btn.active { background: var(--accent); color: #fff; font-weight: 500; }
+.no-rubric-tip { padding: 8px 0; font-size: 13px; color: var(--text-muted); }
 .toggle { position: relative; display: inline-block; width: 48px; height: 26px; cursor: pointer; }
 .toggle input { opacity: 0; width: 0; height: 0; }
 .toggle-slider { position: absolute; inset: 0; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.2); border-radius: 26px; transition: 0.3s; }
