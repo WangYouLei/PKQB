@@ -74,10 +74,8 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeoutException;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -109,6 +107,13 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             },
             new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy()
     );
+
+    /** 视觉模型分片解析：每片页数 */
+    private static final int VISION_CHUNK_PAGES = 2;
+    /** 视觉模型分片解析：并发调用上限（避免触发模型服务限流） */
+    private static final int VISION_CONCURRENCY = 3;
+    private static final java.util.concurrent.Semaphore VISION_SEMAPHORE =
+            new java.util.concurrent.Semaphore(VISION_CONCURRENCY);
 
     private static final StringBuilder TYPE_DESC = new StringBuilder();
     static {
@@ -727,7 +732,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
      */
     private Result<List<AiRubric>> handleRubricFileWithVision(MultipartFile file, Long userId) {
         // 提到 try 外，便于降级时清理已上传的 OSS 图片
-        List<String> pageImageUrls = null;
+        Map<Integer, String> pageUrlByIndex = null;
         List<ExtractedImage> extractedImages = null;
         try {
             log.info("[题目文件解析-视觉] 使用视觉模型解析PDF文件");
@@ -748,18 +753,18 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                     pageImages.size(), extractedImages.size());
 
             // Step 2: 并行上传所有图片到 OSS
-            pageImageUrls = uploadAllImagesParallel(pageImages, extractedImages, userId);
-            if (pageImageUrls.isEmpty()) {
+            pageUrlByIndex = uploadAllImagesParallel(pageImages, extractedImages, userId);
+            if (pageUrlByIndex.isEmpty()) {
                 log.warn("[题目文件解析-视觉] 全部页面图片上传失败，降级到纯文本模式");
-                cleanupOssImages(pageImageUrls, extractedImages);
+                cleanupOssImages(new ArrayList<>(pageUrlByIndex.values()), extractedImages);
                 return handleRubricFileWithText(file, userId, "页面图片上传失败");
             }
 
-            // Step 3: 将页面图片URL发给视觉模型，获取结构化题目
-            List<AiRubric> aiRubrics = callVisionModelForQuestions(pageImageUrls, extractedImages, userId);
+            // Step 3: 分片并发调用视觉模型，获取结构化题目并合并
+            List<AiRubric> aiRubrics = callVisionModelForQuestions(pageUrlByIndex, extractedImages, userId);
             if (aiRubrics == null || aiRubrics.isEmpty()) {
                 log.warn("[题目文件解析-视觉] 视觉模型返回为空，降级到纯文本模式");
-                cleanupOssImages(pageImageUrls, extractedImages);
+                cleanupOssImages(new ArrayList<>(pageUrlByIndex.values()), extractedImages);
                 return handleRubricFileWithText(file, userId, "视觉模型返回结果为空");
             }
 
@@ -771,13 +776,13 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             return Result.success(aiRubrics);
         } catch (Exception e) {
             log.error("[题目文件解析-视觉] 视觉识别失败: {}，降级到纯文本模式", e.getMessage());
-            cleanupOssImages(pageImageUrls, extractedImages);
+            cleanupOssImages(pageUrlByIndex == null ? null : new ArrayList<>(pageUrlByIndex.values()), extractedImages);
             return handleRubricFileWithText(file, userId, e.getMessage());
         }
     }
 
     /**
-     * 将PDF每页渲染为JPEG字节数组（DPI=135），不上传OSS。
+     * 将PDF每页渲染为JPEG字节数组（DPI=115），不上传OSS。
      * 渲染阶段保持串行：PDFBox 的 PDFRenderer 对同一 PDDocument 非线程安全。
      */
     private List<PageImage> renderPdfPagesToBytes(PDDocument document) {
@@ -785,8 +790,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         try {
             PDFRenderer renderer = new PDFRenderer(document);
             for (int i = 0; i < document.getNumberOfPages(); i++) {
-                BufferedImage pageImage = renderer.renderImageWithDPI(i, 135);
-                byte[] imageBytes = writeJpeg(pageImage, 0.8f);
+                BufferedImage pageImage = renderer.renderImageWithDPI(i, 115);
+                byte[] imageBytes = writeJpeg(pageImage, 0.7f);
                 images.add(new PageImage(i, imageBytes));
             }
         } catch (Exception e) {
@@ -831,6 +836,34 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         return rgb;
     }
 
+    /**
+     * 若图片最长边超过 maxEdge，等比缩小到 maxEdge；否则原样返回。
+     * 视觉模型内部会把输入图缩到自身工作分辨率，超限像素只增加传输耗时。
+     */
+    private BufferedImage scaleDownToMaxEdge(BufferedImage src, int maxEdge) {
+        int w = src.getWidth();
+        int h = src.getHeight();
+        int longest = Math.max(w, h);
+        if (longest <= maxEdge) {
+            return src;
+        }
+        double scale = (double) maxEdge / longest;
+        int nw = (int) Math.round(w * scale);
+        int nh = (int) Math.round(h * scale);
+        BufferedImage dst = new BufferedImage(nw, nh, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = dst.createGraphics();
+        try {
+            g.setColor(Color.WHITE);
+            g.fillRect(0, 0, nw, nh);
+            g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION,
+                    java.awt.RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            g.drawImage(src, 0, 0, nw, nh, null);
+        } finally {
+            g.dispose();
+        }
+        return dst;
+    }
+
     /** 渲染后的页面图片字节（未上传） */
     private static class PageImage {
         final int pageIndex;
@@ -843,35 +876,203 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     }
 
     /**
-     * 调用视觉模型，传入页面图片URL列表，获取结构化题目
+     * 单片解析结果：题目列表 + 首尾题跨页标记
      */
-    private List<AiRubric> callVisionModelForQuestions(List<String> pageImageUrls, List<ExtractedImage> extractedImages, Long userId) {
+    private static class ChunkParseResult {
+        final List<Integer> pageIndices;
+        final List<AiRubric> questions;
+        /** 首题题干是否从上一片最后一页延续而来 */
+        final boolean firstQuestionIsContinuation;
+        /** 尾题是否在本片内完整结束 */
+        final boolean lastQuestionComplete;
+
+        ChunkParseResult(List<Integer> pageIndices, List<AiRubric> questions,
+                         boolean firstQuestionIsContinuation, boolean lastQuestionComplete) {
+            this.pageIndices = pageIndices;
+            this.questions = questions;
+            this.firstQuestionIsContinuation = firstQuestionIsContinuation;
+            this.lastQuestionComplete = lastQuestionComplete;
+        }
+    }
+
+    /**
+     * 分片并发调用视觉模型：按页分片、限流并发、单片失败重试一次，最后按片顺序合并并处理跨页题。
+     * 分片后单片输出 token 大幅减少，避免超长输出被 max_tokens 截断。
+     */
+    private List<AiRubric> callVisionModelForQuestions(Map<Integer, String> pageUrlByIndex,
+                                                       List<ExtractedImage> extractedImages,
+                                                       Long userId) {
         try {
-            // 构建图片编号提示
+            List<Integer> allPages = new ArrayList<>(pageUrlByIndex.keySet());
+            // 分片：每 VISION_CHUNK_PAGES 页一片
+            List<List<Integer>> chunks = new ArrayList<>();
+            for (int i = 0; i < allPages.size(); i += VISION_CHUNK_PAGES) {
+                chunks.add(new ArrayList<>(allPages.subList(i, Math.min(i + VISION_CHUNK_PAGES, allPages.size()))));
+            }
+            log.info("[题目文件解析-视觉] 共 {} 页，分为 {} 片并发调用（并发上限 {}）",
+                    allPages.size(), chunks.size(), VISION_CONCURRENCY);
+
+            // 并发调用单片（信号量限流），失败自动重试一次
+            List<CompletableFuture<ChunkParseResult>> futures = new ArrayList<>();
+            for (List<Integer> chunk : chunks) {
+                futures.add(CompletableFuture.supplyAsync(() -> {
+                    try {
+                        VISION_SEMAPHORE.acquire();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return null;
+                    }
+                    try {
+                        ChunkParseResult result = callVisionModelForChunk(chunk, pageUrlByIndex, extractedImages, userId);
+                        if (result == null) {
+                            log.warn("[题目文件解析-视觉] 分片 {} 解析失败，重试一次", chunk);
+                            result = callVisionModelForChunk(chunk, pageUrlByIndex, extractedImages, userId);
+                        }
+                        return result;
+                    } finally {
+                        VISION_SEMAPHORE.release();
+                    }
+                }, AI_EXECUTOR).exceptionally(ex -> {
+                    log.warn("[题目文件解析-视觉] 分片 {} 调用异常: {}", chunk, ex.getMessage());
+                    return null;
+                }));
+            }
+
+            List<ChunkParseResult> chunkResults = new ArrayList<>();
+            int failed = 0;
+            for (CompletableFuture<ChunkParseResult> f : futures) {
+                ChunkParseResult r = f.join();
+                if (r != null) {
+                    chunkResults.add(r);
+                } else {
+                    failed++;
+                }
+            }
+            if (failed > 0) {
+                log.warn("[题目文件解析-视觉] {}/{} 个分片解析失败，返回成功分片结果", failed, chunks.size());
+            }
+            if (chunkResults.isEmpty()) return null;
+
+            return mergeChunkResults(chunkResults, pageUrlByIndex, extractedImages, userId);
+        } catch (Exception e) {
+            log.error("[题目文件解析-视觉] 分片并发调用失败: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 按片顺序合并题目。相邻片边界出现跨页题（前片尾题不完整且后片首题为延续）时，
+     * 用"前片最后一页 + 后片第一页"作为补漏分片重调一次模型，替换两个半题。
+     * 两标记矛盾时不做补漏、全部保留（信任"完整"一方，避免误删）。
+     */
+    private List<AiRubric> mergeChunkResults(List<ChunkParseResult> chunkResults,
+                                             Map<Integer, String> pageUrlByIndex,
+                                             List<ExtractedImage> extractedImages,
+                                             Long userId) {
+        List<AiRubric> merged = new ArrayList<>();
+        boolean prevTailIncomplete = false;
+        List<Integer> prevChunkPages = null;
+        AiRubric prevTailQuestion = null;
+
+        for (ChunkParseResult chunk : chunkResults) {
+            if (chunk.questions.isEmpty()) continue;
+
+            if (prevTailIncomplete && chunk.firstQuestionIsContinuation && prevChunkPages != null) {
+                // 确认跨页题：移除已入列的前片尾题半题，丢弃本片首题半题，补漏边界两页
+                if (!merged.isEmpty()) {
+                    merged.remove(merged.size() - 1);
+                }
+                int curFirst = chunk.pageIndices.get(0);
+                int prevLast = prevChunkPages.get(prevChunkPages.size() - 1);
+                if (curFirst == prevLast) {
+                    // 边界页相同（极端情况：片只含1页），跳过补漏避免重复调用同一页
+                    log.warn("[题目文件解析-视觉] 边界页重复（页{}），保留原始两半题", curFirst);
+                    merged.add(prevTailQuestion);
+                    merged.addAll(chunk.questions);
+                } else {
+                    List<Integer> gapPages = List.of(prevLast, curFirst);
+                    log.info("[题目文件解析-视觉] 检测到跨页题，补漏解析边界页 {}", gapPages);
+                    ChunkParseResult gap = callVisionModelForChunk(gapPages, pageUrlByIndex, extractedImages, userId);
+                    List<AiRubric> gapQuestions = null;
+                    if (gap != null && !gap.questions.isEmpty()) {
+                        gapQuestions = new ArrayList<>(gap.questions);
+                        if (gap.firstQuestionIsContinuation) {
+                            log.warn("[题目文件解析-视觉] 补漏分片首题仍为延续（题目跨3页以上），丢弃该不完整题: 页{}", gapPages);
+                            gapQuestions.remove(0);
+                        }
+                        if (!gap.lastQuestionComplete && !gapQuestions.isEmpty()) {
+                            log.warn("[题目文件解析-视觉] 补漏分片尾题不完整（题目跨3页以上），丢弃该不完整题: 页{}", gapPages);
+                            gapQuestions.remove(gapQuestions.size() - 1);
+                        }
+                    }
+                    if (gapQuestions != null && !gapQuestions.isEmpty()) {
+                        merged.addAll(gapQuestions);
+                    } else {
+                        // 补漏失败：保留两个半题，宁多勿缺
+                        log.warn("[题目文件解析-视觉] 补漏分片无有效结果，保留边界两个不完整题");
+                        merged.add(prevTailQuestion);
+                    }
+                    merged.addAll(chunk.questions.subList(1, chunk.questions.size()));
+                }
+            } else {
+                if (prevTailIncomplete && prevChunkPages != null) {
+                    log.warn("[题目文件解析-视觉] 相邻片跨页标记矛盾，保留全部题目以避免误删");
+                }
+                merged.addAll(chunk.questions);
+            }
+
+            prevTailIncomplete = !chunk.lastQuestionComplete;
+            prevChunkPages = chunk.pageIndices;
+            prevTailQuestion = chunk.questions.get(chunk.questions.size() - 1);
+        }
+        if (prevTailIncomplete && prevTailQuestion != null) {
+            log.warn("[题目文件解析-视觉] 最后一片尾题不完整（题目可能延续到缺失页），保留现有内容");
+        }
+        return merged;
+    }
+
+    /**
+     * 调用视觉模型解析一个分片（1~2页），返回题目与首尾跨页标记。
+     */
+    private ChunkParseResult callVisionModelForChunk(List<Integer> chunkPages,
+                                                     Map<Integer, String> pageUrlByIndex,
+                                                     List<ExtractedImage> extractedImages,
+                                                     Long userId) {
+        try {
+            // 本片页码范围内已成功上传的嵌入图片（编号为全文档统一编号，与最终URL映射一致）
+            int minPage = chunkPages.get(0);
+            int maxPage = chunkPages.get(chunkPages.size() - 1);
             StringBuilder imageRef = new StringBuilder();
-            if (!extractedImages.isEmpty()) {
-                imageRef.append("\n\n文档中包含以下嵌入图片：\n");
-                for (ExtractedImage img : extractedImages) {
+            for (ExtractedImage img : extractedImages) {
+                if (img.url != null && img.pageIndex >= minPage && img.pageIndex <= maxPage) {
                     imageRef.append("- 图片").append(img.index).append("\n");
                 }
             }
 
+            String pageDesc = chunkPages.size() == 1
+                    ? "第" + (chunkPages.get(0) + 1) + "页"
+                    : "第" + (chunkPages.get(0) + 1) + "页到第" + (chunkPages.get(chunkPages.size() - 1) + 1) + "页";
+
             String promptText = """
-                你是一个专业的题目解析专家。以下是一份试卷的每一页图片，请从中提取所有题目，输出为JSON数组。
+                你是一个专业的题目解析专家。以下是一份试卷的%s图片，请从中提取所有题目，输出为JSON对象。
 
                 要求：
-                1. 每道题包含：question（题目内容）、questionType（题型）、options（选项，没有则为空数组）、answer（答案）、explanation（解析）、calculationSteps（计算步骤，没有则为空数组）、resources（图片资源）
-                2. resources格式为[{"url":"图片N","type":"资源类型","label":"标签"}]，N为图片编号
+                1. 输出格式为：{"questions": [题目数组], "firstQuestionIsContinuation": 布尔值, "lastQuestionIsComplete": 布尔值}
+                2. questions数组中每道题包含：question（题目内容）、questionType（题型）、options（选项，没有则为空数组）、answer（答案）、explanation（解析）、calculationSteps（计算步骤，没有则为空数组）、resources（图片资源）
+                3. resources格式为[{"url":"图片N","type":"资源类型","label":"标签"}]，N为图片编号
                    type必须为以下之一：
                    - question_image：题目本身的配图
                    - option_image：选项配图（必须同时填写label为对应选项字母，如"A"、"B"、"C"、"D"）
                    - answer_image：答案中的配图
                    - explanation_image：解析中的配图
-                3. 如果题目中包含图片，在question字段中用[图片N]标记图片位置，同时在resources中添加对应引用
-                4. 严格输出JSON数组，不要输出其他内容
-                5. 数学内容禁止使用LaTeX语法（如\\angle、^\\circ、\\frac、$...$），必须直接使用Unicode字符：
+                4. 如果题目中包含图片，在question字段中用[图片N]标记图片位置，同时在resources中添加对应引用
+                5. firstQuestionIsContinuation：本片第一道题的题干是否从上一页延续而来（即题干开头不在本片第一页）。若第一道题从本片开始则为false
+                6. lastQuestionIsComplete：本片最后一道题是否在本片内完整结束（题干、选项未被截断）。若最后一道题延续到下一页则为false
+                7. 严格输出JSON对象，不要输出其他内容
+                8. 数学内容禁止使用LaTeX语法（如\\angle、^\\circ、\\frac、$...$），必须直接使用Unicode字符：
                    角度用∠、度数用°、乘号用×、除号用÷、不等于用≠、小于等于用≤、大于等于用≥、约等于用≈、根号用√、圆周率用π、三角形用△；分数写成a/b，幂写成x²
-                """ + imageRef;
+                """.formatted(pageDesc)
+                    + (imageRef.isEmpty() ? "" : "\n\n本片页面包含以下嵌入图片：\n" + imageRef);
 
             // 获取视觉模型
             String apiKey = userApiKeyService.hasUserOwnApiKey(userId) ? userApiKeyService.getPlainApiKey(userId) : null;
@@ -881,11 +1082,13 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                     apiKey != null ? apiKey : dashScopeModelFactory.getDefaultApiKey(),
                     modelName);
 
-            // 构建包含多张图片的请求
+            // 构建包含本片页面图片的请求
             var userSpec = ChatClient.builder(chatModel).build().prompt()
                     .user(u -> {
                         u.text(promptText);
-                        for (String url : pageImageUrls) {
+                        for (Integer pageIndex : chunkPages) {
+                            String url = pageUrlByIndex.get(pageIndex);
+                            if (url == null) continue;
                             try {
                                 u.media(org.springframework.util.MimeTypeUtils.IMAGE_JPEG,
                                         new org.springframework.core.io.UrlResource(url));
@@ -896,25 +1099,52 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                     });
 
             String response = userSpec.call().content();
-            log.info("[题目文件解析-视觉] 视觉模型返回，响应长度: {}", response != null ? response.length() : 0);
+            log.info("[题目文件解析-视觉] 分片 {} 返回，响应长度: {}", chunkPages,
+                    response != null ? response.length() : 0);
 
-            // 解析JSON响应
+            ChunkParseResult result = parseChunkResponse(response, chunkPages);
+            if (result != null) {
+                sanitizeRubricMath(result.questions);
+            }
+            return result;
+        } catch (Exception e) {
+            log.error("[题目文件解析-视觉] 分片 {} 调用失败: {}", chunkPages, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 解析分片响应：优先按 {"questions": [...], "firstQuestionIsContinuation": ..., "lastQuestionIsComplete": ...} 对象格式；
+     * 模型未按格式输出裸数组时，按数组解析并默认首尾完整。
+     */
+    private ChunkParseResult parseChunkResponse(String response, List<Integer> chunkPages) {
+        try {
             if (response == null || response.isEmpty()) return null;
             String jsonStr = response.trim();
             if (jsonStr.startsWith("```")) {
                 jsonStr = jsonStr.replaceAll("^```(?:json)?\\s*", "").replaceAll("\\s*```$", "").trim();
             }
-            int start = jsonStr.indexOf("[");
-            int end = jsonStr.lastIndexOf("]");
-            if (start >= 0 && end > start) {
-                jsonStr = jsonStr.substring(start, end + 1);
+            JsonNode root = objectMapper.readTree(jsonStr);
+
+            JsonNode questionsNode;
+            boolean firstContinuation = false;
+            boolean lastComplete = true;
+            if (root.isObject() && root.has("questions")) {
+                questionsNode = root.get("questions");
+                firstContinuation = root.path("firstQuestionIsContinuation").asBoolean(false);
+                lastComplete = root.path("lastQuestionIsComplete").asBoolean(true);
+            } else if (root.isArray()) {
+                questionsNode = root;
+            } else {
+                return null;
             }
-            List<AiRubric> rubrics = objectMapper.readValue(jsonStr,
+            if (!questionsNode.isArray()) return null;
+
+            List<AiRubric> questions = objectMapper.readValue(questionsNode.toString(),
                     objectMapper.getTypeFactory().constructCollectionType(List.class, AiRubric.class));
-            sanitizeRubricMath(rubrics);
-            return rubrics;
+            return new ChunkParseResult(new ArrayList<>(chunkPages), questions, firstContinuation, lastComplete);
         } catch (Exception e) {
-            log.error("[题目文件解析-视觉] 视觉模型调用失败: {}", e.getMessage());
+            log.error("[题目文件解析-视觉] 分片响应解析失败: {}", e.getMessage());
             return null;
         }
     }
@@ -951,7 +1181,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                         BufferedImage bufferedImage = pdImage.getImage();
                         if (bufferedImage.getWidth() < 50 || bufferedImage.getHeight() < 50) continue;
 
-                        byte[] imageBytes = writeJpeg(bufferedImage, 0.8f);
+                        byte[] imageBytes = writeJpeg(scaleDownToMaxEdge(bufferedImage, 1600), 0.8f);
                         String hash = DigestUtils.md5Hex(imageBytes);
                         if (uploadedHashes.contains(hash)) continue;
                         uploadedHashes.add(hash);
@@ -979,18 +1209,19 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
 
     /**
      * 并行上传页面图片和嵌入图片到 OSS。
-     * 单张上传失败不中断整体流程：页面图片失败的条目被过滤，嵌入图片 url 保持 null（后续映射时跳过）。
-     * @return 页面图片URL列表（按页码顺序）
+     * 单张上传失败不中断整体流程：页面图片失败的页不出现在结果Map中，嵌入图片 url 保持 null（后续映射时跳过）。
+     * @return 页码 → 页面图片URL（按页码排序，仅含上传成功的页）
      */
-    private List<String> uploadAllImagesParallel(List<PageImage> pageImages,
-                                                 List<ExtractedImage> extractedImages,
-                                                 Long userId) {
+    private Map<Integer, String> uploadAllImagesParallel(List<PageImage> pageImages,
+                                                         List<ExtractedImage> extractedImages,
+                                                         Long userId) {
         // 页面图片并行上传
-        List<CompletableFuture<String>> pageFutures = new ArrayList<>();
+        List<CompletableFuture<Map.Entry<Integer, String>>> pageFutures = new ArrayList<>();
         for (PageImage pi : pageImages) {
             String objectKey = "question-image/" + userId + "/page-" + pi.pageIndex + "-" + UUID.randomUUID() + ".jpg";
             pageFutures.add(CompletableFuture.supplyAsync(
                     () -> ossService.upload(objectKey, pi.imageBytes, "image/jpeg"), AI_EXECUTOR)
+                    .thenApply(url -> Map.entry(pi.pageIndex, url))
                     .exceptionally(ex -> {
                         log.warn("[OSS并行上传] 页面图片上传失败, pageIndex={}, error={}", pi.pageIndex, ex.getMessage());
                         return null;
@@ -1013,18 +1244,18 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         CompletableFuture.allOf(pageFutures.toArray(new CompletableFuture[0])).join();
         CompletableFuture.allOf(extractFutures.toArray(new CompletableFuture[0])).join();
 
-        // 按顺序收集页面URL（过滤失败的 null）
-        List<String> urls = new ArrayList<>(pageFutures.size());
-        for (CompletableFuture<String> f : pageFutures) {
-            String url = f.join();
-            if (url != null) {
-                urls.add(url);
+        // 收集页码 → URL（过滤失败的 null），按页码排序
+        Map<Integer, String> urlByPageIndex = new TreeMap<>();
+        for (CompletableFuture<Map.Entry<Integer, String>> f : pageFutures) {
+            Map.Entry<Integer, String> entry = f.join();
+            if (entry != null && entry.getValue() != null) {
+                urlByPageIndex.put(entry.getKey(), entry.getValue());
             }
         }
         long extractOk = extractedImages.stream().filter(i -> i.url != null).count();
         log.info("[OSS并行上传] 完成, 页面图片成功 {}/{}, 嵌入图片成功 {}/{}",
-                urls.size(), pageImages.size(), extractOk, extractedImages.size());
-        return urls;
+                urlByPageIndex.size(), pageImages.size(), extractOk, extractedImages.size());
+        return urlByPageIndex;
     }
 
     /**

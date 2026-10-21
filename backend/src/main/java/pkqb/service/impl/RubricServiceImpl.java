@@ -32,6 +32,7 @@ import pkqb.service.NotificationService;
 import pkqb.service.OssService;
 import pkqb.service.QuestionResourceService;
 import pkqb.service.RubricService;
+import pkqb.util.HtmlEscapeUtil;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -215,10 +216,10 @@ public class RubricServiceImpl implements RubricService {
             QuestionEntity questionEntity = new QuestionEntity();
             questionEntity.setRubricId(rubricId);
             questionEntity.setOrderIndex(startOrderIndex + i);
-            questionEntity.setQuestionText(HtmlUtils.htmlEscape(aiRubric.getQuestion()));
+            questionEntity.setQuestionText(HtmlEscapeUtil.escapeBasic(aiRubric.getQuestion()));
             questionEntity.setQuestionType(aiRubric.getQuestionType());
-            questionEntity.setAnswer(HtmlUtils.htmlEscape(aiRubric.getAnswer()));
-            questionEntity.setExplanation(HtmlUtils.htmlEscape(aiRubric.getExplanation()));
+            questionEntity.setAnswer(HtmlEscapeUtil.escapeBasic(aiRubric.getAnswer()));
+            questionEntity.setExplanation(HtmlEscapeUtil.escapeBasic(aiRubric.getExplanation()));
             questionEntity.setDeleted(0);
 
             // 数组转JSON
@@ -346,6 +347,10 @@ public class RubricServiceImpl implements RubricService {
                 List<Long> questionIds = questions.stream().map(QuestionEntity::getId).collect(Collectors.toList());
                 Map<Long, List<QuestionResourceEntity>> resourceMap = questionResourceService.getByQuestionIds(questionIds);
                 for (QuestionEntity question : questions) {
+                    // 旧数据经HtmlUtils.htmlEscape入库，数学符号被转成&deg;等实体，反转义恢复后再返回前端
+                    question.setQuestionText(HtmlEscapeUtil.unescape(question.getQuestionText()));
+                    question.setAnswer(HtmlEscapeUtil.unescape(question.getAnswer()));
+                    question.setExplanation(HtmlEscapeUtil.unescape(question.getExplanation()));
                     List<QuestionResourceEntity> resources = resourceMap.getOrDefault(question.getId(), List.of());
                     // 规范化 type 字段：旧数据可能存的是 "image"，统一为前端期望的类型
                     for (QuestionResourceEntity res : resources) {
@@ -449,9 +454,9 @@ public class RubricServiceImpl implements RubricService {
             q.setRubricId(rubricId);
             q.setDeleted(0);
             q.setOrderIndex(orderIndex++);
-            q.setQuestionText(HtmlUtils.htmlEscape(q.getQuestionText()));
-            q.setAnswer(HtmlUtils.htmlEscape(q.getAnswer()));
-            q.setExplanation(HtmlUtils.htmlEscape(q.getExplanation()));
+            q.setQuestionText(HtmlEscapeUtil.escapeBasic(q.getQuestionText()));
+            q.setAnswer(HtmlEscapeUtil.escapeBasic(q.getAnswer()));
+            q.setExplanation(HtmlEscapeUtil.escapeBasic(q.getExplanation()));
             questionMapper.insert(q);
 
             // 保存资源（如果有），同时将OSS图片迁移到MinIO

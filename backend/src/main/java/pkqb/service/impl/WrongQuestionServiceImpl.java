@@ -5,7 +5,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.util.HtmlUtils;
 import pkqb.common.Result;
 import pkqb.mapper.QuestionMapper;
 import pkqb.mapper.RubricMapper;
@@ -18,6 +17,7 @@ import pkqb.pojo.entity.RubricEntity;
 import pkqb.pojo.entity.WrongQuestionEntity;
 import pkqb.service.QuestionResourceService;
 import pkqb.service.WrongQuestionService;
+import pkqb.util.HtmlEscapeUtil;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -55,7 +55,7 @@ public class WrongQuestionServiceImpl implements WrongQuestionService {
         if (existing != null) {
             // 已存在，增加错误次数，重置复习参数
             existing.setWrongCount(existing.getWrongCount() + 1);
-            existing.setUserAnswer(HtmlUtils.htmlEscape(request.getUserAnswer()));
+            existing.setUserAnswer(HtmlEscapeUtil.escapeBasic(request.getUserAnswer()));
             // 答错后降低易度因子，缩短间隔
             existing.setEaseFactor(Math.max(1.3, existing.getEaseFactor() - 0.2));
             existing.setIntervalDays(1);
@@ -85,7 +85,7 @@ public class WrongQuestionServiceImpl implements WrongQuestionService {
         entity.setAnswer(question.getAnswer());
         entity.setExplanation(question.getExplanation());
         entity.setCalculationStepsJson(question.getCalculationStepsJson());
-        entity.setUserAnswer(HtmlUtils.htmlEscape(request.getUserAnswer()));
+        entity.setUserAnswer(HtmlEscapeUtil.escapeBasic(request.getUserAnswer()));
         entity.setWrongCount(1);
         entity.setCorrectCount(0);
         entity.setEaseFactor(2.5);  // SM-2 默认易度因子
@@ -129,10 +129,16 @@ public class WrongQuestionServiceImpl implements WrongQuestionService {
                     .collect(Collectors.toList());
             Map<Long, List<QuestionResourceEntity>> resourceMap = Map.of();
             if (!questionIds.isEmpty()) {
-                resourceMap = questionResourceService.getByQuestionIds(questionIds);
+                // 含已软删资源：原试卷被删除后错题仍需显示图片
+                resourceMap = questionResourceService.getAllByQuestionIds(questionIds);
             }
 
             for (WrongQuestionEntity wq : list) {
+                // 历史数据入库时被HTML转义（数学符号变成&deg;等实体），反转义恢复后再返回前端
+                wq.setQuestionText(HtmlEscapeUtil.unescape(wq.getQuestionText()));
+                wq.setAnswer(HtmlEscapeUtil.unescape(wq.getAnswer()));
+                wq.setExplanation(HtmlEscapeUtil.unescape(wq.getExplanation()));
+                wq.setUserAnswer(HtmlEscapeUtil.unescape(wq.getUserAnswer()));
                 if (wq.getRubricId() != null) {
                     wq.setRubricTitle(rubricTitleMap.get(wq.getRubricId()));
                 }
@@ -180,10 +186,16 @@ public class WrongQuestionServiceImpl implements WrongQuestionService {
                     .collect(Collectors.toList());
             Map<Long, List<QuestionResourceEntity>> resourceMap = Map.of();
             if (!questionIds.isEmpty()) {
-                resourceMap = questionResourceService.getByQuestionIds(questionIds);
+                // 含已软删资源：原试卷被删除后错题仍需显示图片
+                resourceMap = questionResourceService.getAllByQuestionIds(questionIds);
             }
 
             for (WrongQuestionEntity wq : list) {
+                // 历史数据入库时被HTML转义（数学符号变成&deg;等实体），反转义恢复后再返回前端
+                wq.setQuestionText(HtmlEscapeUtil.unescape(wq.getQuestionText()));
+                wq.setAnswer(HtmlEscapeUtil.unescape(wq.getAnswer()));
+                wq.setExplanation(HtmlEscapeUtil.unescape(wq.getExplanation()));
+                wq.setUserAnswer(HtmlEscapeUtil.unescape(wq.getUserAnswer()));
                 if (wq.getRubricId() != null) {
                     wq.setRubricTitle(rubricTitleMap.get(wq.getRubricId()));
                 }

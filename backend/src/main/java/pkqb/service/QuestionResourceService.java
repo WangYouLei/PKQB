@@ -81,4 +81,22 @@ public class QuestionResourceService {
         return resources.stream()
                 .collect(Collectors.groupingBy(QuestionResourceEntity::getQuestionId));
     }
+
+    /**
+     * 按题目ID批量查询资源（含已软删的）。
+     * 错题本场景：删除试卷会软删题目和资源记录，但错题记录及其引用的图片文件仍在，
+     * 需返回含软删的资源，否则错题本图片全部消失。
+     */
+    public Map<Long, List<QuestionResourceEntity>> getAllByQuestionIds(List<Long> questionIds) {
+        if (questionIds == null || questionIds.isEmpty()) {
+            return Map.of();
+        }
+        LambdaQueryWrapper<QuestionResourceEntity> wrapper = new LambdaQueryWrapper<>();
+        wrapper.in(QuestionResourceEntity::getQuestionId, questionIds)
+               .orderByAsc(QuestionResourceEntity::getType)
+               .orderByAsc(QuestionResourceEntity::getSortOrder);
+        List<QuestionResourceEntity> resources = questionResourceMapper.selectList(wrapper);
+        return resources.stream()
+                .collect(Collectors.groupingBy(QuestionResourceEntity::getQuestionId));
+    }
 }

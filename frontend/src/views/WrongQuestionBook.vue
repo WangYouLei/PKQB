@@ -98,6 +98,10 @@
                 <template v-if="q.resources?.length">
                   <img v-for="img in getQuestionImages(q.resources)" :key="img.url" :src="img.url" class="wq-image" />
                 </template>
+                <!-- 选项配图（几何选择题的图在选项上） -->
+                <template v-for="(_, oi) in getOptions(q)" :key="'wq-opt-' + oi">
+                  <img v-if="getOptionImage(q.resources, String.fromCharCode(65 + oi))" :src="getOptionImage(q.resources, String.fromCharCode(65 + oi))!" class="wq-option-image" />
+                </template>
                 <div class="wq-answers">
                   <div class="wq-user-answer">
                     <span class="answer-label">你的答案：</span>
@@ -181,6 +185,7 @@
             >
               <span class="option-label">{{ String.fromCharCode(65 + oi) }}.</span>
               <span class="option-text">{{ opt }}</span>
+              <img v-if="getOptionImage(currentReviewQuestion?.resources, String.fromCharCode(65 + oi))" :src="getOptionImage(currentReviewQuestion?.resources, String.fromCharCode(65 + oi))!" class="option-image" />
             </div>
           </div>
 
@@ -274,6 +279,7 @@
               >
                 <span class="oq-option-label">{{ String.fromCharCode(65 + oi) }}.</span>
                 <span class="oq-option-text">{{ opt }}</span>
+                <img v-if="getOptionImage(currentOriginalQuestion.resources, String.fromCharCode(65 + oi))" :src="getOptionImage(currentOriginalQuestion.resources, String.fromCharCode(65 + oi))!" class="oq-option-image" />
               </div>
             </div>
             
@@ -314,7 +320,7 @@ import {
   apiSubmitReviewResult
 } from '@/api'
 import type { WrongQuestion, WrongQuestionStats } from '@/types'
-import { getQuestionImages } from '@/composables/useQuestionResources'
+import { getQuestionImages, getOptionImage } from '@/composables/useQuestionResources'
 
 // 统计数据
 const stats = ref<WrongQuestionStats>({ totalCount: 0, todayReviewCount: 0, masteredCount: 0, learningCount: 0 })
@@ -707,6 +713,7 @@ function getMasteryColor(level: number): string {
 
 .wq-text { font-size: 15px; line-height: 1.7; color: var(--text-primary); margin-bottom: 12px; }
 .wq-image { max-width: 100%; border-radius: 10px; margin-bottom: 12px; }
+.wq-option-image { max-width: 55%; border-radius: 10px; margin-bottom: 8px; }
 
 .wq-answers { display: flex; gap: 24px; margin-bottom: 8px; }
 .wq-user-answer, .wq-correct-answer { font-size: 13px; }
@@ -745,6 +752,7 @@ function getMasteryColor(level: number): string {
 .option-item.selected { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
 .option-label { font-weight: 600; width: 28px; height: 28px; border-radius: 8px; background: var(--bg-glass); display: flex; align-items: center; justify-content: center; font-size: 14px; color: var(--text-primary); }
 .option-item.selected .option-label { background: var(--accent); color: #fff; }
+.option-image { max-width: 180px; max-height: 130px; border-radius: 8px; }
 
 .text-answer-area { margin-bottom: 24px; }
 .text-answer-input { width: 100%; min-height: 120px; padding: 16px; border: 1px solid var(--border-glass); border-radius: 14px; background: var(--bg-glass); color: var(--text-primary); font-size: 15px; font-family: inherit; resize: vertical; line-height: 1.7; }
@@ -794,6 +802,7 @@ function getMasteryColor(level: number): string {
 .oq-option { display: flex; gap: 12px; padding: 12px 16px; background: var(--bg-glass); border-radius: 12px; border: 1px solid var(--border-glass); }
 .oq-option-label { font-weight: 600; color: var(--text-primary); width: 20px; }
 .oq-option-text { color: var(--text-secondary); }
+.oq-option-image { max-width: 180px; max-height: 130px; border-radius: 8px; }
 .oq-answer-section, .oq-explanation-section, .oq-steps-section { padding: 16px; background: rgba(16,185,129,0.06); border: 1px solid rgba(16,185,129,0.18); border-radius: 12px; }
 .oq-explanation-section { background: rgba(59,130,246,0.08); border-color: rgba(59,130,246,0.18); }
 .oq-steps-section { background: rgba(245,158,11,0.06); border-color: rgba(245,158,11,0.18); }
