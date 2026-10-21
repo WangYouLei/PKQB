@@ -51,14 +51,6 @@ public interface SpringAiAlibabaService {
 
 
     /**
-     * 添加文档（题目）
-     *
-     * @param content 文档内容
-     * @return 添加结果
-     */
-    Result<String> addRubric(String content);
-
-    /**
      * 获取具体的历史对话  根据sessionId获取
      *
      * @param sessionId 会话ID

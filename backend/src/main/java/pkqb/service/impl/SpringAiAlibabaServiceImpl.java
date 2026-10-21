@@ -637,47 +637,6 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     }
 
     @Override
-    public Result<String> addRubric(String content) {
-        log.info("[题目解析] 收到字符串内容解析，长度={}", content != null ? content.length() : 0);
-        if (content == null || content.trim().isEmpty()) {
-            return Result.error("内容不能为空");
-        }
-        
-        return parseRubricContent(content, null);
-    }
-
-    private Result<String> parseRubricContent(String content, Long userId) {
-        log.info("[题目解析] 内容长度={}", content.length());
-        
-        String truncatedContent = content.length() > RUBRIC_TRUNCATE_LENGTH ? content.substring(0, RUBRIC_TRUNCATE_LENGTH) : content;
-        String prompt = getQuestionAnalysisPrompt(truncatedContent);
-        
-        try {
-            log.info("[题目解析] 开始调用AI解析题目（结构化输出）");
-            List<AiRubric> aiRubrics = callForStructuredOutput(prompt, userId);
-            String jsonStr = objectMapper.writeValueAsString(aiRubrics);
-            log.info("[题目解析] AI解析完成");
-            return Result.success(jsonStr);
-        } catch (Exception e) {
-            log.warn("[题目解析] AI解析超时或失败: {}，开始执行兜底策略", e.getMessage());
-        }
-        
-        List<Map<String, Object>> maps = questionExtractContext.extractQuestions(content);
-        if (maps.isEmpty()) {
-            log.warn("[题目解析] 兜底解析也失败，内容可能不符合预期格式");
-            return Result.error("解析题目失败，请检查内容格式");
-        }
-        try {
-            String jsonStr = objectMapper.writeValueAsString(maps);
-            log.info("[题目解析] 兜底解析完成");
-            return Result.success(jsonStr);
-        } catch (Exception ex) {
-            log.error("[题目解析] 兜底解析JSON序列化失败: {}", ex.getMessage());
-            return Result.error("解析题目失败");
-        }
-    }
-
-    @Override
     public Result<Object> getHistoryBySessionId(String sessionId, String userId, String type) {
         log.info("[历史记录] 获取会话历史，sessionId={}, userId={}, type={}", sessionId, userId, type);
         if (sessionId == null || userId == null || type == null) {
@@ -1691,22 +1650,6 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                 // 多模型并行模式（两个辅助模型）时输出各模型回答，否则输出最终答案
                 result.append(buildAgentFinalOutput(invoke.get(), userId));
             }
-           /* agent.stream(prompt, config)
-                    .filter(output -> output instanceof StreamingOutput<?>)
-                    .map(output -> (StreamingOutput<?>) output)
-                    .doOnNext(streamingOutput -> {
-                        Message message = streamingOutput.message();
-                        if (message != null && message.getText() != null) {
-                            // 关键修改：判断是否来自 summary_agent
-                            // 这里的 "summary_agent" 需要和 ReactAgentUserConfig 中定义的 name 一致
-                            if ("summary_agent".equals(streamingOutput.agent())) {
-                                result.setLength(0); // 清空之前可能收集到的草稿
-                                result.append(message.getText());
-                            }
-                        }
-                    })
-                    .blockLast(Duration.ofSeconds(120));*/
-            
             log.info("[AI解答] 生成完成，generateType={}", generateType);
             return Result.success(result.toString());
         } catch (Exception e) {
@@ -2015,33 +1958,6 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         return prompt.toString();
     }
     
-    private String callReactAgent(String prompt, Long userId) {
-        try {
-            ReactAgent ragReactAgent = reactAgentFactory.getRagReactAgent(userId);
-            String threadId = "ai_solve:" + userId + ":" + System.currentTimeMillis();
-            RunnableConfig config = RunnableConfig.builder()
-                    .threadId(threadId)
-                    .build();
-            
-            StringBuilder result = new StringBuilder();
-            ragReactAgent.stream(prompt, config)
-                    .filter(output -> output instanceof StreamingOutput<?>)
-                    .map(output -> (StreamingOutput<?>) output)
-                    .doOnNext(streamingOutput -> {
-                        Message message = streamingOutput.message();
-                        if (message != null && message.getText() != null) {
-                            result.append(message.getText());
-                        }
-                    })
-                    .blockLast(Duration.ofSeconds(120));
-            
-            return result.toString();
-        } catch (Exception e) {
-            log.error("[AI解答] ReactAgent调用失败: ", e);
-            return "";
-        }
-    }
-    
     /**
      * 判断是否为多模型并行模式（用户配置了两个辅助模型，两个辅助Agent都产生了回答）
      */
@@ -2125,17 +2041,6 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                     assistantText = buildAssistantAnswersText(names, state);
                 }
             }
-           /* agent.stream(prompt, config)
-                    .filter(output -> output instanceof StreamingOutput<?>)
-                    .map(output -> (StreamingOutput<?>) output)
-                    .doOnNext(streamingOutput -> {
-                        Message message = streamingOutput.message();
-                        if (message != null && message.getText() != null) {
-                            result.append(message.getText());
-                        }
-                    })
-                    .blockLast(Duration.ofSeconds(120));*/
-
             return new String[]{assistantText, finalAnswer};
         } catch (Exception e) {
             log.error("[ReactAgent文本调用] 调用失败: ", e);

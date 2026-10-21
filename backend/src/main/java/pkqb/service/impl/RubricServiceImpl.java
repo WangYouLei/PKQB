@@ -815,28 +815,6 @@ public class RubricServiceImpl implements RubricService {
         }
     }
     
-    /**
-     * 转换为JSON字符串
-     */
-    private String toJsonString(String str) {
-        if (str == null) return "\"\"";
-        return "\"" + str.replace("\"", "\\\"") + "\"";
-    }
-    
-    /**
-     * 转换为JSON字符串数组
-     */
-    private String toJsonStringArray(List<String> list) {
-        if (list == null || list.isEmpty()) return "[]";
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < list.size(); i++) {
-            if (i > 0) sb.append(",");
-            sb.append(toJsonString(list.get(i)));
-        }
-        sb.append("]");
-        return sb.toString();
-    }
-
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Result<?> batchDeleteRubrics(List<Long> rubricIds, Long userId) {

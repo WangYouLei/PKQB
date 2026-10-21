@@ -461,7 +461,7 @@ async function checkUsage() {
   }
 }
 
-async function deleteSession(sessionId: string) {
+function deleteSession(sessionId: string) {
   pendingDeleteSessionId.value = sessionId
   showDeleteConfirm.value = true
 }

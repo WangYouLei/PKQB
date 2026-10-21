@@ -13,7 +13,6 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Collections;
-import java.util.concurrent.TimeUnit;
 
 /**
  * 速率限制服务实现类
@@ -126,11 +125,6 @@ public class RateLimitServiceImpl implements RateLimitService {
     private String buildKey(Long userId, String feature) {
         String today = LocalDate.now().format(DATE_FORMATTER);
         return KEY_PREFIX + feature + ":" + userId + ":" + today;
-    }
-
-    private void setExpiryToMidnight(String key) {
-        long secondsUntilMidnight = getSecondsUntilMidnight();
-        stringRedisTemplate.expire(key, secondsUntilMidnight, TimeUnit.SECONDS);
     }
 
     private long getSecondsUntilMidnight() {

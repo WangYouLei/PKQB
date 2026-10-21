@@ -106,7 +106,6 @@ const props = defineProps<{
   showDelete?: boolean
 }>()
 const emit = defineEmits<{ 
-  open: [file: HtmlFileItem],
   preview: [file: HtmlFileItem],
   download: [file: HtmlFileItem],
   remove: [file: HtmlFileItem],

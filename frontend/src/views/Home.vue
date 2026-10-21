@@ -196,12 +196,10 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { useWebSocket } from '@/composables/useWebSocket'
 import NotificationCenter from '@/components/NotificationCenter.vue'
 
-const router = useRouter()
 const userStore = useUserStore()
 const { connect: wsConnect, disconnect: wsDisconnect } = useWebSocket()
 const isLightMode = ref(false)

@@ -1,11 +1,3 @@
-export interface User {
-  userId: number
-  username: string
-  studentNo: string
-  classId: number | null
-  token: string
-}
-
 export interface HtmlFileItem {
   id: number
   userId: number
@@ -127,38 +119,10 @@ export interface ModelsEntity {
   updateTime: string
 }
 
-export interface ApiError {
-  code: number
-  message: string
-}
-
-export interface HistoryMessage {
-  messageType: 'USER' | 'ASSISTANT'
-  text: string
-  timestamp: number
-}
-
-export type QuestionType = 'single_choice' | 'multiple_choice' | 'true_false' | 'short_answer' | 'calculation'
-
-export interface AiSolveResult {
-  answer?: string
-  explanation?: string
-  steps?: string
-}
-
 export interface HistorySessionData {
   role: 'user' | 'assistant'
   content: string
   timestamp: number
-}
-
-export interface ParsedQuestion {
-  question: string
-  questionType: QuestionType
-  options?: string[]
-  answer: string
-  explanation?: string
-  calculationSteps?: string[]
 }
 
 // ========== 错题本相关类型 ==========

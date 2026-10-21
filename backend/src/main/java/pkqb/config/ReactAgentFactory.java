@@ -24,28 +24,23 @@ public class ReactAgentFactory {
     private final ReactAgent simpleReactAgent;
     private final ReactAgentUserConfig reactAgentUserConfig;
     private final UserApiKeyService userApiKeyService;
-    private final DashScopeModelFactory dashScopeModelFactory;
 
     private final Map<Long, ReactAgent> userChatAgentCache = new ConcurrentHashMap<>();
     private final Map<Long, ReactAgent> userRagAgentCache = new ConcurrentHashMap<>();
     private final Map<Long, ReactAgent> userSimpleAgentCache = new ConcurrentHashMap<>();
     private final Map<Long, Agent> userMultiModelAgentCache = new ConcurrentHashMap<>();
-    private final Map<Long, ReactAgent> userRubricParseAgentCache = new ConcurrentHashMap<>();
-    private volatile ReactAgent defaultRubricParseAgent;
 
     public ReactAgentFactory(
             ReactAgent chatReactAgent,
             ReactAgent ragReactAgent,
             ReactAgent simpleReactAgent,
             ReactAgentUserConfig reactAgentUserConfig,
-            UserApiKeyService userApiKeyService,
-            DashScopeModelFactory dashScopeModelFactory) {
+            UserApiKeyService userApiKeyService) {
         this.chatReactAgent = chatReactAgent;
         this.ragReactAgent = ragReactAgent;
         this.simpleReactAgent = simpleReactAgent;
         this.reactAgentUserConfig = reactAgentUserConfig;
         this.userApiKeyService = userApiKeyService;
-        this.dashScopeModelFactory = dashScopeModelFactory;
     }
 
     public ReactAgent getChatReactAgent(Long userId) {
@@ -100,22 +95,6 @@ public class ReactAgentFactory {
      */
     public boolean supportsMultiModel(Long userId) {
         return userApiKeyService.supportsMultiModel(userId);
-    }
-
-    public ReactAgent getRubricParseAgent(Long userId) {
-        ApiKeyMode mode = userApiKeyService.getApiKeyMode(userId);
-        if (mode == ApiKeyMode.LOCAL) {
-            if (defaultRubricParseAgent == null) {
-                synchronized (this) {
-                    if (defaultRubricParseAgent == null) {
-                        String defaultApiKey = dashScopeModelFactory.getDefaultApiKey();
-                        defaultRubricParseAgent = reactAgentUserConfig.createRubricParseAgent(defaultApiKey, null);
-                    }
-                }
-            }
-            return defaultRubricParseAgent;
-        }
-        return getOrCreateUserRubricParseAgent(userId);
     }
 
     private ReactAgent getOrCreateUserChatReactAgent(Long userId) {
@@ -196,7 +175,6 @@ public class ReactAgentFactory {
         userRagAgentCache.remove(userId);
         userSimpleAgentCache.remove(userId);
         userMultiModelAgentCache.remove(userId);
-        userRubricParseAgentCache.remove(userId);
         log.info("[ReactAgent工厂] 清除用户 {} 的 ReactAgent 缓存", userId);
     }
 
@@ -214,18 +192,4 @@ public class ReactAgentFactory {
         }
     }
 
-    private ReactAgent getOrCreateUserRubricParseAgent(Long userId) {
-        evictIfNeeded(userRubricParseAgentCache);
-        return userRubricParseAgentCache.computeIfAbsent(userId, id -> {
-            String apiKey = userApiKeyService.getPlainApiKey(id);
-            ModelsEntity mainModel = userApiKeyService.getMainModel(id);
-            ModelsEntity visionModel = userApiKeyService.getVisionModel(id);
-
-            if (apiKey == null) {
-                log.warn("[ReactAgent工厂] 用户 {} 没有个人 API Key，使用默认 apiKey 创建 RubricParseAgent", id);
-                apiKey = dashScopeModelFactory.getDefaultApiKey();
-            }
-            return reactAgentUserConfig.createRubricParseAgent(apiKey, mainModel, visionModel);
-        });
-    }
 }
