@@ -35,6 +35,7 @@ import pkqb.config.ReactAgentFactory;
 import pkqb.enums.ApiKeyMode;
 import pkqb.enums.RubricQuestionTypeEnum;
 import pkqb.pojo.dto.AiRubric;
+import pkqb.pojo.dto.RubricParseTaskStatus;
 import pkqb.pojo.entity.ModelsEntity;
 import pkqb.mapper.FileMapper;
 import pkqb.pojo.entity.FileEntity;
@@ -114,6 +115,22 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     private static final int VISION_CONCURRENCY = 3;
     private static final java.util.concurrent.Semaphore VISION_SEMAPHORE =
             new java.util.concurrent.Semaphore(VISION_CONCURRENCY);
+
+    /** 题目文件异步解析任务线程池：与分片线程池 AI_EXECUTOR 分离，避免任务线程 join 分片任务造成线程饥饿 */
+    private static final ExecutorService PARSE_TASK_EXECUTOR = new ThreadPoolExecutor(
+            3, 3, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+            new java.util.concurrent.LinkedBlockingQueue<>(50),
+            r -> {
+                Thread t = new Thread(r, "rubric-parse-task-" + System.currentTimeMillis());
+                t.setDaemon(true);
+                return t;
+            },
+            new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy()
+    );
+
+    /** 题目解析任务状态 Redis key 前缀与过期时间 */
+    private static final String RUBRIC_TASK_KEY_PREFIX = "rubric:parse:task:";
+    private static final Duration RUBRIC_TASK_TTL = Duration.ofMinutes(30);
 
     private static final StringBuilder TYPE_DESC = new StringBuilder();
     static {
@@ -242,6 +259,15 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             }
         } catch (InterruptedException e) {
             AI_EXECUTOR.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+        PARSE_TASK_EXECUTOR.shutdown();
+        try {
+            if (!PARSE_TASK_EXECUTOR.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                PARSE_TASK_EXECUTOR.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            PARSE_TASK_EXECUTOR.shutdownNow();
             Thread.currentThread().interrupt();
         }
     }
@@ -695,29 +721,120 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     }
 
     @Override
-    public Result<List<AiRubric>> handleRubricFile(MultipartFile file, Long userId, Integer modelType) {
+    public Result<String> submitRubricFileParse(String filename, byte[] fileBytes, Long userId, Integer modelType) {
+        log.info("[题目文件解析-AI] 提交异步解析任务: {}, 大小: {} bytes, userId={}, modelType={}",
+                filename, fileBytes.length, userId, modelType);
+
+        // 限流检查同步执行，快速失败
+        Result<?> limitCheck = rateLimitService.checkLimit(userId, RateLimitConstants.FEATURE_RUBRIC, RateLimitConstants.RUBRIC_LIMIT);
+        if (limitCheck != null) {
+            return Result.error(limitCheck.getMessage());
+        }
+
+        String taskId = UUID.randomUUID().toString();
+        saveTaskStatus(new RubricParseTaskStatus(taskId, userId,
+                RubricParseTaskStatus.STATUS_RUNNING, "received", "任务已提交，等待解析"));
+
+        PARSE_TASK_EXECUTOR.submit(() -> {
+            RubricParseTaskStatus finalStatus;
+            try {
+                MultipartFile inMemoryFile = new ByteArrayMultipartFile(filename, fileBytes);
+                java.util.function.Consumer<String> progress = msg ->
+                        saveTaskStatus(new RubricParseTaskStatus(taskId, userId,
+                                RubricParseTaskStatus.STATUS_RUNNING, "analyzing", msg));
+                Result<List<AiRubric>> result = doHandleRubricFile(inMemoryFile, userId, modelType, progress);
+                if (result.getCode() == 200) {
+                    finalStatus = new RubricParseTaskStatus(taskId, userId,
+                            RubricParseTaskStatus.STATUS_SUCCESS, "done", "解析完成");
+                    finalStatus.setResult(result.getData());
+                } else {
+                    finalStatus = new RubricParseTaskStatus(taskId, userId,
+                            RubricParseTaskStatus.STATUS_FAILED, "done", result.getMessage());
+                }
+            } catch (Exception e) {
+                log.error("[题目文件解析-AI] 异步任务执行异常, taskId={}", taskId, e);
+                finalStatus = new RubricParseTaskStatus(taskId, userId,
+                        RubricParseTaskStatus.STATUS_FAILED, "done", "处理文件失败: " + e.getMessage());
+            }
+            saveTaskStatus(finalStatus);
+        });
+        return Result.success(taskId);
+    }
+
+    @Override
+    public Result<RubricParseTaskStatus> getRubricParseTask(String taskId, Long userId) {
+        String json = stringRedisTemplate.opsForValue().get(RUBRIC_TASK_KEY_PREFIX + taskId);
+        if (json == null) {
+            return Result.error("任务不存在或已过期");
+        }
+        try {
+            RubricParseTaskStatus status = objectMapper.readValue(json, RubricParseTaskStatus.class);
+            if (!status.getUserId().equals(userId)) {
+                return Result.error("无权查询该任务");
+            }
+            return Result.success(status);
+        } catch (Exception e) {
+            log.error("[题目文件解析-AI] 读取任务状态失败, taskId={}", taskId, e);
+            return Result.error("读取任务状态失败");
+        }
+    }
+
+    private void saveTaskStatus(RubricParseTaskStatus status) {
+        try {
+            stringRedisTemplate.opsForValue().set(RUBRIC_TASK_KEY_PREFIX + status.getTaskId(),
+                    objectMapper.writeValueAsString(status), RUBRIC_TASK_TTL);
+        } catch (Exception e) {
+            log.error("[题目文件解析-AI] 保存任务状态失败, taskId={}", status.getTaskId(), e);
+        }
+    }
+
+    /**
+     * 基于内存字节的 MultipartFile 包装，供异步任务使用
+     * （原始上传的临时文件在HTTP请求结束后可能被清理，必须在同步阶段读出字节）
+     */
+    private static class ByteArrayMultipartFile implements MultipartFile {
+        private final String filename;
+        private final byte[] bytes;
+
+        ByteArrayMultipartFile(String filename, byte[] bytes) {
+            this.filename = filename;
+            this.bytes = bytes;
+        }
+
+        @Override public String getName() { return "file"; }
+        @Override public String getOriginalFilename() { return filename; }
+        @Override public String getContentType() { return "application/octet-stream"; }
+        @Override public boolean isEmpty() { return bytes == null || bytes.length == 0; }
+        @Override public long getSize() { return bytes.length; }
+        @Override public byte[] getBytes() { return bytes; }
+        @Override public java.io.InputStream getInputStream() { return new ByteArrayInputStream(bytes); }
+        @Override public void transferTo(java.io.File dest) throws IOException {
+            java.nio.file.Files.write(dest.toPath(), bytes);
+        }
+    }
+
+    /**
+     * 解析任务主体（原同步解析逻辑），由异步任务线程调用
+     */
+    private Result<List<AiRubric>> doHandleRubricFile(MultipartFile file, Long userId, Integer modelType,
+                                                      java.util.function.Consumer<String> progress) {
         log.info("[题目文件解析-AI] 开始处理文件: {}, 大小: {} bytes, userId={}, modelType={}",
                 file.getOriginalFilename(), file.getSize(), userId, modelType);
         try {
-            Result<?> limitCheck = rateLimitService.checkLimit(userId, RateLimitConstants.FEATURE_RUBRIC, RateLimitConstants.RUBRIC_LIMIT);
-            if (limitCheck != null) {
-                return Result.error(limitCheck.getMessage());
-            }
-
             if (modelType != null && modelType == 2) {
                 // 用户指定视觉模型
-                return handleRubricFileWithVision(file, userId);
+                return handleRubricFileWithVision(file, userId, progress);
             } else if (modelType != null && modelType == 1) {
                 // 用户指定纯文本模型
-                return handleRubricFileWithText(file, userId);
+                return handleRubricFileWithText(file, userId, null, progress);
             } else {
                 // 未指定：自动选择（PDF→视觉模型，其他→纯文本）
                 String originalFilename = file.getOriginalFilename();
                 boolean isPdf = originalFilename != null && originalFilename.toLowerCase().endsWith(".pdf");
                 if (isPdf) {
-                    return handleRubricFileWithVision(file, userId);
+                    return handleRubricFileWithVision(file, userId, progress);
                 } else {
-                    return handleRubricFileWithText(file, userId);
+                    return handleRubricFileWithText(file, userId, null, progress);
                 }
             }
 
@@ -730,7 +847,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     /**
      * 使用视觉模型解析PDF文件：PDF页面渲染为图片→上传OSS→URL传给视觉模型→结构化输出+嵌入图片提取映射
      */
-    private Result<List<AiRubric>> handleRubricFileWithVision(MultipartFile file, Long userId) {
+    private Result<List<AiRubric>> handleRubricFileWithVision(MultipartFile file, Long userId,
+                                                              java.util.function.Consumer<String> progress) {
         // 提到 try 外，便于降级时清理已上传的 OSS 图片
         Map<Integer, String> pageUrlByIndex = null;
         List<ExtractedImage> extractedImages = null;
@@ -739,6 +857,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             byte[] fileBytes = file.getBytes();
 
             // Step 1: 串行渲染页面 + 提取嵌入图片（共享 PDDocument，PDFBox 非线程安全）
+            if (progress != null) progress.accept("正在渲染PDF页面并提取图片");
             List<PageImage> pageImages;
             try (PDDocument document = Loader.loadPDF(fileBytes)) {
                 pageImages = renderPdfPagesToBytes(document);
@@ -747,25 +866,29 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
 
             if (pageImages.isEmpty()) {
                 log.warn("[题目文件解析-视觉] PDF页面渲染失败，降级到纯文本模式");
-                return handleRubricFileWithText(file, userId, "PDF页面渲染失败");
+                return handleRubricFileWithText(file, userId, "PDF页面渲染失败", progress);
             }
             log.info("[题目文件解析-视觉] PDF渲染为 {} 张页面图片，提取到 {} 张嵌入图片",
                     pageImages.size(), extractedImages.size());
 
             // Step 2: 并行上传所有图片到 OSS
+            if (progress != null) {
+                progress.accept("正在上传 " + (pageImages.size() + extractedImages.size()) + " 张图片");
+            }
             pageUrlByIndex = uploadAllImagesParallel(pageImages, extractedImages, userId);
             if (pageUrlByIndex.isEmpty()) {
                 log.warn("[题目文件解析-视觉] 全部页面图片上传失败，降级到纯文本模式");
                 cleanupOssImages(new ArrayList<>(pageUrlByIndex.values()), extractedImages);
-                return handleRubricFileWithText(file, userId, "页面图片上传失败");
+                return handleRubricFileWithText(file, userId, "页面图片上传失败", progress);
             }
 
             // Step 3: 分片并发调用视觉模型，获取结构化题目并合并
-            List<AiRubric> aiRubrics = callVisionModelForQuestions(pageUrlByIndex, extractedImages, userId);
+            if (progress != null) progress.accept("AI解析中");
+            List<AiRubric> aiRubrics = callVisionModelForQuestions(pageUrlByIndex, extractedImages, userId, progress);
             if (aiRubrics == null || aiRubrics.isEmpty()) {
                 log.warn("[题目文件解析-视觉] 视觉模型返回为空，降级到纯文本模式");
                 cleanupOssImages(new ArrayList<>(pageUrlByIndex.values()), extractedImages);
-                return handleRubricFileWithText(file, userId, "视觉模型返回结果为空");
+                return handleRubricFileWithText(file, userId, "视觉模型返回结果为空", progress);
             }
 
             // Step 4: 将图片编号映射为实际URL
@@ -777,7 +900,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         } catch (Exception e) {
             log.error("[题目文件解析-视觉] 视觉识别失败: {}，降级到纯文本模式", e.getMessage());
             cleanupOssImages(pageUrlByIndex == null ? null : new ArrayList<>(pageUrlByIndex.values()), extractedImages);
-            return handleRubricFileWithText(file, userId, e.getMessage());
+            return handleRubricFileWithText(file, userId, e.getMessage(), progress);
         }
     }
 
@@ -901,7 +1024,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
      */
     private List<AiRubric> callVisionModelForQuestions(Map<Integer, String> pageUrlByIndex,
                                                        List<ExtractedImage> extractedImages,
-                                                       Long userId) {
+                                                       Long userId,
+                                                       java.util.function.Consumer<String> progress) {
         try {
             List<Integer> allPages = new ArrayList<>(pageUrlByIndex.keySet());
             // 分片：每 VISION_CHUNK_PAGES 页一片
@@ -912,7 +1036,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             log.info("[题目文件解析-视觉] 共 {} 页，分为 {} 片并发调用（并发上限 {}）",
                     allPages.size(), chunks.size(), VISION_CONCURRENCY);
 
-            // 并发调用单片（信号量限流），失败自动重试一次
+            // 并发调用单片（信号量限流），失败自动重试一次；每片完成时上报进度
+            java.util.concurrent.atomic.AtomicInteger completedChunks = new java.util.concurrent.atomic.AtomicInteger();
             List<CompletableFuture<ChunkParseResult>> futures = new ArrayList<>();
             for (List<Integer> chunk : chunks) {
                 futures.add(CompletableFuture.supplyAsync(() -> {
@@ -932,7 +1057,13 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                     } finally {
                         VISION_SEMAPHORE.release();
                     }
-                }, AI_EXECUTOR).exceptionally(ex -> {
+                }, AI_EXECUTOR).thenApply(r -> {
+                    int done = completedChunks.incrementAndGet();
+                    if (progress != null) {
+                        progress.accept("AI解析中 " + done + "/" + chunks.size() + " 片");
+                    }
+                    return r;
+                }).exceptionally(ex -> {
                     log.warn("[题目文件解析-视觉] 分片 {} 调用异常: {}", chunk, ex.getMessage());
                     return null;
                 }));
@@ -953,7 +1084,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             }
             if (chunkResults.isEmpty()) return null;
 
-            return mergeChunkResults(chunkResults, pageUrlByIndex, extractedImages, userId);
+            return mergeChunkResults(chunkResults, pageUrlByIndex, extractedImages, userId, progress);
         } catch (Exception e) {
             log.error("[题目文件解析-视觉] 分片并发调用失败: {}", e.getMessage());
             return null;
@@ -968,7 +1099,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     private List<AiRubric> mergeChunkResults(List<ChunkParseResult> chunkResults,
                                              Map<Integer, String> pageUrlByIndex,
                                              List<ExtractedImage> extractedImages,
-                                             Long userId) {
+                                             Long userId,
+                                             java.util.function.Consumer<String> progress) {
         List<AiRubric> merged = new ArrayList<>();
         boolean prevTailIncomplete = false;
         List<Integer> prevChunkPages = null;
@@ -992,6 +1124,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                 } else {
                     List<Integer> gapPages = List.of(prevLast, curFirst);
                     log.info("[题目文件解析-视觉] 检测到跨页题，补漏解析边界页 {}", gapPages);
+                    if (progress != null) progress.accept("检测到跨页题，正在补漏解析边界页");
                     ChunkParseResult gap = callVisionModelForChunk(gapPages, pageUrlByIndex, extractedImages, userId);
                     List<AiRubric> gapQuestions = null;
                     if (gap != null && !gap.questions.isEmpty()) {
@@ -1339,17 +1472,18 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     /**
      * 使用纯文本提取流程（原有逻辑）
      */
-    private Result<List<AiRubric>> handleRubricFileWithText(MultipartFile file, Long userId) {
-        return handleRubricFileWithText(file, userId, null);
-    }
-
     /**
      * 使用纯文本提取流程（原有逻辑）
      *
      * @param visionFailReason 视觉模型解析失败的原因；非空表示本次是视觉解析失败后的自动降级
      */
-    private Result<List<AiRubric>> handleRubricFileWithText(MultipartFile file, Long userId, String visionFailReason) {
+    private Result<List<AiRubric>> handleRubricFileWithText(MultipartFile file, Long userId, String visionFailReason,
+                                                            java.util.function.Consumer<String> progress) {
         try {
+            if (visionFailReason != null && progress != null) {
+                progress.accept("视觉模型解析失败，已自动降级为文本解析");
+            }
+            if (progress != null) progress.accept("正在提取文档内容");
             List<Document> documents = getDocuments(file);
             if (documents == null || documents.isEmpty()) {
                 log.error("[题目文件解析-AI] 文件解析失败，未获取到文档内容");
@@ -1372,6 +1506,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
 
             try {
                 log.info("[题目文件解析-AI] 开始调用AI解析题目（结构化输出）");
+                if (progress != null) progress.accept("AI解析中");
                 List<AiRubric> aiRubrics = callForStructuredOutput(prompt, userId);
 
                 log.info("[题目文件解析-AI] AI解析完成");

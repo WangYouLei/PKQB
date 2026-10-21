@@ -64,7 +64,7 @@ export const apiAddDocumentsFile = async (file: File) => {
   return res.data as Result<string>
 }
 
-/** 上传题目文件解析（AI） */
+/** 上传题目文件解析（AI，异步）：提交任务并返回任务ID */
 export const apiAddRubricFile = async (file: File, modelType?: number) => {
   const formData = new FormData()
   formData.append('file', file)
@@ -74,9 +74,24 @@ export const apiAddRubricFile = async (file: File, modelType?: number) => {
   const { default: request } = await import('./request')
   const res = await request.post('/ai/handle-rubricFile', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 300000
+    timeout: 60000
   })
-  return res.data as Result<QuestionItem[]>
+  return res.data as Result<string>
+}
+
+/** 题目文件异步解析任务状态 */
+export interface RubricParseTaskStatus {
+  taskId: string
+  status: 'RUNNING' | 'SUCCESS' | 'FAILED'
+  stage?: string
+  message?: string
+  result?: QuestionItem[] | null
+}
+
+/** 查询题目文件异步解析任务状态（轮询获取进度与结果） */
+export const apiGetRubricParseTask = async (taskId: string) => {
+  const res = await get<RubricParseTaskStatus>(`/ai/rubric-parse-task/${taskId}`)
+  return res
 }
 
 /** 上传题目文件解析（本地） */

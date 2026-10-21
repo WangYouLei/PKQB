@@ -3,6 +3,7 @@ package pkqb.service;
 import org.springframework.web.multipart.MultipartFile;
 import pkqb.common.Result;
 import pkqb.pojo.dto.AiRubric;
+import pkqb.pojo.dto.RubricParseTaskStatus;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
@@ -68,13 +69,24 @@ public interface SpringAiAlibabaService {
     Result<Object> getHistoryBySessionId(String sessionId, String userId, String type);
 
     /**
-     * 上传题库文件（AI解析）
+     * 提交题目文件异步解析任务（AI解析）：后台执行，立即返回任务ID
      *
-     * @param file 文件
-     * @param userId 用户ID
-     * @return 添加结果
+     * @param filename  原始文件名
+     * @param fileBytes 文件内容（同步阶段读出，避免异步阶段临时文件被清理）
+     * @param userId    用户ID
+     * @param modelType 模型类型：2=视觉模型，1=纯文本，null=自动选择
+     * @return 任务ID
      */
-    Result<List<AiRubric>> handleRubricFile(MultipartFile file, Long userId, Integer modelType);
+    Result<String> submitRubricFileParse(String filename, byte[] fileBytes, Long userId, Integer modelType);
+
+    /**
+     * 查询题目文件异步解析任务状态（含进度与结果）
+     *
+     * @param taskId 任务ID
+     * @param userId 用户ID（校验任务归属）
+     * @return 任务状态
+     */
+    Result<RubricParseTaskStatus> getRubricParseTask(String taskId, Long userId);
 
     /**
      * 上传题库文件（本地解析）

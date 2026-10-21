@@ -58,8 +58,8 @@ public class SpringAiAlibabaController {
     }
 
     @PostMapping("/handle-rubricFile")
-    @Operation(summary = "解析题目文件（AI）", description = "上传题目文件并使用AI解析为结构化题目数据")
-    public Result<List<AiRubric>> handleRubricFile(
+    @Operation(summary = "解析题目文件（AI，异步）", description = "上传题目文件提交后台AI解析任务，立即返回任务ID，通过查询接口获取进度和结果")
+    public Result<String> handleRubricFile(
             @Parameter(description = "题目文件") @RequestParam("file") MultipartFile file,
             HttpServletRequest httpRequest,
             @Parameter(description = "模型类型：2=视觉模型，1=纯文本，不传则自动选择") @RequestParam(value = "modelType", required = false) Integer modelType) {
@@ -79,7 +79,27 @@ public class SpringAiAlibabaController {
         if (!allowedExtensions.contains(extension)) {
             return Result.error("不支持的文件类型: " + extension);
         }
-        return saaService.handleRubricFile(file, userId, modelType);
+        // 同步阶段读出文件字节：上传的临时文件在请求结束后可能被清理
+        byte[] fileBytes;
+        try {
+            fileBytes = file.getBytes();
+        } catch (java.io.IOException e) {
+            log.error("[题目文件解析-AI] 读取上传文件失败", e);
+            return Result.error("读取上传文件失败");
+        }
+        return saaService.submitRubricFileParse(originalFilename, fileBytes, userId, modelType);
+    }
+
+    @GetMapping("/rubric-parse-task/{taskId}")
+    @Operation(summary = "查询题目解析任务状态", description = "轮询获取异步解析任务的进度与结果：RUNNING进行中（message为进度描述）、SUCCESS成功（result为题目列表）、FAILED失败")
+    public Result<pkqb.pojo.dto.RubricParseTaskStatus> getRubricParseTask(
+            @Parameter(description = "任务ID") @PathVariable("taskId") String taskId,
+            HttpServletRequest httpRequest) {
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        if (userId == null) {
+            return Result.error("未登录或登录已过期");
+        }
+        return saaService.getRubricParseTask(taskId, userId);
     }
 
     @PostMapping("/handle-rubricFile-local")

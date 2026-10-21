@@ -161,7 +161,14 @@
         <polyline points="9 18 15 12 9 6"/>
       </svg>
     </button>
-    <main class="main-content"><router-view /></main>
+    <main class="main-content">
+      <router-view v-slot="{ Component }">
+        <!-- 缓存上传题目页面，解析过程中切换路由不丢失状态 -->
+        <KeepAlive include="RubricUpload">
+          <component :is="Component" />
+        </KeepAlive>
+      </router-view>
+    </main>
     
     <!-- 意见反馈模态框 -->
     <div class="feedback-modal-overlay" v-if="showFeedbackModal" @click="showFeedbackModal = false">

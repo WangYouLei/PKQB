@@ -27,6 +27,12 @@
         <span v-if="parsingLocal" class="spinner"></span><span v-else>本地解析题目</span>
       </button>
 
+      <!-- AI解析实时进度 -->
+      <div v-if="parsing && parseProgress" style="margin-top:16px;padding:12px 16px;background:var(--accent-light);border-radius:12px;display:flex;align-items:center;gap:10px">
+        <span class="spinner"></span>
+        <span style="color:var(--accent);font-weight:500">{{ parseProgress }}</span>
+      </div>
+
       <!-- 结果提示 -->
       <div v-if="parseResult" class="upload-result" :class="parseResult.success ? 'success' : 'error'">
         <div class="result-icon">{{ parseResult.success ? '✅' : '❌' }}</div>
@@ -238,7 +244,7 @@
       <div class="modal-content">
         <h3 style="font-size:18px;margin-bottom:16px">⚠️ 确认解析</h3>
         <p style="color:var(--text-muted);margin-bottom:24px">
-          将使用<strong>{{ pendingModelType === 2 ? '视觉模型' : '纯文本模型' }}</strong>解析，可能需要几分钟时间，请耐心等待。解析过程中请勿关闭页面。
+          将使用<strong>{{ pendingModelType === 2 ? '视觉模型' : '纯文本模型' }}</strong>解析，可能需要几分钟时间，请耐心等待。解析过程中会显示实时进度，请勿关闭页面。
         </p>
         <div style="display:flex;gap:12px">
           <button class="btn btn-secondary" @click="showParseConfirm = false">取消</button>
@@ -250,8 +256,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { apiAddRubricFile, apiAddRubricFileLocal, apiAppendRubricQuestions, apiGetMyRubrics, apiGetPublicRubrics, apiUploadResourceImage } from '@/api'
+import { ref, computed, onUnmounted } from 'vue'
+import { apiAddRubricFile, apiAddRubricFileLocal, apiAppendRubricQuestions, apiGetMyRubrics, apiGetPublicRubrics, apiUploadResourceImage, apiGetRubricParseTask } from '@/api'
 import { useUserStore } from '@/stores/user'
 import type { QuestionItem, QuestionResource, RubricItem } from '@/types'
 import { getQuestionImages, getOptionImage, getAnswerImage, getExplanationImage } from '@/composables/useQuestionResources'
@@ -263,6 +269,7 @@ const dragOver = ref(false)
 const fileInput = ref<HTMLInputElement|null>(null)
 const parsing = ref(false)
 const parsingLocal = ref(false)
+const parseProgress = ref('')  // AI异步解析进度文案
 const parseResult = ref<{ success: boolean; message: string } | null>(null)
 const questions = ref<QuestionItem[]>([])
 const editMode = ref(false)
@@ -465,31 +472,92 @@ function resetForm() {
   editMode.value = false
 }
 
+// AI异步解析：轮询定时器与清理
+let parsePollTimer: ReturnType<typeof setTimeout> | null = null
+function stopPolling() {
+  if (parsePollTimer !== null) {
+    clearTimeout(parsePollTimer)
+    parsePollTimer = null
+  }
+}
+onUnmounted(stopPolling)
+
+function applyParsedQuestions(questionsArr: QuestionItem[]) {
+  questions.value = questionsArr.map((q) => ({
+    ...q,
+    // 处理 calculationStepsText
+    calculationStepsText: q.calculationSteps?.join('\n') || ''
+  }))
+  parseResult.value = { success: true, message: `成功解析 ${questionsArr.length} 道题目` }
+}
+
 async function handleFileParse() {
   if (!selectedFile.value) return
   parsing.value = true
   editMode.value = false
+  parseResult.value = null
+  parseProgress.value = '正在上传文件并提交解析任务...'
+  let pollFailCount = 0
   try {
-    const res = await apiAddRubricFile(selectedFile.value, pendingModelType.value)
-    if (res.code === 200 && res.data) {
-      // 后端直接返回数组对象，不需要再 JSON.parse
-      const questionsArr = Array.isArray(res.data) ? res.data : []
-      questions.value = questionsArr.map((q) => ({
-        ...q,
-        // 处理 calculationStepsText
-        calculationStepsText: q.calculationSteps?.join('\n') || ''
-      }))
-      parseResult.value = { success: true, message: `成功解析 ${questionsArr.length} 道题目` }
-    } else {
-      parseResult.value = { success: false, message: res.message || 'AI解析失败，可能原因：题目数量过多等，可以尝试减少题目数量或者使用"本地解析题目"功能' }
+    // 1. 提交异步解析任务
+    const submitRes = await apiAddRubricFile(selectedFile.value, pendingModelType.value)
+    if (submitRes.code !== 200 || !submitRes.data) {
+      parseResult.value = { success: false, message: submitRes.message || '提交解析任务失败' }
+      return
     }
+    const taskId = submitRes.data
+
+    // 2. 轮询任务状态（3秒一次；连续3次查询失败则终止）
+    await new Promise<void>((resolve) => {
+      const poll = async () => {
+        try {
+          const res = await apiGetRubricParseTask(taskId)
+          pollFailCount = 0
+          if (res.code === 200 && res.data) {
+            const task = res.data
+            if (task.status === 'RUNNING') {
+              parseProgress.value = task.message || 'AI解析中...'
+              parsePollTimer = setTimeout(poll, 3000)
+              return
+            }
+            if (task.status === 'SUCCESS' && task.result && task.result.length > 0) {
+              applyParsedQuestions(task.result)
+            } else if (task.status === 'SUCCESS') {
+              parseResult.value = { success: false, message: 'AI解析结果为空' }
+            } else {
+              parseResult.value = {
+                success: false,
+                message: task.message || 'AI解析失败，可能原因：题目数量过多等，可以尝试减少题目数量或者使用"本地解析题目"功能'
+              }
+            }
+          } else {
+            // 任务不存在/已过期/无权限
+            parseResult.value = { success: false, message: res.message || '查询解析任务失败' }
+          }
+        } catch {
+          pollFailCount++
+          if (pollFailCount >= 3) {
+            parseResult.value = { success: false, message: '查询解析进度连续失败，请稍后在通知中心查看结果' }
+          } else {
+            parsePollTimer = setTimeout(poll, 3000)
+            return
+          }
+        }
+        resolve()
+      }
+      parsePollTimer = setTimeout(poll, 1000)
+    })
   } catch (e: unknown) {
     const errorMsg = (e as Error).message || 'AI解析失败'
-    parseResult.value = { 
-      success: false, 
-      message: `AI解析失败，可能原因：题目数量过多等，可以尝试减少题目数量或者使用"本地解析题目"功能\n\n错误详情：${errorMsg}` 
+    parseResult.value = {
+      success: false,
+      message: `AI解析失败，可能原因：题目数量过多等，可以尝试减少题目数量或者使用"本地解析题目"功能\n\n错误详情：${errorMsg}`
     }
-  } finally { parsing.value = false }
+  } finally {
+    stopPolling()
+    parseProgress.value = ''
+    parsing.value = false
+  }
 }
 
 async function handleFileParseLocal() {
