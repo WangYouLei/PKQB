@@ -49,11 +49,10 @@ function getIcon(type: string): string {
   align-items: center;
   gap: 10px;
   padding: 12px 16px;
-  border-radius: 10px;
-  background: var(--bg-glass);
-  backdrop-filter: blur(10px);
-  border: 1px solid var(--border-glass);
-  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+  border-radius: var(--card-radius);
+  background: var(--bg-secondary);
+  border: 2px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--shadow-ink);
   cursor: pointer;
   max-width: 400px;
   animation: slideIn 0.3s ease;

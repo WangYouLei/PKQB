@@ -208,7 +208,7 @@ const showFeedbackModal = ref(false)
 
 onMounted(() => {
   const savedTheme = localStorage.getItem('theme')
-  isLightMode.value = savedTheme === 'light'
+  isLightMode.value = savedTheme !== 'dark'
 
   const savedCollapsed = localStorage.getItem('sidebarCollapsed')
   isCollapsed.value = savedCollapsed === 'true'
@@ -227,9 +227,9 @@ function setTheme(light: boolean) {
   isLightMode.value = light
   localStorage.setItem('theme', light ? 'light' : 'dark')
   if (light) {
-    document.documentElement.classList.add('light')
+    document.documentElement.classList.remove('dark')
   } else {
-    document.documentElement.classList.remove('light')
+    document.documentElement.classList.add('dark')
   }
 }
 
@@ -289,28 +289,26 @@ async function handleLogout() {
   width: 40px;
   height: 40px;
   min-width: 40px;
-  background: var(--accent-gradient);
-  border-radius: 12px;
+  background: var(--accent);
+  border: 2px solid var(--ink);
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 16px rgba(99,102,241,0.3);
+  box-shadow: 3px 3px 0 var(--shadow-ink);
 }
 
 .logo-icon svg {
   width: 22px;
   height: 22px;
-  color: #fff;
+  color: #141414;
 }
 
 .logo-text {
   font-size: 24px;
   font-weight: 800;
-  background: var(--accent-gradient);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  letter-spacing: 1px;
+  color: var(--text-primary);
+  letter-spacing: 2px;
   white-space: nowrap;
   transition: opacity 0.2s ease;
 }
@@ -389,10 +387,10 @@ async function handleLogout() {
 }
 
 .theme-btn.active {
-  background: var(--accent-gradient);
-  border-color: transparent;
-  box-shadow: 0 4px 16px rgba(99,102,241,0.3);
-  color: #fff;
+  background: var(--accent);
+  border-color: var(--ink);
+  box-shadow: 2px 2px 0 var(--shadow-ink);
+  color: #141414;
 }
 
 .sidebar-nav {
@@ -466,39 +464,17 @@ async function handleLogout() {
 }
 
 .sidebar-link:hover {
-  background: rgba(255,255,255,0.04);
+  background: var(--bg-tertiary);
   color: var(--text-primary);
-  transform: translateX(4px);
 }
 
 .sidebar.collapsed .sidebar-link:hover {
-  transform: translateX(0) scale(1.05);
-}
-
-:root.light .sidebar-link:hover {
-  background: rgba(0,0,0,0.04);
+  transform: scale(1.03);
 }
 
 .sidebar-link.active {
-  background: var(--accent-light);
-  color: var(--accent);
-}
-
-.sidebar-link.active::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 3px;
-  height: 20px;
-  background: var(--accent-gradient);
-  border-radius: 0 3px 3px 0;
-  transition: opacity 0.2s ease;
-}
-
-.sidebar.collapsed .sidebar-link.active::before {
-  opacity: 0;
+  background: var(--accent);
+  color: #141414;
 }
 
 .sidebar-user {
@@ -508,8 +484,8 @@ async function handleLogout() {
   padding: 16px 20px;
   border-top: 1px solid var(--border-glass);
   margin-top: auto;
-  background: rgba(255,255,255,0.02);
-  border-radius: 16px;
+  background: transparent;
+  border-radius: 8px;
   margin-left: 12px;
   margin-right: 12px;
   flex-shrink: 0;
@@ -520,8 +496,9 @@ async function handleLogout() {
   width: 40px;
   height: 40px;
   min-width: 40px;
-  border-radius: 12px;
-  background: var(--accent-gradient);
+  border-radius: 8px;
+  background: var(--secondary);
+  border: 2px solid var(--ink);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -539,7 +516,6 @@ async function handleLogout() {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  border-radius: 12px;
 }
 
 .user-info {
@@ -631,18 +607,17 @@ async function handleLogout() {
   transform: translateY(-50%);
   width: 40px;
   height: 40px;
-  border-radius: 12px;
-  border: 1px solid var(--border-glass);
-  background: var(--bg-glass);
-  backdrop-filter: blur(20px);
+  border-radius: 8px;
+  border: 2px solid var(--ink);
+  background: var(--bg-secondary);
   color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.3s ease;
+  transition: all 0.12s ease;
   z-index: 100;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+  box-shadow: 3px 3px 0 var(--shadow-ink);
 }
 
 .sidebar-expand-btn svg {
@@ -651,11 +626,11 @@ async function handleLogout() {
 }
 
 .sidebar-expand-btn:hover {
-  background: var(--accent-light);
-  border-color: var(--accent-border);
-  color: var(--accent);
-  transform: translateY(-50%) scale(1.1);
-  box-shadow: 0 6px 24px rgba(99,102,241,0.3);
+  background: var(--accent);
+  border-color: var(--ink);
+  color: #141414;
+  transform: translateY(-50%) scale(1.05);
+  box-shadow: 4px 4px 0 var(--shadow-ink);
 }
 
 .main-content {
@@ -696,8 +671,7 @@ async function handleLogout() {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(8px);
+  background: rgba(20, 20, 20, 0.55);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -715,15 +689,15 @@ async function handleLogout() {
 }
 
 .feedback-modal {
-  background: var(--bg-glass);
-  border: 1px solid var(--border-glass);
-  border-radius: 20px;
+  background: var(--bg-secondary);
+  border: 2px solid var(--ink);
+  border-radius: var(--card-radius);
   padding: 32px;
   max-width: 400px;
   width: 90%;
   position: relative;
   animation: slideUp 0.3s ease;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  box-shadow: 8px 8px 0 var(--shadow-ink);
 }
 
 @keyframes slideUp {
@@ -792,8 +766,9 @@ async function handleLogout() {
 .qrcode-container {
   background: #fff;
   padding: 16px;
-  border-radius: 16px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  border: 2px solid var(--ink);
+  border-radius: var(--card-radius);
+  box-shadow: 4px 4px 0 var(--shadow-ink);
   margin-bottom: 16px;
 }
 
@@ -806,11 +781,12 @@ async function handleLogout() {
 
 .feedback-tip {
   font-size: 13px;
-  color: var(--text-muted);
+  font-weight: 600;
+  color: var(--text-primary);
   margin: 0;
   padding: 8px 16px;
-  background: rgba(99, 102, 241, 0.1);
-  border-radius: 8px;
-  border: 1px solid rgba(99, 102, 241, 0.2);
+  background: var(--accent-light);
+  border-radius: 6px;
+  border: 2px solid var(--ink);
 }
 </style>

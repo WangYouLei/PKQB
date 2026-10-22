@@ -128,44 +128,45 @@ async function handleRegister() {
 
 .shape {
   position: absolute;
-  border-radius: 50%;
-  filter: blur(80px);
-  opacity: 0.5;
+  border: 2px solid var(--ink);
+  opacity: 0.9;
   animation: float 8s ease-in-out infinite;
 }
 
 .shape-1 {
-  width: 400px;
-  height: 400px;
-  background: linear-gradient(135deg, rgba(99,102,241,0.3), rgba(139,92,246,0.2));
-  top: -100px;
-  right: -100px;
+  width: 120px;
+  height: 120px;
+  background: var(--accent);
+  top: -30px;
+  right: -30px;
+  transform: rotate(-12deg);
   animation-delay: -1s;
 }
 
 .shape-2 {
-  width: 300px;
-  height: 300px;
-  background: linear-gradient(135deg, rgba(236,72,153,0.25), rgba(168,85,247,0.15));
-  bottom: -50px;
-  left: -50px;
+  width: 90px;
+  height: 90px;
+  background: var(--secondary);
+  bottom: 40px;
+  left: -20px;
+  transform: rotate(8deg);
   animation-delay: -3s;
 }
 
 .shape-3 {
-  width: 200px;
-  height: 200px;
-  background: linear-gradient(135deg, rgba(6,182,212,0.2), rgba(99,102,241,0.15));
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
+  width: 60px;
+  height: 60px;
+  background: var(--tertiary);
+  top: 30%;
+  left: 18%;
+  transform: rotate(-20deg);
   animation-delay: -5s;
 }
 
 @keyframes float {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(30px, -30px) scale(1.05); }
-  66% { transform: translate(-20px, 20px) scale(0.95); }
+  0%, 100% { translate: 0 0; }
+  33% { translate: 20px -16px; }
+  66% { translate: -14px 12px; }
 }
 
 .auth-container { 
@@ -175,20 +176,9 @@ async function handleRegister() {
   z-index: 1;
 }
 
-.auth-card { 
+.auth-card {
   padding: 40px 36px; 
   position: relative;
-}
-
-.auth-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
-  background: var(--accent-gradient);
-  border-radius: var(--card-radius) var(--card-radius) 0 0;
 }
 
 .auth-header { 
@@ -207,27 +197,25 @@ async function handleRegister() {
 .auth-logo-icon {
   width: 44px;
   height: 44px;
-  background: var(--accent-gradient);
-  border-radius: 12px;
+  background: var(--accent);
+  border: 2px solid var(--ink);
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 20px rgba(99,102,241,0.4);
+  box-shadow: 3px 3px 0 var(--shadow-ink);
 }
 
 .auth-logo-icon svg {
   width: 24px;
   height: 24px;
-  color: #fff;
+  color: #141414;
 }
 
 .auth-logo { 
   font-size: 32px; 
   font-weight: 800; 
-  background: var(--accent-gradient); 
-  -webkit-background-clip: text; 
-  -webkit-text-fill-color: transparent; 
-  background-clip: text; 
+  color: var(--text-primary);
   letter-spacing: 2px; 
 }
 
@@ -293,11 +281,15 @@ async function handleRegister() {
 }
 
 .auth-link { 
-  color: var(--accent); 
+  color: #D6336C; 
   text-decoration: none; 
   margin-left: 4px; 
-  font-weight: 600;
-  transition: all 0.3s ease;
+  font-weight: 700;
+  transition: all 0.12s ease;
+}
+
+:root.dark .auth-link {
+  color: #FF7FAB;
 }
 
 .auth-link:hover { 

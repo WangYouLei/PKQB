@@ -158,16 +158,17 @@ function formatTime(timestamp: string): string {
   width: 36px;
   height: 36px;
   min-width: 36px;
-  border-radius: 10px;
-  border: none;
-  background: var(--bg-glass);
+  border-radius: 6px;
+  border: 2px solid var(--ink);
+  background: var(--bg-secondary);
   color: var(--text-muted);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.3s ease;
+  transition: all 0.2s ease;
   position: relative;
+  box-shadow: 3px 3px 0 var(--shadow-ink);
 }
 
 .bell-btn svg {
@@ -177,7 +178,7 @@ function formatTime(timestamp: string): string {
 
 .bell-btn:hover {
   background: var(--accent-light);
-  color: var(--accent);
+  color: #141414;
 }
 
 .badge {
@@ -204,25 +205,20 @@ function formatTime(timestamp: string): string {
   gap: 14px;
   padding: 14px 20px;
   margin: 4px 12px;
-  border-radius: 14px;
+  border-radius: 6px;
   color: var(--text-secondary);
   text-decoration: none;
   font-size: 14px;
   font-weight: 500;
-  transition: all .3s ease;
+  transition: all .2s ease;
   position: relative;
   cursor: pointer;
   overflow: hidden;
 }
 
 .sidebar-notification-link:hover {
-  background: rgba(255,255,255,0.04);
+  background: var(--bg-tertiary);
   color: var(--text-primary);
-  transform: translateX(4px);
-}
-
-:root.light .sidebar-notification-link:hover {
-  background: rgba(0,0,0,0.04);
 }
 
 .nav-icon {
@@ -276,9 +272,8 @@ function formatTime(timestamp: string): string {
   width: 380px;
   height: 100vh;
   background: var(--card-bg);
-  border-left: 1px solid var(--card-border);
-  box-shadow: -8px 0 32px rgba(0,0,0,0.15);
-  backdrop-filter: blur(20px);
+  border-left: 2px solid var(--ink);
+  box-shadow: -8px 8px 0 var(--shadow-ink);
   z-index: 9999;
   display: flex;
   flex-direction: column;
@@ -318,7 +313,7 @@ function formatTime(timestamp: string): string {
   border: none;
   cursor: pointer;
   padding: 6px 12px;
-  border-radius: 8px;
+  border-radius: 6px;
   transition: all 0.2s ease;
 }
 
@@ -333,7 +328,7 @@ function formatTime(timestamp: string): string {
   border: none;
   cursor: pointer;
   padding: 6px 12px;
-  border-radius: 8px;
+  border-radius: 6px;
   transition: all 0.2s ease;
 }
 
@@ -345,9 +340,9 @@ function formatTime(timestamp: string): string {
 .close-btn {
   width: 32px;
   height: 32px;
-  border-radius: 8px;
-  border: 1px solid var(--border-glass);
-  background: var(--bg-glass);
+  border-radius: 6px;
+  border: 2px solid var(--ink);
+  background: var(--bg-secondary);
   color: var(--text-muted);
   cursor: pointer;
   display: flex;
@@ -494,11 +489,12 @@ function formatTime(timestamp: string): string {
 
 .fullscreen-card {
   background: var(--card-bg);
-  border-radius: 16px;
+  border: 2px solid var(--ink);
+  border-radius: var(--card-radius);
   padding: 32px;
   max-width: 600px;
   width: 90%;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.2);
+  box-shadow: 8px 8px 0 var(--shadow-ink);
   animation: fullscreenIn 0.25s ease;
 }
 
@@ -532,9 +528,9 @@ function formatTime(timestamp: string): string {
 .fullscreen-delete-btn {
   width: 36px;
   height: 36px;
-  border-radius: 10px;
-  border: 1px solid var(--border-glass);
-  background: var(--bg-glass);
+  border-radius: 6px;
+  border: 2px solid var(--ink);
+  background: var(--bg-secondary);
   color: var(--text-muted);
   cursor: pointer;
   display: flex;
@@ -558,9 +554,9 @@ function formatTime(timestamp: string): string {
 .fullscreen-close-btn {
   width: 36px;
   height: 36px;
-  border-radius: 10px;
-  border: 1px solid var(--border-glass);
-  background: var(--bg-glass);
+  border-radius: 6px;
+  border: 2px solid var(--ink);
+  background: var(--bg-secondary);
   color: var(--text-muted);
   cursor: pointer;
   display: flex;

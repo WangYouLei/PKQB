@@ -760,11 +760,12 @@ async function handleUpdatePassword() {
 }
 
 .settings-card {
-  background: var(--bg-glass);
-  border: 1px solid var(--border-glass);
-  border-radius: 20px;
+  background: var(--card-bg);
+  border: 2px solid var(--ink);
+  border-radius: var(--card-radius);
   overflow: hidden;
   margin-bottom: 24px;
+  box-shadow: 4px 4px 0 var(--shadow-ink);
 }
 
 .card-header {
@@ -772,25 +773,27 @@ async function handleUpdatePassword() {
   align-items: center;
   gap: 16px;
   padding: 24px;
-  border-bottom: 1px solid var(--border-glass);
-  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 2px solid var(--ink);
+  background: var(--bg-tertiary);
 }
 
 .header-icon {
   width: 48px;
   height: 48px;
-  border-radius: 12px;
-  background: var(--accent-gradient);
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  background: var(--accent);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  box-shadow: 3px 3px 0 var(--shadow-ink);
 }
 
 .header-icon svg {
   width: 24px;
   height: 24px;
-  color: #fff;
+  color: #141414;
 }
 
 .header-content h2 {
@@ -820,8 +823,8 @@ async function handleUpdatePassword() {
   height: 100px;
   border-radius: 50%;
   overflow: hidden;
-  border: 3px solid var(--border-glass);
-  background: var(--bg-glass);
+  border: 3px solid var(--ink);
+  background: var(--bg-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -840,13 +843,13 @@ async function handleUpdatePassword() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(99, 102, 241, 0.1);
+  background: var(--accent-light);
 }
 
 .avatar-placeholder svg {
   width: 48px;
   height: 48px;
-  color: var(--accent);
+  color: #141414;
 }
 
 .avatar-actions {
@@ -872,18 +875,18 @@ async function handleUpdatePassword() {
 .form-input {
   flex: 1;
   padding: 12px 16px;
-  border-radius: 12px;
-  border: 1px solid var(--border-glass);
-  background: var(--bg-glass);
+  border-radius: 6px;
+  border: 2px solid var(--input-border);
+  background: var(--input-bg);
   color: var(--text-primary);
   font-size: 14px;
-  transition: all 0.3s ease;
+  transition: box-shadow 0.12s ease;
 }
 
 .form-input:focus {
   outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+  border-color: var(--input-focus);
+  box-shadow: 3px 3px 0 var(--accent);
 }
 
 .form-input::placeholder {
@@ -907,8 +910,9 @@ async function handleUpdatePassword() {
   gap: 24px;
   margin-bottom: 24px;
   padding: 16px;
-  background: rgba(255, 255, 255, 0.02);
-  border-radius: 12px;
+  background: var(--bg-tertiary);
+  border: 2px solid var(--ink);
+  border-radius: 8px;
 }
 
 .status-item {
@@ -953,27 +957,30 @@ async function handleUpdatePassword() {
 
 .model-count {
   font-size: 13px;
-  color: var(--text-muted);
-  background: rgba(99, 102, 241, 0.1);
-  padding: 4px 12px;
-  border-radius: 20px;
+  color: var(--text-primary);
+  background: var(--accent);
+  border: 2px solid var(--ink);
+  padding: 2px 10px;
+  border-radius: 4px;
+  font-weight: 700;
 }
 
 .model-info-card {
   display: flex;
   gap: 12px;
   padding: 16px;
-  background: rgba(99, 102, 241, 0.05);
-  border: 1px solid rgba(99, 102, 241, 0.15);
-  border-radius: 12px;
+  background: var(--accent-light);
+  border: 2px solid var(--ink);
+  border-radius: 8px;
   margin-bottom: 20px;
 }
 
 .model-info-icon {
   width: 32px;
   height: 32px;
-  border-radius: 8px;
-  background: rgba(99, 102, 241, 0.1);
+  border-radius: 6px;
+  background: var(--accent);
+  border: 2px solid var(--ink);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -983,7 +990,7 @@ async function handleUpdatePassword() {
 .model-info-icon svg {
   width: 18px;
   height: 18px;
-  color: var(--accent);
+  color: #141414;
 }
 
 .model-info-content h4 {
@@ -1030,19 +1037,19 @@ async function handleUpdatePassword() {
   align-items: center;
   gap: 12px;
   padding: 16px;
-  background: var(--bg-glass);
-  border: 1px solid var(--border-glass);
-  border-radius: 12px;
-  transition: all 0.3s ease;
+  background: var(--bg-secondary);
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  transition: background 0.12s ease;
 }
 
 .model-item.main-model {
-  background: rgba(99, 102, 241, 0.08);
-  border-color: rgba(99, 102, 241, 0.3);
+  background: var(--accent-light);
+  border-color: var(--ink);
 }
 
 .model-item.assistant-model:hover {
-  border-color: var(--accent);
+  background: var(--bg-tertiary);
 }
 
 .model-item.vision-model {
@@ -1060,8 +1067,9 @@ async function handleUpdatePassword() {
 }
 
 .model-badge.main {
-  background: var(--accent-gradient);
-  color: #fff;
+  background: var(--accent);
+  color: #141414;
+  border: 2px solid var(--ink);
 }
 
 .model-badge.assistant {
@@ -1116,9 +1124,9 @@ async function handleUpdatePassword() {
 
 .add-model-section {
   padding: 16px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px dashed var(--border-glass);
-  border-radius: 12px;
+  background: var(--bg-tertiary);
+  border: 2px dashed var(--ink);
+  border-radius: 8px;
 }
 
 .add-model-form {
@@ -1165,10 +1173,10 @@ async function handleUpdatePassword() {
 .status-badge {
   font-size: 13px;
   padding: 10px 16px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
-  color: var(--text-muted);
-  border: 1px solid var(--border-glass);
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 2px solid var(--ink);
 }
 
 .status-badge.active {
@@ -1193,18 +1201,18 @@ async function handleUpdatePassword() {
 .api-key-input {
   flex: 1;
   padding: 12px 16px;
-  border-radius: 12px;
-  border: 1px solid var(--border-glass);
-  background: var(--bg-glass);
+  border-radius: 6px;
+  border: 2px solid var(--input-border);
+  background: var(--input-bg);
   color: var(--text-primary);
   font-size: 14px;
-  transition: all 0.3s ease;
+  transition: box-shadow 0.12s ease;
 }
 
 .api-key-input:focus {
   outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+  border-color: var(--input-focus);
+  box-shadow: 3px 3px 0 var(--accent);
 }
 
 .api-key-input::placeholder {
@@ -1276,14 +1284,15 @@ async function handleUpdatePassword() {
 }
 
 .btn-primary {
-  background: var(--accent-gradient);
-  color: #fff;
-  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.3);
+  background: var(--accent);
+  color: #141414;
+  border: 2px solid var(--ink);
+  box-shadow: 3px 3px 0 var(--shadow-ink);
 }
 
 .btn-primary:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4);
+  transform: translate(-2px, -2px);
+  box-shadow: 5px 5px 0 var(--shadow-ink);
 }
 
 .btn-danger {
@@ -1312,16 +1321,17 @@ async function handleUpdatePassword() {
   display: flex;
   gap: 16px;
   padding: 20px;
-  background: rgba(99, 102, 241, 0.05);
-  border: 1px solid rgba(99, 102, 241, 0.2);
-  border-radius: 16px;
+  background: var(--accent-light);
+  border: 2px solid var(--ink);
+  border-radius: var(--card-radius);
 }
 
 .info-icon {
   width: 40px;
   height: 40px;
-  border-radius: 10px;
-  background: rgba(99, 102, 241, 0.1);
+  border-radius: 8px;
+  background: var(--accent);
+  border: 2px solid var(--ink);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1331,7 +1341,7 @@ async function handleUpdatePassword() {
 .info-icon svg {
   width: 20px;
   height: 20px;
-  color: var(--accent);
+  color: #141414;
 }
 
 .info-content h3 {
@@ -1370,10 +1380,10 @@ async function handleUpdatePassword() {
   display: inline-block;
   margin-left: 8px;
   padding: 2px 8px;
-  background: linear-gradient(135deg, #10b981, #059669);
+  background: var(--success);
   color: #fff;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
   border-radius: 4px;
   animation: pulse 2s infinite;
 }

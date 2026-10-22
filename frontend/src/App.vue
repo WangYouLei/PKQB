@@ -16,8 +16,8 @@ userStore.loadFromStorage()
 
 onMounted(() => {
   const savedTheme = localStorage.getItem('theme')
-  if (savedTheme === 'light') {
-    document.documentElement.classList.add('light')
+  if (savedTheme === 'dark') {
+    document.documentElement.classList.add('dark')
   }
 })
 </script>

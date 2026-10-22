@@ -37,10 +37,10 @@ const { loading, loadingText } = useLoading()
   align-items: center;
   gap: 16px;
   padding: 24px 32px;
-  background: var(--bg-glass);
-  backdrop-filter: blur(10px);
-  border-radius: 16px;
-  border: 1px solid var(--border-glass);
+  background: var(--bg-secondary);
+  border-radius: var(--card-radius);
+  border: 2px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--shadow-ink);
 }
 
 .spinner {
