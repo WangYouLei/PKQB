@@ -21,6 +21,7 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    sourcemap: true
+    // 生产包不输出 sourcemap，避免源码直接暴露在部署目录
+    sourcemap: false
   }
 })

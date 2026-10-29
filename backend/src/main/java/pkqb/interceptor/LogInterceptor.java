@@ -30,10 +30,12 @@ public class LogInterceptor implements HandlerInterceptor {
         long startTime = System.currentTimeMillis();
         request.setAttribute(START_TIME, startTime);
 
-        // 记录请求信息
+        // 记录请求信息（对URL中的token参数脱敏，防止SSE订阅等场景的JWT令牌明文落盘日志后被窃取重放）
         String queryString = request.getQueryString();
         String requestUri = request.getRequestURI();
-        String fullUri = queryString != null ? requestUri + "?" + queryString : requestUri;
+        String fullUri = queryString != null
+                ? requestUri + "?" + queryString.replaceAll("(?i)(token=)[^&]*", "$1***")
+                : requestUri;
         
         log.info("[{}] {} {} | IP: {} | UA: {}", 
                 requestId, 

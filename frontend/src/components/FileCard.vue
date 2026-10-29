@@ -99,6 +99,7 @@
 import { ref, reactive } from 'vue'
 import type { HtmlFileItem } from '@/types'
 import { apiUpdateFile } from '@/api'
+import { useToast } from '@/composables/useToast'
 
 const props = defineProps<{ 
   file: HtmlFileItem,
@@ -112,6 +113,7 @@ const emit = defineEmits<{
   updated: [file: HtmlFileItem]
 }>()
 
+const toast = useToast()
 const showEditModal = ref(false)
 const editLoading = ref(false)
 const editForm = reactive({
@@ -137,7 +139,7 @@ function openEditModal() {
 
 async function submitEdit() {
   if (!editForm.fileName.trim()) {
-    alert('请输入文件名称')
+    toast.error('请输入文件名称')
     return
   }
   
@@ -150,7 +152,7 @@ async function submitEdit() {
     }
   } catch (e) {
     console.error('修改文件失败', e)
-    alert('修改文件失败')
+    toast.error('修改文件失败')
   } finally {
     editLoading.value = false
   }

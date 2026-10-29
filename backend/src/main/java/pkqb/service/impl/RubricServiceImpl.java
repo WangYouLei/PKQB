@@ -11,6 +11,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.web.util.HtmlUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import pkqb.common.Result;
 import pkqb.mapper.FileMapper;
 import pkqb.mapper.QuestionMapper;
@@ -62,6 +63,8 @@ public class RubricServiceImpl implements RubricService {
     private final ObjectMapper objectMapper;
     private final NotificationService notificationService;
     private final QuestionResourceService questionResourceService;
+    // 手动事务边界：网络IO（图片迁移/MinIO上传）在事务外执行，仅DB写入走事务，避免长事务占死连接
+    private final TransactionTemplate transactionTemplate;
 
     @Value("${minio.endpoint}")
     private String minioEndpoint;
@@ -145,30 +148,31 @@ public class RubricServiceImpl implements RubricService {
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public Result<?> addRubric(RubricRequest rubricRequest) {
-        // 1. 保存试卷
-        RubricEntity rubricEntity = new RubricEntity();
-        rubricEntity.setTitle(HtmlUtils.htmlEscape(rubricRequest.getTitle()));
-        rubricEntity.setClassName(HtmlUtils.htmlEscape(rubricRequest.getClassName()));
-        rubricEntity.setCreateId(rubricRequest.getCreateId());
-        rubricEntity.setCreateStudentNo(rubricRequest.getCreateStudentNo());
-        rubricEntity.setIsPrivate(rubricRequest.getIsPrivate());
-        rubricEntity.setQuestionCount(rubricRequest.getRubrics() != null ? rubricRequest.getRubrics().size() : 0);
-        rubricEntity.setDeleted(0);
+        // 事务外先完成OSS→MinIO图片迁移（网络IO），事务内只做DB写入，避免长事务占死数据库连接
+        migrateAiRubricResources(rubricRequest.getRubrics());
 
-        rubricMapper.insert(rubricEntity);
+        transactionTemplate.executeWithoutResult(tx -> {
+            // 1. 保存试卷
+            RubricEntity rubricEntity = new RubricEntity();
+            rubricEntity.setTitle(HtmlUtils.htmlEscape(rubricRequest.getTitle()));
+            rubricEntity.setClassName(HtmlUtils.htmlEscape(rubricRequest.getClassName()));
+            rubricEntity.setCreateId(rubricRequest.getCreateId());
+            rubricEntity.setCreateStudentNo(rubricRequest.getCreateStudentNo());
+            rubricEntity.setIsPrivate(rubricRequest.getIsPrivate());
+            rubricEntity.setQuestionCount(rubricRequest.getRubrics() != null ? rubricRequest.getRubrics().size() : 0);
+            rubricEntity.setDeleted(0);
 
-        Long rubricId = rubricEntity.getId();
+            rubricMapper.insert(rubricEntity);
 
-        // 2. 保存题目
-        insertQuestions(rubricId, 1, rubricRequest.getRubrics());
+            // 2. 保存题目
+            insertQuestions(rubricEntity.getId(), 1, rubricRequest.getRubrics());
+        });
 
         return Result.success("试卷添加成功");
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public Result<?> appendQuestions(Long rubricId, List<AiRubric> rubrics, Long userId) {
         RubricEntity rubric = rubricMapper.selectById(rubricId);
         if (rubric == null || (rubric.getDeleted() != null && rubric.getDeleted() == 1)) {
@@ -192,16 +196,38 @@ public class RubricServiceImpl implements RubricService {
                 .max(Integer::compareTo)
                 .orElse(0);
 
-        // 追加题目到末尾
-        insertQuestions(rubricId, maxOrderIndex + 1, rubrics);
+        // 事务外先完成OSS→MinIO图片迁移（网络IO），事务内只做DB写入
+        migrateAiRubricResources(rubrics);
 
-        // 更新题目数量
-        rubric.setQuestionCount(existingQuestions.size() + rubrics.size());
-        rubric.setUpdateTime(LocalDateTime.now());
-        rubricMapper.updateById(rubric);
+        transactionTemplate.executeWithoutResult(tx -> {
+            // 追加题目到末尾
+            insertQuestions(rubricId, maxOrderIndex + 1, rubrics);
+
+            // 更新题目数量
+            rubric.setQuestionCount(existingQuestions.size() + rubrics.size());
+            rubric.setUpdateTime(LocalDateTime.now());
+            rubricMapper.updateById(rubric);
+        });
 
         log.info("[追加题目] 追加成功，rubricId={}, appendCount={}, totalCount={}", rubricId, rubrics.size(), rubric.getQuestionCount());
         return Result.success("题目添加成功");
+    }
+
+    /**
+     * 将AI解析结果中所有OSS图片URL预先迁移到MinIO并原地替换（网络IO，须在事务外调用）
+     */
+    private void migrateAiRubricResources(List<AiRubric> rubrics) {
+        if (rubrics == null) {
+            return;
+        }
+        for (AiRubric aiRubric : rubrics) {
+            if (aiRubric.getResources() == null) {
+                continue;
+            }
+            for (AiRubric.AiResource resource : aiRubric.getResources()) {
+                resource.setUrl(migrateOssImageToMinio(resource.getUrl()));
+            }
+        }
     }
 
     /**
@@ -240,15 +266,12 @@ public class RubricServiceImpl implements RubricService {
             if (aiRubric.getResources() != null && !aiRubric.getResources().isEmpty()) {
                 int sortOrder = 0;
                 for (AiRubric.AiResource resource : aiRubric.getResources()) {
-                    // 将OSS图片迁移到MinIO，获取新的MinIO URL
-                    String imageUrl = resource.getUrl();
-                    imageUrl = migrateOssImageToMinio(imageUrl);
-
+                    // OSS→MinIO迁移已在事务外完成（migrateAiRubricResources），此处直接使用替换后的URL
                     questionResourceService.saveResource(
                             questionEntity.getId(),
                             resource.getType(),
                             resource.getLabel(),
-                            imageUrl,
+                            resource.getUrl(),
                             null,
                             sortOrder++
                     );
@@ -427,7 +450,6 @@ public class RubricServiceImpl implements RubricService {
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public Result<?> batchSaveQuestions(Long rubricId, List<QuestionEntity> questions, Long userId) {
         RubricEntity rubric = rubricMapper.selectById(rubricId);
         if (rubric == null) {
@@ -440,58 +462,75 @@ public class RubricServiceImpl implements RubricService {
             throw new IllegalArgumentException("题目列表不能为空");
         }
 
-        LambdaQueryWrapper<QuestionEntity> deleteWrapper = new LambdaQueryWrapper<>();
-        deleteWrapper.eq(QuestionEntity::getRubricId, rubricId);
-        List<QuestionEntity> existingQuestions = questionMapper.selectList(deleteWrapper);
-        for (QuestionEntity eq : existingQuestions) {
-            questionResourceService.deleteByQuestionId(eq.getId());
-        }
-        questionMapper.delete(deleteWrapper);
-
-        int orderIndex = 1;
+        // 事务外：先将题目资源中的OSS图片迁移到MinIO（网络IO），事务内只做DB写入
         for (QuestionEntity q : questions) {
-            q.setId(null);
-            q.setRubricId(rubricId);
-            q.setDeleted(0);
-            q.setOrderIndex(orderIndex++);
-            q.setQuestionText(HtmlEscapeUtil.escapeBasic(q.getQuestionText()));
-            q.setAnswer(HtmlEscapeUtil.escapeBasic(q.getAnswer()));
-            q.setExplanation(HtmlEscapeUtil.escapeBasic(q.getExplanation()));
-            questionMapper.insert(q);
-
-            // 保存资源（如果有），同时将OSS图片迁移到MinIO
-            if (q.getResources() != null && !q.getResources().isEmpty()) {
-                int sortOrder = 0;
-                for (QuestionResourceEntity res : q.getResources()) {
-                    String imageUrl = res.getUrl();
-                    imageUrl = migrateOssImageToMinio(imageUrl);
-                    questionResourceService.saveResource(
-                            q.getId(),
-                            res.getType(),
-                            res.getLabel(),
-                            imageUrl,
-                            res.getMimeType(),
-                            sortOrder++
-                    );
-                }
+            if (q.getResources() == null) {
+                continue;
+            }
+            for (QuestionResourceEntity res : q.getResources()) {
+                res.setUrl(migrateOssImageToMinio(res.getUrl()));
             }
         }
 
-        rubric.setQuestionCount(questions.size());
-        rubric.setUpdateTime(LocalDateTime.now());
-        rubricMapper.updateById(rubric);
+        LambdaQueryWrapper<QuestionEntity> deleteWrapper = new LambdaQueryWrapper<>();
+        deleteWrapper.eq(QuestionEntity::getRubricId, rubricId);
+        List<QuestionEntity> existingQuestions = questionMapper.selectList(deleteWrapper);
+
+        transactionTemplate.executeWithoutResult(tx -> {
+            for (QuestionEntity eq : existingQuestions) {
+                questionResourceService.deleteByQuestionId(eq.getId());
+            }
+            questionMapper.delete(deleteWrapper);
+
+            int orderIndex = 1;
+            for (QuestionEntity q : questions) {
+                q.setId(null);
+                q.setRubricId(rubricId);
+                q.setDeleted(0);
+                q.setOrderIndex(orderIndex++);
+                q.setQuestionText(HtmlEscapeUtil.escapeBasic(q.getQuestionText()));
+                q.setAnswer(HtmlEscapeUtil.escapeBasic(q.getAnswer()));
+                q.setExplanation(HtmlEscapeUtil.escapeBasic(q.getExplanation()));
+                questionMapper.insert(q);
+
+                // 保存资源（如果有）；OSS→MinIO迁移已在事务外完成，此处直接使用替换后的URL
+                if (q.getResources() != null && !q.getResources().isEmpty()) {
+                    int sortOrder = 0;
+                    for (QuestionResourceEntity res : q.getResources()) {
+                        questionResourceService.saveResource(
+                                q.getId(),
+                                res.getType(),
+                                res.getLabel(),
+                                res.getUrl(),
+                                res.getMimeType(),
+                                sortOrder++
+                        );
+                    }
+                }
+            }
+
+            rubric.setQuestionCount(questions.size());
+            rubric.setUpdateTime(LocalDateTime.now());
+            rubricMapper.updateById(rubric);
+        });
 
         log.info("[批量保存题目] 保存成功，rubricId={}, count={}", rubricId, questions.size());
         return Result.success("保存成功");
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public Result<RubricGenerateResponse> generateHtml(RubricGenerateRequest request, Long userId) {
         // 1. 获取Rubric
         RubricEntity rubric = rubricMapper.selectById(request.getRubricId());
         if (rubric == null) {
             throw new IllegalArgumentException("试卷不存在");
+        }
+
+        // 越权校验：私有试卷仅创建者可生成HTML，防止通过枚举试卷ID导出他人私有试卷的题目与答案
+        if (rubric.getIsPrivate() != null && rubric.getIsPrivate() && !rubric.getCreateId().equals(userId)) {
+            log.warn("[HTML生成] 越权拦截, userId={}, rubricId={}, createId={}",
+                    userId, request.getRubricId(), rubric.getCreateId());
+            throw new IllegalArgumentException("无权生成该试卷的HTML");
         }
 
         // 2. 检查是否已经存在HTML文件
@@ -519,7 +558,8 @@ public class RubricServiceImpl implements RubricService {
                 : rubric.getTitle() + ".html";
         String objectKey = "rubric/" + userId + "/" + UUID.randomUUID() + ".html";
 
-        // 先插入 DB
+        // 单条insert自带原子性，不再用方法级@Transactional：
+        // 此前图片下载/MinIO上传等网络IO全被包进长事务，会长时间占用数据库连接
         FileEntity fileEntity = new FileEntity();
         fileEntity.setUserId(userId);
         fileEntity.setRubricId(request.getRubricId());
@@ -528,9 +568,15 @@ public class RubricServiceImpl implements RubricService {
         fileEntity.setIsPrivate(request.getIsPrivate() != null ? request.getIsPrivate() : false);
         fileMapper.insert(fileEntity);
 
-        // 再上传 Minio（DB 已成功，Minio 失败则 DB 回滚但 Minio 文件孤立，可接受）
-        ByteArrayInputStream inputStream = new ByteArrayInputStream(htmlContent.getBytes(StandardCharsets.UTF_8));
-        minioService.upload(objectKey, inputStream, "text/html", htmlContent.getBytes(StandardCharsets.UTF_8).length);
+        // 再上传 Minio（失败则补偿删除DB记录，避免出现指向不存在文件的记录）
+        try {
+            ByteArrayInputStream inputStream = new ByteArrayInputStream(htmlContent.getBytes(StandardCharsets.UTF_8));
+            minioService.upload(objectKey, inputStream, "text/html", htmlContent.getBytes(StandardCharsets.UTF_8).length);
+        } catch (Exception e) {
+            log.warn("[HTML生成] MinIO上传失败，补偿删除DB记录, fileId={}, objectKey={}", fileEntity.getId(), objectKey);
+            fileMapper.deleteById(fileEntity.getId());
+            throw e;
+        }
 
         // 7. 返回结果
         RubricGenerateResponse response = new RubricGenerateResponse();

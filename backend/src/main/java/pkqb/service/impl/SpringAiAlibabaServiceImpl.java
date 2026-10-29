@@ -1,7 +1,5 @@
 package pkqb.service.impl;
 
-import com.alibaba.cloud.ai.graph.OverAllState;
-import com.alibaba.cloud.ai.graph.agent.Agent;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.streaming.OutputType;
@@ -20,10 +18,8 @@ import org.springframework.ai.reader.pdf.PagePdfDocumentReader;
 import org.springframework.ai.reader.tika.TikaDocumentReader;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.VectorStore;
-import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.core.io.InputStreamResource;
-import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
@@ -41,50 +37,32 @@ import pkqb.mapper.FileMapper;
 import pkqb.pojo.entity.FileEntity;
 import pkqb.service.MinioService;
 import pkqb.service.NotificationService;
-import pkqb.service.OssService;
 import pkqb.service.RateLimitService;
 import pkqb.service.SpringAiAlibabaService;
 import pkqb.service.UserApiKeyService;
-import pkqb.service.DashScopeRerankService;
 import pkqb.service.strategy.QuestionExtractContext;
-import pkqb.util.LatexMathCleaner;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import org.apache.commons.codec.digest.DigestUtils;
-import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.cos.COSName;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.pdmodel.PDPage;
-import org.apache.pdfbox.pdmodel.PDResources;
-import org.apache.pdfbox.pdmodel.graphics.PDXObject;
-import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
-import org.apache.pdfbox.rendering.PDFRenderer;
 
-import javax.imageio.IIOImage;
-import javax.imageio.ImageIO;
-import javax.imageio.ImageWriteParam;
-import javax.imageio.ImageWriter;
-import java.awt.Color;
-import java.awt.Graphics2D;
-import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+/**
+ * AI 服务主入口（实现 {@link SpringAiAlibabaService}）：负责知识库上传、RAG/对话流式查询、
+ * 会话历史管理、题目文件异步解析任务编排与本地解析。
+ * 视觉模型解析链路拆分至 {@link RubricVisionParser}，AI 解题链路拆分至 {@link AiQuestionSolver}；
+ * 共享线程池 AI_EXECUTOR 与静态工具方法统一放在 {@link AiCommonSupport}，全局仅一份。
+ */
 @Service
 @Slf4j
 public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     private final VectorStore vectorStore;
-    private final RedisTemplate<String,Object> redisTemplate;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
     private final RateLimitService rateLimitService;
@@ -95,28 +73,12 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     private final NotificationService notificationService;
     private final UserApiKeyService userApiKeyService;
     private final FileMapper fileMapper;
-    private final OssService ossService;
-    private final DashScopeRerankService rerankService;
-    
-    private static final ExecutorService AI_EXECUTOR = new ThreadPoolExecutor(
-            6, 6, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
-            new java.util.concurrent.LinkedBlockingQueue<>(100),
-            r -> {
-                Thread t = new Thread(r, "ai-executor-" + System.currentTimeMillis());
-                t.setDaemon(true);
-                return t;
-            },
-            new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy()
-    );
+    /** 视觉模型解析组件：PDF→图片→视觉模型的题目解析全链路（见 RubricVisionParser） */
+    private final RubricVisionParser visionParser;
+    /** AI 解题组件：答案/解析/步骤生成全链路（见 AiQuestionSolver） */
+    private final AiQuestionSolver aiQuestionSolver;
 
-    /** 视觉模型分片解析：每片页数 */
-    private static final int VISION_CHUNK_PAGES = 2;
-    /** 视觉模型分片解析：并发调用上限（避免触发模型服务限流） */
-    private static final int VISION_CONCURRENCY = 3;
-    private static final java.util.concurrent.Semaphore VISION_SEMAPHORE =
-            new java.util.concurrent.Semaphore(VISION_CONCURRENCY);
-
-    /** 题目文件异步解析任务线程池：与分片线程池 AI_EXECUTOR 分离，避免任务线程 join 分片任务造成线程饥饿 */
+    /** 题目文件异步解析任务线程池：与分片线程池 AI_EXECUTOR（见 AiCommonSupport）分离，避免任务线程 join 分片任务造成线程饥饿 */
     private static final ExecutorService PARSE_TASK_EXECUTOR = new ThreadPoolExecutor(
             3, 3, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
             new java.util.concurrent.LinkedBlockingQueue<>(50),
@@ -197,6 +159,16 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     private static final Pattern CODE_BLOCK_PATTERN = Pattern.compile("```[\\s\\S]*?```");
     private static final Pattern INLINE_CODE_PATTERN = Pattern.compile("`[^`]+`");
 
+    // 关键词预编译为字面量Pattern：内容判断高频调用，避免每次循环内反复Pattern.compile（约50个词）
+    private static final Pattern[] QUESTION_WORD_PATTERNS = compileLiterals(QUESTION_WORDS);
+    private static final Pattern[] CONNECTIVE_PATTERNS = compileLiterals(CONNECTIVES);
+
+    private static Pattern[] compileLiterals(String[] keywords) {
+        return Arrays.stream(keywords)
+                .map(kw -> Pattern.compile(Pattern.quote(kw)))
+                .toArray(Pattern[]::new);
+    }
+
     private static final int MAX_SESSIONS = 20;
 
     private static final String RECORD_SESSION_SCRIPT = 
@@ -221,7 +193,6 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         "return 1";
 
     public SpringAiAlibabaServiceImpl(VectorStore vectorStore,
-                                      RedisTemplate<String,Object> redisTemplate,
                                       StringRedisTemplate stringRedisTemplate,
                                       ObjectMapper objectMapper,
                                       RateLimitService rateLimitService,
@@ -232,10 +203,9 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                                       NotificationService notificationService,
                                       UserApiKeyService userApiKeyService,
                                       FileMapper fileMapper,
-                                      OssService ossService,
-                                      DashScopeRerankService rerankService) {
+                                      RubricVisionParser visionParser,
+                                      AiQuestionSolver aiQuestionSolver) {
         this.vectorStore = vectorStore;
-        this.redisTemplate = redisTemplate;
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
         this.rateLimitService = rateLimitService;
@@ -246,21 +216,14 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         this.notificationService = notificationService;
         this.userApiKeyService = userApiKeyService;
         this.fileMapper = fileMapper;
-        this.ossService = ossService;
-        this.rerankService = rerankService;
+        this.visionParser = visionParser;
+        this.aiQuestionSolver = aiQuestionSolver;
     }
 
     @jakarta.annotation.PreDestroy
     public void shutdown() {
-        AI_EXECUTOR.shutdown();
-        try {
-            if (!AI_EXECUTOR.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS)) {
-                AI_EXECUTOR.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            AI_EXECUTOR.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
+        // 共享AI分片线程池统一关闭（定义在 AiCommonSupport，全局仅一份）
+        AiCommonSupport.shutdownAiExecutor();
         PARSE_TASK_EXECUTOR.shutdown();
         try {
             if (!PARSE_TASK_EXECUTOR.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS)) {
@@ -274,9 +237,56 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
 
     @Override
     public Result<String> addDocuments(MultipartFile file, Long userId) {
-        log.info("[知识库-文件上传] 开始处理文件: {}, 大小: {} bytes, userId={}",
+        log.info("[知识库-文件上传] 提交异步上传任务: {}, 大小: {} bytes, userId={}",
                 file.getOriginalFilename(), file.getSize(), userId);
 
+        // 限流检查同步执行，快速失败
+        Result<?> limitCheck = rateLimitService.checkLimit(userId, RateLimitConstants.FEATURE_KNOWLEDGE, RateLimitConstants.KNOWLEDGE_LIMIT);
+        if (limitCheck != null) {
+            log.warn("[知识库-文件上传] 用户 {} 超过每日限制", userId);
+            return Result.error(limitCheck.getMessage());
+        }
+
+        // 同步阶段读出文件字节：上传的临时文件在请求结束后可能被清理
+        final String filename = file.getOriginalFilename();
+        final byte[] fileBytes;
+        try {
+            fileBytes = file.getBytes();
+        } catch (Exception e) {
+            log.error("[知识库-文件上传] 读取上传文件失败", e);
+            return Result.error("读取上传文件失败，请重新上传");
+        }
+
+        // 此前同步请求内做AI内容判断+全文embedding，单请求可挂2分钟以上；改为taskId异步任务，前端轮询结果
+        String taskId = UUID.randomUUID().toString();
+        saveTaskStatus(new RubricParseTaskStatus(taskId, userId,
+                RubricParseTaskStatus.STATUS_RUNNING, "received", "任务已提交，等待处理"));
+
+        PARSE_TASK_EXECUTOR.submit(() -> {
+            RubricParseTaskStatus finalStatus;
+            try {
+                Result<String> result = doAddDocuments(new ByteArrayMultipartFile(filename, fileBytes), userId);
+                if (result.getCode() == 200) {
+                    finalStatus = new RubricParseTaskStatus(taskId, userId,
+                            RubricParseTaskStatus.STATUS_SUCCESS, "done", result.getMessage());
+                } else {
+                    finalStatus = new RubricParseTaskStatus(taskId, userId,
+                            RubricParseTaskStatus.STATUS_FAILED, "done", result.getMessage());
+                }
+            } catch (Exception e) {
+                log.error("[知识库-文件上传] 异步任务执行异常, taskId={}", taskId, e);
+                finalStatus = new RubricParseTaskStatus(taskId, userId,
+                        RubricParseTaskStatus.STATUS_FAILED, "done", "处理文件失败: " + e.getMessage());
+            }
+            saveTaskStatus(finalStatus);
+        });
+        return Result.success(taskId);
+    }
+
+    /**
+     * 知识库上传的实际处理逻辑（由异步任务调用，限流已在提交入口完成）
+     */
+    private Result<String> doAddDocuments(MultipartFile file, Long userId) {
         String originalFilename = file.getOriginalFilename();
         String extension = originalFilename != null && originalFilename.contains(".")
                 ? originalFilename.substring(originalFilename.lastIndexOf("."))
@@ -285,14 +295,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         Long fileRecordId = null;
 
         try {
-            // 1. 频率限制检查
-            Result<?> limitCheck = rateLimitService.checkLimit(userId, RateLimitConstants.FEATURE_KNOWLEDGE, RateLimitConstants.KNOWLEDGE_LIMIT);
-            if (limitCheck != null) {
-                log.warn("[知识库-文件上传] 用户 {} 超过每日限制", userId);
-                return Result.error(limitCheck.getMessage());
-            }
-
-            // 2. 文档解析
+            // 1. 文档解析
             List<Document> documents = getDocuments(file);
             if (documents == null || documents.isEmpty()) {
                 log.error("[知识库-文件上传] 文件解析失败，未获取到文档内容");
@@ -410,15 +413,30 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     @Override
     public Flux<String> ragQuery(String query, String sessionId, Long userId) {
         log.info("[RAG查询] userId={}, sessionId={}", userId, sessionId);
-        
+
         Result<?> limitCheck = rateLimitService.checkLimit(userId, RateLimitConstants.FEATURE_RAG, RateLimitConstants.RAG_LIMIT);
         if (limitCheck != null) {
             return Flux.error(new RuntimeException(limitCheck.getMessage()));
         }
-        
+
         recordSessionId(userId.toString(), sessionId, "rag");
-        
+
         String historyKey = "spring_ai_alibaba_chat_memory:history:rag:" + userId + ":" + sessionId;
+        String threadId = "rag:" + userId + ":" + sessionId;
+        return streamChat("RAG查询", reactAgentFactory.getRagReactAgent(userId), query, sessionId, historyKey, threadId);
+    }
+
+    /**
+     * 聊天/RAG共用的流式查询逻辑
+     * （此前ragQuery与query各维护一份约100行的相同流式处理代码，收敛于此，差异仅剩日志前缀/Agent/threadId）
+     *
+     * @param logTag     日志前缀（RAG查询/AI对话）
+     * @param agent      已按用户Key模式构建好的ReactAgent
+     * @param historyKey Redis历史记录key
+     * @param threadId   Agent会话线程ID
+     */
+    private Flux<String> streamChat(String logTag, ReactAgent agent, String query, String sessionId,
+                                    String historyKey, String threadId) {
         try {
             String userMsgJson = objectMapper.writeValueAsString(Map.of(
                     "messageType", "USER",
@@ -427,24 +445,21 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             ));
             stringRedisTemplate.opsForList().rightPush(historyKey, userMsgJson);
             stringRedisTemplate.expire(historyKey, 7, java.util.concurrent.TimeUnit.DAYS);
-            log.info("[RAG查询] 保存用户消息到历史记录, key={}", historyKey);
+            log.info("[{}] 保存用户消息到历史记录, key={}", logTag, historyKey);
         } catch (Exception e) {
-            log.warn("[RAG查询] 保存用户消息失败", e);
+            log.warn("[{}] 保存用户消息失败", logTag, e);
         }
-        
+
         StringBuilder aiResponse = new StringBuilder();
-        
+
         try {
-            log.info("[RAG查询] 开始ReactAgent流式查询，sessionId={}", sessionId);
-            
-            String threadId = "rag:" + userId + ":" + sessionId;
+            log.info("[{}] 开始ReactAgent流式查询，sessionId={}, threadId={}", logTag, sessionId, threadId);
+
             RunnableConfig config = RunnableConfig.builder()
                     .threadId(threadId)
                     .build();
-            
-            ReactAgent ragReactAgent = reactAgentFactory.getRagReactAgent(userId);
 
-            return ragReactAgent.stream(query, config)
+            return agent.stream(query, config)
                     .filter(output -> output instanceof StreamingOutput<?>)
                     .map(output -> (StreamingOutput<?>) output)
                     .flatMap(streamingOutput -> {
@@ -460,7 +475,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                                                 "thinking", true,
                                                 "text", reasoningContent.toString())));
                                     } catch (JsonProcessingException e) {
-                                        log.warn("[RAG查询] 序列化推理内容失败，跳过该段", e);
+                                        log.warn("[{}] 序列化推理内容失败，跳过该段", logTag, e);
                                         return Mono.empty();
                                     }
                                 } else {
@@ -478,7 +493,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                         return Mono.empty();
                     })
                     .doOnComplete(() -> {
-                        log.info("[RAG查询] 流式查询完成，sessionId={}", sessionId);
+                        log.info("[{}] 流式查询完成，sessionId={}", logTag, sessionId);
 
                         if (aiResponse.length() > 0) {
                             try {
@@ -489,20 +504,20 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                                 ));
                                 stringRedisTemplate.opsForList().rightPush(historyKey, aiMsgJson);
                                 stringRedisTemplate.expire(historyKey, 7, java.util.concurrent.TimeUnit.DAYS);
-                                log.info("[RAG查询] 保存AI回复到历史记录, key={}, length={}", historyKey, aiResponse.length());
+                                log.info("[{}] 保存AI回复到历史记录, key={}, length={}", logTag, historyKey, aiResponse.length());
                             } catch (Exception e) {
-                                log.warn("[RAG查询] 保存AI回复失败", e);
+                                log.warn("[{}] 保存AI回复失败", logTag, e);
                             }
                         }
                     })
                     .doOnError(e -> {
-                        log.error("[RAG查询] 流式查询异常，sessionId={}", sessionId, e);
-                        if (isApiKeyOrModelError(e)) {
+                        log.error("[{}] 流式查询异常，sessionId={}", logTag, sessionId, e);
+                        if (AiCommonSupport.isApiKeyOrModelError(e)) {
                             throw new RuntimeException("API Key或模型名称有误，请核验");
                         }
                     });
         } catch (Exception e) {
-            log.error("[RAG查询] RAG查询时发生错误: ", e);
+            log.error("[{}] 查询时发生错误", logTag, e);
             return Flux.error(e);
         }
     }
@@ -524,101 +539,17 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     @Override
     public Flux<String> query(String query, String sessionId, Long userId) {
         log.info("[AI对话] userId={}, sessionId={}", userId, sessionId);
-        
+
         Result<?> limitCheck = rateLimitService.checkLimit(userId, RateLimitConstants.FEATURE_CHAT, RateLimitConstants.CHAT_LIMIT);
         if (limitCheck != null) {
             return Flux.error(new RuntimeException(limitCheck.getMessage()));
         }
-        
+
         recordSessionId(userId.toString(), sessionId, "chat");
-        
+
         String historyKey = "spring_ai_alibaba_chat_memory:history:chat:" + userId + ":" + sessionId;
-        try {
-            String userMsgJson = objectMapper.writeValueAsString(Map.of(
-                    "messageType", "USER",
-                    "text", query,
-                    "timestamp", System.currentTimeMillis()
-            ));
-            stringRedisTemplate.opsForList().rightPush(historyKey, userMsgJson);
-            stringRedisTemplate.expire(historyKey, 7, java.util.concurrent.TimeUnit.DAYS);
-            log.info("[AI对话] 保存用户消息到历史记录, key={}", historyKey);
-        } catch (Exception e) {
-            log.warn("[AI对话] 保存用户消息失败", e);
-        }
-        
-        StringBuilder aiResponse = new StringBuilder();
-        
-        try {
-            String threadId = "chat:" + userId + ":" + sessionId;
-            RunnableConfig config = RunnableConfig.builder()
-                    .threadId(threadId)
-                    .build();
-            
-            log.info("[AI对话] 开始ReactAgent流式查询，sessionId={}, threadId={}", sessionId, threadId);
-            
-            ReactAgent chatReactAgent = reactAgentFactory.getChatReactAgent(userId);
-            
-            return chatReactAgent.stream(query, config)
-                    .filter(output -> output instanceof StreamingOutput<?>)
-                    .map(output -> (StreamingOutput<?>) output)
-                    .flatMap(streamingOutput -> {
-                        OutputType type = streamingOutput.getOutputType();
-                        Message message = streamingOutput.message();
-                        if(type == OutputType.AGENT_MODEL_STREAMING){
-                            if(message instanceof AssistantMessage){
-                                // 推理模型的思考过程：单独标记推送，由前端折叠展示，不混入正式回复与历史记录
-                                Object reasoningContent = message.getMetadata().get("reasoningContent");
-                                if (reasoningContent != null && !reasoningContent.toString().isEmpty()) {
-                                    try {
-                                        return Mono.just(objectMapper.writeValueAsString(Map.of(
-                                                "thinking", true,
-                                                "text", reasoningContent.toString())));
-                                    } catch (JsonProcessingException e) {
-                                        log.warn("[AI对话] 序列化推理内容失败，跳过该段", e);
-                                        return Mono.empty();
-                                    }
-                                } else {
-                                    if(message.getText() != null && !message.getText().isEmpty()){
-                                        aiResponse.append(message.getText());
-                                        try {
-                                            return Mono.just(objectMapper.writeValueAsString(message.getText()));
-                                        } catch (JsonProcessingException e) {
-                                            return Mono.just(message.getText().replace("\n", "\\n").replace("\r", "\\r"));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        return Mono.empty();
-                    })
-                    .doOnComplete(() -> {
-                        log.info("[AI对话] 流式查询完成，sessionId={}", sessionId);
-                        
-                        if (aiResponse.length() > 0) {
-                            try {
-                                String aiMsgJson = objectMapper.writeValueAsString(Map.of(
-                                        "messageType", "ASSISTANT",
-                                        "text", aiResponse.toString(),
-                                        "timestamp", System.currentTimeMillis()
-                                ));
-                                stringRedisTemplate.opsForList().rightPush(historyKey, aiMsgJson);
-                                stringRedisTemplate.expire(historyKey, 7, java.util.concurrent.TimeUnit.DAYS);
-                                log.info("[AI对话] 保存AI回复到历史记录, key={}, length={}", historyKey, aiResponse.length());
-                            } catch (Exception e) {
-                                log.warn("[AI对话] 保存AI回复失败", e);
-                            }
-                        }
-                    })
-                    .doOnError(e -> {
-                        log.error("[AI对话] 流式查询异常，sessionId={}", sessionId, e);
-                        if (isApiKeyOrModelError(e)) {
-                            throw new RuntimeException("API Key或模型名称有误，请核验");
-                        }
-                    });
-        } catch (Exception e) {
-            log.error("[AI对话] 查询时发生错误", e);
-            return Flux.error(e);
-        }
+        String threadId = "chat:" + userId + ":" + sessionId;
+        return streamChat("AI对话", reactAgentFactory.getChatReactAgent(userId), query, sessionId, historyKey, threadId);
     }
 
     private void recordSessionId(String userId, String sessionId, String type) {
@@ -721,6 +652,12 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     }
 
     @Override
+    public Result<RubricParseTaskStatus> getKbUploadTask(String taskId, Long userId) {
+        // 知识库上传任务与题目解析任务共用同一套任务状态存储
+        return getRubricParseTask(taskId, userId);
+    }
+
+    @Override
     public Result<RubricParseTaskStatus> getRubricParseTask(String taskId, Long userId) {
         String json = stringRedisTemplate.opsForValue().get(RUBRIC_TASK_KEY_PREFIX + taskId);
         if (json == null) {
@@ -782,7 +719,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         try {
             if (modelType != null && modelType == 2) {
                 // 用户指定视觉模型
-                return handleRubricFileWithVision(file, userId, progress);
+                return visionParser.handleRubricFileWithVision(file, userId, progress);
             } else if (modelType != null && modelType == 1) {
                 // 用户指定纯文本模型
                 return handleRubricFileWithText(file, userId, null, progress);
@@ -791,7 +728,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                 String originalFilename = file.getOriginalFilename();
                 boolean isPdf = originalFilename != null && originalFilename.toLowerCase().endsWith(".pdf");
                 if (isPdf) {
-                    return handleRubricFileWithVision(file, userId, progress);
+                    return visionParser.handleRubricFileWithVision(file, userId, progress);
                 } else {
                     return handleRubricFileWithText(file, userId, null, progress);
                 }
@@ -804,631 +741,6 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     }
 
     /**
-     * 使用视觉模型解析PDF文件：PDF页面渲染为图片→上传OSS→URL传给视觉模型→结构化输出+嵌入图片提取映射
-     */
-    private Result<List<AiRubric>> handleRubricFileWithVision(MultipartFile file, Long userId,
-                                                              java.util.function.Consumer<String> progress) {
-        // 提到 try 外，便于降级时清理已上传的 OSS 图片
-        Map<Integer, String> pageUrlByIndex = null;
-        List<ExtractedImage> extractedImages = null;
-        try {
-            log.info("[题目文件解析-视觉] 使用视觉模型解析PDF文件");
-            byte[] fileBytes = file.getBytes();
-
-            // Step 1: 串行渲染页面 + 提取嵌入图片（共享 PDDocument，PDFBox 非线程安全）
-            if (progress != null) progress.accept("正在渲染PDF页面并提取图片");
-            List<PageImage> pageImages;
-            try (PDDocument document = Loader.loadPDF(fileBytes)) {
-                pageImages = renderPdfPagesToBytes(document);
-                extractedImages = extractImagesFromPdfToBytes(document);
-            }
-
-            if (pageImages.isEmpty()) {
-                log.warn("[题目文件解析-视觉] PDF页面渲染失败，降级到纯文本模式");
-                return handleRubricFileWithText(file, userId, "PDF页面渲染失败", progress);
-            }
-            log.info("[题目文件解析-视觉] PDF渲染为 {} 张页面图片，提取到 {} 张嵌入图片",
-                    pageImages.size(), extractedImages.size());
-
-            // Step 2: 并行上传所有图片到 OSS
-            if (progress != null) {
-                progress.accept("正在上传 " + (pageImages.size() + extractedImages.size()) + " 张图片");
-            }
-            pageUrlByIndex = uploadAllImagesParallel(pageImages, extractedImages, userId);
-            if (pageUrlByIndex.isEmpty()) {
-                log.warn("[题目文件解析-视觉] 全部页面图片上传失败，降级到纯文本模式");
-                cleanupOssImages(new ArrayList<>(pageUrlByIndex.values()), extractedImages);
-                return handleRubricFileWithText(file, userId, "页面图片上传失败", progress);
-            }
-
-            // Step 3: 分片并发调用视觉模型，获取结构化题目并合并
-            if (progress != null) progress.accept("AI解析中");
-            List<AiRubric> aiRubrics = callVisionModelForQuestions(pageUrlByIndex, extractedImages, userId, progress);
-            if (aiRubrics == null || aiRubrics.isEmpty()) {
-                log.warn("[题目文件解析-视觉] 视觉模型返回为空，降级到纯文本模式");
-                cleanupOssImages(new ArrayList<>(pageUrlByIndex.values()), extractedImages);
-                return handleRubricFileWithText(file, userId, "视觉模型返回结果为空", progress);
-            }
-
-            // Step 4: 将图片编号映射为实际URL
-            mapImageReferencesToUrls(aiRubrics, extractedImages);
-
-            log.info("[题目文件解析-视觉] 解析完成，共提取 {} 道题目", aiRubrics.size());
-            notificationService.notifyRubricParseComplete(userId, "视觉模型");
-            return Result.success(aiRubrics);
-        } catch (Exception e) {
-            log.error("[题目文件解析-视觉] 视觉识别失败: {}，降级到纯文本模式", e.getMessage());
-            cleanupOssImages(pageUrlByIndex == null ? null : new ArrayList<>(pageUrlByIndex.values()), extractedImages);
-            return handleRubricFileWithText(file, userId, e.getMessage(), progress);
-        }
-    }
-
-    /**
-     * 将PDF每页渲染为JPEG字节数组（DPI=115），不上传OSS。
-     * 渲染阶段保持串行：PDFBox 的 PDFRenderer 对同一 PDDocument 非线程安全。
-     */
-    private List<PageImage> renderPdfPagesToBytes(PDDocument document) {
-        List<PageImage> images = new ArrayList<>();
-        try {
-            PDFRenderer renderer = new PDFRenderer(document);
-            for (int i = 0; i < document.getNumberOfPages(); i++) {
-                BufferedImage pageImage = renderer.renderImageWithDPI(i, 115);
-                byte[] imageBytes = writeJpeg(pageImage, 0.7f);
-                images.add(new PageImage(i, imageBytes));
-            }
-        } catch (Exception e) {
-            log.error("[PDF页面渲染] 渲染PDF页面失败: {}", e.getMessage());
-        }
-        return images;
-    }
-
-    /**
-     * 将 BufferedImage 写入 JPEG 字节数组。
-     * 自动把带 alpha 通道的图片转为白底 RGB，避免 JPEG 编码异常/背景变黑。
-     */
-    private byte[] writeJpeg(BufferedImage image, float quality) throws IOException {
-        BufferedImage rgb = flattenToRgb(image);
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        ImageWriter writer = ImageIO.getImageWritersByFormatName("jpg").next();
-        try {
-            ImageWriteParam param = writer.getDefaultWriteParam();
-            param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-            param.setCompressionQuality(quality);
-            writer.setOutput(ImageIO.createImageOutputStream(baos));
-            writer.write(null, new IIOImage(rgb, null, null), param);
-        } finally {
-            writer.dispose();
-        }
-        return baos.toByteArray();
-    }
-
-    private BufferedImage flattenToRgb(BufferedImage src) {
-        if (!src.getColorModel().hasAlpha()) {
-            return src;
-        }
-        BufferedImage rgb = new BufferedImage(src.getWidth(), src.getHeight(), BufferedImage.TYPE_INT_RGB);
-        Graphics2D g = rgb.createGraphics();
-        try {
-            g.setColor(Color.WHITE);
-            g.fillRect(0, 0, src.getWidth(), src.getHeight());
-            g.drawImage(src, 0, 0, null);
-        } finally {
-            g.dispose();
-        }
-        return rgb;
-    }
-
-    /**
-     * 若图片最长边超过 maxEdge，等比缩小到 maxEdge；否则原样返回。
-     * 视觉模型内部会把输入图缩到自身工作分辨率，超限像素只增加传输耗时。
-     */
-    private BufferedImage scaleDownToMaxEdge(BufferedImage src, int maxEdge) {
-        int w = src.getWidth();
-        int h = src.getHeight();
-        int longest = Math.max(w, h);
-        if (longest <= maxEdge) {
-            return src;
-        }
-        double scale = (double) maxEdge / longest;
-        int nw = (int) Math.round(w * scale);
-        int nh = (int) Math.round(h * scale);
-        BufferedImage dst = new BufferedImage(nw, nh, BufferedImage.TYPE_INT_RGB);
-        Graphics2D g = dst.createGraphics();
-        try {
-            g.setColor(Color.WHITE);
-            g.fillRect(0, 0, nw, nh);
-            g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION,
-                    java.awt.RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-            g.drawImage(src, 0, 0, nw, nh, null);
-        } finally {
-            g.dispose();
-        }
-        return dst;
-    }
-
-    /** 渲染后的页面图片字节（未上传） */
-    private static class PageImage {
-        final int pageIndex;
-        final byte[] imageBytes;
-
-        PageImage(int pageIndex, byte[] imageBytes) {
-            this.pageIndex = pageIndex;
-            this.imageBytes = imageBytes;
-        }
-    }
-
-    /**
-     * 单片解析结果：题目列表 + 首尾题跨页标记
-     */
-    private static class ChunkParseResult {
-        final List<Integer> pageIndices;
-        final List<AiRubric> questions;
-        /** 首题题干是否从上一片最后一页延续而来 */
-        final boolean firstQuestionIsContinuation;
-        /** 尾题是否在本片内完整结束 */
-        final boolean lastQuestionComplete;
-
-        ChunkParseResult(List<Integer> pageIndices, List<AiRubric> questions,
-                         boolean firstQuestionIsContinuation, boolean lastQuestionComplete) {
-            this.pageIndices = pageIndices;
-            this.questions = questions;
-            this.firstQuestionIsContinuation = firstQuestionIsContinuation;
-            this.lastQuestionComplete = lastQuestionComplete;
-        }
-    }
-
-    /**
-     * 分片并发调用视觉模型：按页分片、限流并发、单片失败重试一次，最后按片顺序合并并处理跨页题。
-     * 分片后单片输出 token 大幅减少，避免超长输出被 max_tokens 截断。
-     */
-    private List<AiRubric> callVisionModelForQuestions(Map<Integer, String> pageUrlByIndex,
-                                                       List<ExtractedImage> extractedImages,
-                                                       Long userId,
-                                                       java.util.function.Consumer<String> progress) {
-        try {
-            List<Integer> allPages = new ArrayList<>(pageUrlByIndex.keySet());
-            // 分片：每 VISION_CHUNK_PAGES 页一片
-            List<List<Integer>> chunks = new ArrayList<>();
-            for (int i = 0; i < allPages.size(); i += VISION_CHUNK_PAGES) {
-                chunks.add(new ArrayList<>(allPages.subList(i, Math.min(i + VISION_CHUNK_PAGES, allPages.size()))));
-            }
-            log.info("[题目文件解析-视觉] 共 {} 页，分为 {} 片并发调用（并发上限 {}）",
-                    allPages.size(), chunks.size(), VISION_CONCURRENCY);
-
-            // 并发调用单片（信号量限流），失败自动重试一次；每片完成时上报进度
-            java.util.concurrent.atomic.AtomicInteger completedChunks = new java.util.concurrent.atomic.AtomicInteger();
-            List<CompletableFuture<ChunkParseResult>> futures = new ArrayList<>();
-            for (List<Integer> chunk : chunks) {
-                futures.add(CompletableFuture.supplyAsync(() -> {
-                    try {
-                        VISION_SEMAPHORE.acquire();
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        return null;
-                    }
-                    try {
-                        ChunkParseResult result = callVisionModelForChunk(chunk, pageUrlByIndex, extractedImages, userId);
-                        if (result == null) {
-                            log.warn("[题目文件解析-视觉] 分片 {} 解析失败，重试一次", chunk);
-                            result = callVisionModelForChunk(chunk, pageUrlByIndex, extractedImages, userId);
-                        }
-                        return result;
-                    } finally {
-                        VISION_SEMAPHORE.release();
-                    }
-                }, AI_EXECUTOR).thenApply(r -> {
-                    int done = completedChunks.incrementAndGet();
-                    if (progress != null) {
-                        progress.accept("AI解析中 " + done + "/" + chunks.size() + " 片");
-                    }
-                    return r;
-                }).exceptionally(ex -> {
-                    log.warn("[题目文件解析-视觉] 分片 {} 调用异常: {}", chunk, ex.getMessage());
-                    return null;
-                }));
-            }
-
-            List<ChunkParseResult> chunkResults = new ArrayList<>();
-            int failed = 0;
-            for (CompletableFuture<ChunkParseResult> f : futures) {
-                ChunkParseResult r = f.join();
-                if (r != null) {
-                    chunkResults.add(r);
-                } else {
-                    failed++;
-                }
-            }
-            if (failed > 0) {
-                log.warn("[题目文件解析-视觉] {}/{} 个分片解析失败，返回成功分片结果", failed, chunks.size());
-            }
-            if (chunkResults.isEmpty()) return null;
-
-            return mergeChunkResults(chunkResults, pageUrlByIndex, extractedImages, userId, progress);
-        } catch (Exception e) {
-            log.error("[题目文件解析-视觉] 分片并发调用失败: {}", e.getMessage());
-            return null;
-        }
-    }
-
-    /**
-     * 按片顺序合并题目。相邻片边界出现跨页题（前片尾题不完整且后片首题为延续）时，
-     * 用"前片最后一页 + 后片第一页"作为补漏分片重调一次模型，替换两个半题。
-     * 两标记矛盾时不做补漏、全部保留（信任"完整"一方，避免误删）。
-     */
-    private List<AiRubric> mergeChunkResults(List<ChunkParseResult> chunkResults,
-                                             Map<Integer, String> pageUrlByIndex,
-                                             List<ExtractedImage> extractedImages,
-                                             Long userId,
-                                             java.util.function.Consumer<String> progress) {
-        List<AiRubric> merged = new ArrayList<>();
-        boolean prevTailIncomplete = false;
-        List<Integer> prevChunkPages = null;
-        AiRubric prevTailQuestion = null;
-
-        for (ChunkParseResult chunk : chunkResults) {
-            if (chunk.questions.isEmpty()) continue;
-
-            if (prevTailIncomplete && chunk.firstQuestionIsContinuation && prevChunkPages != null) {
-                // 确认跨页题：移除已入列的前片尾题半题，丢弃本片首题半题，补漏边界两页
-                if (!merged.isEmpty()) {
-                    merged.remove(merged.size() - 1);
-                }
-                int curFirst = chunk.pageIndices.get(0);
-                int prevLast = prevChunkPages.get(prevChunkPages.size() - 1);
-                if (curFirst == prevLast) {
-                    // 边界页相同（极端情况：片只含1页），跳过补漏避免重复调用同一页
-                    log.warn("[题目文件解析-视觉] 边界页重复（页{}），保留原始两半题", curFirst);
-                    merged.add(prevTailQuestion);
-                    merged.addAll(chunk.questions);
-                } else {
-                    List<Integer> gapPages = List.of(prevLast, curFirst);
-                    log.info("[题目文件解析-视觉] 检测到跨页题，补漏解析边界页 {}", gapPages);
-                    if (progress != null) progress.accept("检测到跨页题，正在补漏解析边界页");
-                    ChunkParseResult gap = callVisionModelForChunk(gapPages, pageUrlByIndex, extractedImages, userId);
-                    List<AiRubric> gapQuestions = null;
-                    if (gap != null && !gap.questions.isEmpty()) {
-                        gapQuestions = new ArrayList<>(gap.questions);
-                        if (gap.firstQuestionIsContinuation) {
-                            log.warn("[题目文件解析-视觉] 补漏分片首题仍为延续（题目跨3页以上），丢弃该不完整题: 页{}", gapPages);
-                            gapQuestions.remove(0);
-                        }
-                        if (!gap.lastQuestionComplete && !gapQuestions.isEmpty()) {
-                            log.warn("[题目文件解析-视觉] 补漏分片尾题不完整（题目跨3页以上），丢弃该不完整题: 页{}", gapPages);
-                            gapQuestions.remove(gapQuestions.size() - 1);
-                        }
-                    }
-                    if (gapQuestions != null && !gapQuestions.isEmpty()) {
-                        merged.addAll(gapQuestions);
-                    } else {
-                        // 补漏失败：保留两个半题，宁多勿缺
-                        log.warn("[题目文件解析-视觉] 补漏分片无有效结果，保留边界两个不完整题");
-                        merged.add(prevTailQuestion);
-                    }
-                    merged.addAll(chunk.questions.subList(1, chunk.questions.size()));
-                }
-            } else {
-                if (prevTailIncomplete && prevChunkPages != null) {
-                    log.warn("[题目文件解析-视觉] 相邻片跨页标记矛盾，保留全部题目以避免误删");
-                }
-                merged.addAll(chunk.questions);
-            }
-
-            prevTailIncomplete = !chunk.lastQuestionComplete;
-            prevChunkPages = chunk.pageIndices;
-            prevTailQuestion = chunk.questions.get(chunk.questions.size() - 1);
-        }
-        if (prevTailIncomplete && prevTailQuestion != null) {
-            log.warn("[题目文件解析-视觉] 最后一片尾题不完整（题目可能延续到缺失页），保留现有内容");
-        }
-        return merged;
-    }
-
-    /**
-     * 调用视觉模型解析一个分片（1~2页），返回题目与首尾跨页标记。
-     */
-    private ChunkParseResult callVisionModelForChunk(List<Integer> chunkPages,
-                                                     Map<Integer, String> pageUrlByIndex,
-                                                     List<ExtractedImage> extractedImages,
-                                                     Long userId) {
-        try {
-            // 本片页码范围内已成功上传的嵌入图片（编号为全文档统一编号，与最终URL映射一致）
-            int minPage = chunkPages.get(0);
-            int maxPage = chunkPages.get(chunkPages.size() - 1);
-            StringBuilder imageRef = new StringBuilder();
-            for (ExtractedImage img : extractedImages) {
-                if (img.url != null && img.pageIndex >= minPage && img.pageIndex <= maxPage) {
-                    imageRef.append("- 图片").append(img.index).append("\n");
-                }
-            }
-
-            String pageDesc = chunkPages.size() == 1
-                    ? "第" + (chunkPages.get(0) + 1) + "页"
-                    : "第" + (chunkPages.get(0) + 1) + "页到第" + (chunkPages.get(chunkPages.size() - 1) + 1) + "页";
-
-            String promptText = """
-                你是一个专业的题目解析专家。以下是一份试卷的%s图片，请从中提取所有题目，输出为JSON对象。
-
-                要求：
-                1. 输出格式为：{"questions": [题目数组], "firstQuestionIsContinuation": 布尔值, "lastQuestionIsComplete": 布尔值}
-                2. questions数组中每道题包含：question（题目内容）、questionType（题型）、options（选项，没有则为空数组）、answer（答案）、explanation（解析）、calculationSteps（计算步骤，没有则为空数组）、resources（图片资源）
-                3. resources格式为[{"url":"图片N","type":"资源类型","label":"标签"}]，N为图片编号
-                   type必须为以下之一：
-                   - question_image：题目本身的配图
-                   - option_image：选项配图（必须同时填写label为对应选项字母，如"A"、"B"、"C"、"D"）
-                   - answer_image：答案中的配图
-                   - explanation_image：解析中的配图
-                4. 如果题目中包含图片，在question字段中用[图片N]标记图片位置，同时在resources中添加对应引用
-                5. firstQuestionIsContinuation：本片第一道题的题干是否从上一页延续而来（即题干开头不在本片第一页）。若第一道题从本片开始则为false
-                6. lastQuestionIsComplete：本片最后一道题是否在本片内完整结束（题干、选项未被截断）。若最后一道题延续到下一页则为false
-                7. 严格输出JSON对象，不要输出其他内容
-                8. 数学内容禁止使用LaTeX语法（如\\angle、^\\circ、\\frac、$...$），必须直接使用Unicode字符：
-                   角度用∠、度数用°、乘号用×、除号用÷、不等于用≠、小于等于用≤、大于等于用≥、约等于用≈、根号用√、圆周率用π、三角形用△；分数写成a/b，幂写成x²
-                """.formatted(pageDesc)
-                    + (imageRef.isEmpty() ? "" : "\n\n本片页面包含以下嵌入图片：\n" + imageRef);
-
-            // 获取视觉模型
-            String apiKey = userApiKeyService.hasUserOwnApiKey(userId) ? userApiKeyService.getPlainApiKey(userId) : null;
-            ModelsEntity visionModel = userApiKeyService.getVisionModel(userId);
-            String modelName = visionModel != null ? visionModel.getModelName() : null;
-            ChatModel chatModel = dashScopeModelFactory.createVisionChatModel(
-                    apiKey != null ? apiKey : dashScopeModelFactory.getDefaultApiKey(),
-                    modelName);
-
-            // 构建包含本片页面图片的请求
-            var userSpec = ChatClient.builder(chatModel).build().prompt()
-                    .user(u -> {
-                        u.text(promptText);
-                        for (Integer pageIndex : chunkPages) {
-                            String url = pageUrlByIndex.get(pageIndex);
-                            if (url == null) continue;
-                            try {
-                                u.media(org.springframework.util.MimeTypeUtils.IMAGE_JPEG,
-                                        new org.springframework.core.io.UrlResource(url));
-                            } catch (java.net.MalformedURLException e) {
-                                log.warn("[题目文件解析-视觉] 图片URL格式错误: {}", url);
-                            }
-                        }
-                    });
-
-            String response = userSpec.call().content();
-            log.info("[题目文件解析-视觉] 分片 {} 返回，响应长度: {}", chunkPages,
-                    response != null ? response.length() : 0);
-
-            ChunkParseResult result = parseChunkResponse(response, chunkPages);
-            if (result != null) {
-                sanitizeRubricMath(result.questions);
-            }
-            return result;
-        } catch (Exception e) {
-            log.error("[题目文件解析-视觉] 分片 {} 调用失败: {}", chunkPages, e.getMessage());
-            return null;
-        }
-    }
-
-    /**
-     * 解析分片响应：优先按 {"questions": [...], "firstQuestionIsContinuation": ..., "lastQuestionIsComplete": ...} 对象格式；
-     * 模型未按格式输出裸数组时，按数组解析并默认首尾完整。
-     */
-    private ChunkParseResult parseChunkResponse(String response, List<Integer> chunkPages) {
-        try {
-            if (response == null || response.isEmpty()) return null;
-            String jsonStr = response.trim();
-            if (jsonStr.startsWith("```")) {
-                jsonStr = jsonStr.replaceAll("^```(?:json)?\\s*", "").replaceAll("\\s*```$", "").trim();
-            }
-            JsonNode root = objectMapper.readTree(jsonStr);
-
-            JsonNode questionsNode;
-            boolean firstContinuation = false;
-            boolean lastComplete = true;
-            if (root.isObject() && root.has("questions")) {
-                questionsNode = root.get("questions");
-                firstContinuation = root.path("firstQuestionIsContinuation").asBoolean(false);
-                lastComplete = root.path("lastQuestionIsComplete").asBoolean(true);
-            } else if (root.isArray()) {
-                questionsNode = root;
-            } else {
-                return null;
-            }
-            if (!questionsNode.isArray()) return null;
-
-            List<AiRubric> questions = objectMapper.readValue(questionsNode.toString(),
-                    objectMapper.getTypeFactory().constructCollectionType(List.class, AiRubric.class));
-            return new ChunkParseResult(new ArrayList<>(chunkPages), questions, firstContinuation, lastComplete);
-        } catch (Exception e) {
-            log.error("[题目文件解析-视觉] 分片响应解析失败: {}", e.getMessage());
-            return null;
-        }
-    }
-
-    private static class ExtractedImage {
-        int index;
-        String url;
-        int pageIndex;
-        byte[] imageBytes;
-
-        ExtractedImage(int index, String url, int pageIndex, byte[] imageBytes) {
-            this.index = index;
-            this.url = url;
-            this.pageIndex = pageIndex;
-            this.imageBytes = imageBytes;
-        }
-    }
-
-    /**
-     * 提取PDF嵌入图片为JPEG字节数组（不上传OSS），按页码去重排序后统一编号。
-     */
-    private List<ExtractedImage> extractImagesFromPdfToBytes(PDDocument document) {
-        List<ExtractedImage> images = new ArrayList<>();
-        Set<String> uploadedHashes = new HashSet<>();
-        int pageIndex = 0;
-        for (PDPage page : document.getPages()) {
-            PDResources resources = page.getResources();
-            if (resources == null) { pageIndex++; continue; }
-
-            for (COSName name : resources.getXObjectNames()) {
-                try {
-                    PDXObject xobject = resources.getXObject(name);
-                    if (xobject instanceof PDImageXObject pdImage) {
-                        BufferedImage bufferedImage = pdImage.getImage();
-                        if (bufferedImage.getWidth() < 50 || bufferedImage.getHeight() < 50) continue;
-
-                        byte[] imageBytes = writeJpeg(scaleDownToMaxEdge(bufferedImage, 1600), 0.8f);
-                        String hash = DigestUtils.md5Hex(imageBytes);
-                        if (uploadedHashes.contains(hash)) continue;
-                        uploadedHashes.add(hash);
-
-                        // 暂不上传，只保存字节；index 临时用-1，排序后重新编号
-                        images.add(new ExtractedImage(-1, null, pageIndex, imageBytes));
-                    }
-                } catch (Exception e) {
-                    log.debug("[PDF图片提取] 跳过无法处理的图片: {}", e.getMessage());
-                }
-            }
-            pageIndex++;
-        }
-
-        // 按页码排序，同页内保持PDFBox遍历顺序
-        images.sort(Comparator.comparingInt(a -> a.pageIndex));
-
-        // 重新编号
-        for (int i = 0; i < images.size(); i++) {
-            images.get(i).index = i;
-        }
-
-        return images;
-    }
-
-    /**
-     * 并行上传页面图片和嵌入图片到 OSS。
-     * 单张上传失败不中断整体流程：页面图片失败的页不出现在结果Map中，嵌入图片 url 保持 null（后续映射时跳过）。
-     * @return 页码 → 页面图片URL（按页码排序，仅含上传成功的页）
-     */
-    private Map<Integer, String> uploadAllImagesParallel(List<PageImage> pageImages,
-                                                         List<ExtractedImage> extractedImages,
-                                                         Long userId) {
-        // 页面图片并行上传
-        List<CompletableFuture<Map.Entry<Integer, String>>> pageFutures = new ArrayList<>();
-        for (PageImage pi : pageImages) {
-            String objectKey = "question-image/" + userId + "/page-" + pi.pageIndex + "-" + UUID.randomUUID() + ".jpg";
-            pageFutures.add(CompletableFuture.supplyAsync(
-                    () -> ossService.upload(objectKey, pi.imageBytes, "image/jpeg"), AI_EXECUTOR)
-                    .thenApply(url -> Map.entry(pi.pageIndex, url))
-                    .exceptionally(ex -> {
-                        log.warn("[OSS并行上传] 页面图片上传失败, pageIndex={}, error={}", pi.pageIndex, ex.getMessage());
-                        return null;
-                    }));
-        }
-
-        // 嵌入图片并行上传，回填 url
-        List<CompletableFuture<Void>> extractFutures = new ArrayList<>();
-        for (ExtractedImage img : extractedImages) {
-            String objectKey = "question-image/" + userId + "/" + UUID.randomUUID() + ".jpg";
-            extractFutures.add(CompletableFuture.runAsync(() -> {
-                img.url = ossService.upload(objectKey, img.imageBytes, "image/jpeg");
-            }, AI_EXECUTOR).exceptionally(ex -> {
-                log.warn("[OSS并行上传] 嵌入图片上传失败, index={}, error={}", img.index, ex.getMessage());
-                return null;
-            }));
-        }
-
-        // 等待全部完成
-        CompletableFuture.allOf(pageFutures.toArray(new CompletableFuture[0])).join();
-        CompletableFuture.allOf(extractFutures.toArray(new CompletableFuture[0])).join();
-
-        // 收集页码 → URL（过滤失败的 null），按页码排序
-        Map<Integer, String> urlByPageIndex = new TreeMap<>();
-        for (CompletableFuture<Map.Entry<Integer, String>> f : pageFutures) {
-            Map.Entry<Integer, String> entry = f.join();
-            if (entry != null && entry.getValue() != null) {
-                urlByPageIndex.put(entry.getKey(), entry.getValue());
-            }
-        }
-        long extractOk = extractedImages.stream().filter(i -> i.url != null).count();
-        log.info("[OSS并行上传] 完成, 页面图片成功 {}/{}, 嵌入图片成功 {}/{}",
-                urlByPageIndex.size(), pageImages.size(), extractOk, extractedImages.size());
-        return urlByPageIndex;
-    }
-
-    /**
-     * 降级时清理已上传到 OSS 的页面图片和嵌入图片，避免资源孤立。
-     * 入参允许为 null（异常发生在上传之前时）。
-     */
-    private void cleanupOssImages(List<String> pageImageUrls, List<ExtractedImage> extractedImages) {
-        int deleted = 0;
-        if (pageImageUrls != null) {
-            for (String url : pageImageUrls) {
-                String key = ossService.extractObjectKeyFromUrl(url);
-                if (key != null) {
-                    ossService.delete(key);
-                    deleted++;
-                }
-            }
-        }
-        if (extractedImages != null) {
-            for (ExtractedImage img : extractedImages) {
-                if (img.url != null) {
-                    String key = ossService.extractObjectKeyFromUrl(img.url);
-                    if (key != null) {
-                        ossService.delete(key);
-                        deleted++;
-                    }
-                }
-            }
-        }
-        if (deleted > 0) {
-            log.info("[题目文件解析-视觉] 降级清理：已删除 {} 个OSS图片", deleted);
-        }
-    }
-
-    private void mapImageReferencesToUrls(List<AiRubric> aiRubrics, List<ExtractedImage> extractedImages) {
-        Map<Integer, String> indexToUrl = new HashMap<>();
-        for (ExtractedImage img : extractedImages) {
-            indexToUrl.put(img.index, img.url);
-        }
-
-        for (AiRubric rubric : aiRubrics) {
-            if (rubric.getResources() == null) continue;
-            for (AiRubric.AiResource resource : rubric.getResources()) {
-                // 规范化 type 字段：AI 可能返回非标准的 type，统一为前端期望的值
-                if (resource.getType() != null) {
-                    String type = resource.getType().toLowerCase();
-                    if ("image".equals(type) || "img".equals(type)) {
-                        // 未分类的图片，根据 label 推断类型
-                        if (resource.getLabel() != null && resource.getLabel().matches("^[A-Da-d]$")) {
-                            resource.setType("option_image");
-                            resource.setLabel(resource.getLabel().toUpperCase());
-                        } else {
-                            resource.setType("question_image");
-                        }
-                    } else {
-                        // 确保已知类型的小写变体也能匹配，统一为标准命名
-                        switch (type) {
-                            case "question_image": resource.setType("question_image"); break;
-                            case "option_image": resource.setType("option_image"); break;
-                            case "answer_image": resource.setType("answer_image"); break;
-                            case "explanation_image": resource.setType("explanation_image"); break;
-                            default: resource.setType("question_image"); break;
-                        }
-                    }
-                }
-
-                if (resource.getUrl() != null && resource.getUrl().startsWith("图片")) {
-                    try {
-                        String numStr = resource.getUrl().replace("图片", "").trim();
-                        int idx = Integer.parseInt(numStr);
-                        String actualUrl = indexToUrl.get(idx);
-                        if (actualUrl != null) {
-                            resource.setUrl(actualUrl);
-                        }
-                    } catch (NumberFormatException ignored) {
-                    }
-                }
-            }
-        }
-    }
-
-    /**
      * 使用纯文本提取流程（原有逻辑）
      */
     /**
@@ -1436,7 +748,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
      *
      * @param visionFailReason 视觉模型解析失败的原因；非空表示本次是视觉解析失败后的自动降级
      */
-    private Result<List<AiRubric>> handleRubricFileWithText(MultipartFile file, Long userId, String visionFailReason,
+    Result<List<AiRubric>> handleRubricFileWithText(MultipartFile file, Long userId, String visionFailReason,
                                                             java.util.function.Consumer<String> progress) {
         try {
             if (visionFailReason != null && progress != null) {
@@ -1598,20 +910,30 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                 return Result.error("会话不存在或没有消息");
             }
             
-            List<Integer> sortedIndices = messageIndices.stream()
-                    .sorted(java.util.Collections.reverseOrder())
-                    .collect(Collectors.toList());
-            
-            for (Integer index : sortedIndices) {
+            // 按下标重建列表后整体覆写，避免LREM按值删除时误删同会话中内容相同的其他消息
+            Set<Integer> toDelete = new HashSet<>();
+            for (Integer index : messageIndices) {
                 if (index < 0 || index >= messages.size()) {
                     log.warn("[删除消息] 索引超出范围: {}", index);
                     continue;
                 }
-                String messageToDelete = messages.get(index);
-                stringRedisTemplate.opsForList().remove(sessionKey, 1, messageToDelete);
+                toDelete.add(index);
             }
-            
-            log.info("[删除消息] 成功删除 {} 条消息", messageIndices.size());
+            List<String> remain = new ArrayList<>();
+            for (int i = 0; i < messages.size(); i++) {
+                if (!toDelete.contains(i)) {
+                    remain.add(messages.get(i));
+                }
+            }
+            // 删旧列表再写入剩余消息，完成按索引精确删除
+            stringRedisTemplate.delete(sessionKey);
+            if (!remain.isEmpty()) {
+                stringRedisTemplate.opsForList().rightPushAll(sessionKey, remain);
+                // delete+重写会清掉key原有的TTL，按会话历史统一的7天过期补回，避免历史key在Redis中永久残留
+                stringRedisTemplate.expire(sessionKey, 7, java.util.concurrent.TimeUnit.DAYS);
+            }
+
+            log.info("[删除消息] 成功删除 {} 条消息, 剩余 {} 条", toDelete.size(), remain.size());
             return Result.success(true);
         } catch (Exception e) {
             log.error("[删除消息] 删除消息时发生错误: ", e);
@@ -1621,532 +943,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
 
     @Override
     public Result<String> aiSolveQuestion(String questionText, String questionType, String optionsJson, String generateType, Long userId) {
-        log.info("[AI解答] 开始生成，userId={}, questionType={}, generateType={}", userId, questionType, generateType);
-        
-        if (questionText == null || questionText.trim().isEmpty()) {
-            return Result.error("题目内容不能为空");
-        }
-        
-        if ("all".equals(generateType)) {
-            return aiSolveAll(questionText, questionType, optionsJson, userId);
-        }
-        
-        String prompt = buildAiSolvePromptWithRag(questionText, questionType, optionsJson, generateType, userId);
-        if (prompt == null) {
-            return Result.error("无效的生成类型");
-        }
-        
-        try {
-            Agent agent = reactAgentFactory.getMultiModelReactAgent(userId);
-            String threadId = "ai_solve:" + userId + ":" + System.currentTimeMillis();
-            RunnableConfig config = RunnableConfig.builder()
-                    .threadId(threadId)
-                    .build();
-            
-            StringBuilder result = new StringBuilder();
-            Optional<OverAllState> invoke = agent.invoke(prompt, config);
-
-            if (invoke.isPresent()) {
-                // 多模型并行模式（两个辅助模型）时输出各模型回答，否则输出最终答案
-                result.append(buildAgentFinalOutput(invoke.get(), userId));
-            }
-            log.info("[AI解答] 生成完成，generateType={}", generateType);
-            return Result.success(result.toString());
-        } catch (Exception e) {
-            log.error("[AI解答] 生成失败: ", e);
-            if (isApiKeyOrModelError(e)) {
-                return Result.error("API Key或模型名称有误，请核验");
-            }
-            return Result.error("AI解答失败: " + e.getMessage());
-        }
-    }
-    
-    private Result<String> aiSolveAll(String questionText, String questionType, String optionsJson, Long userId) {
-        try {
-            String ragContext = searchVectorStore(questionText, userId);
-            
-            if (isSimpleQuestion(questionText, questionType)) {
-                log.info("[AI解答] 简单问题，使用单次调用模式");
-                return aiSolveAllInOne(questionText, questionType, optionsJson, ragContext, userId);
-            } else {
-                log.info("[AI解答] 复杂问题，使用并行调用模式");
-                return aiSolveAllParallel(questionText, questionType, optionsJson, ragContext, userId);
-            }
-        } catch (Exception e) {
-            log.error("[AI解答] 全部生成失败: ", e);
-            if (isApiKeyOrModelError(e)) {
-                return Result.error("API Key或模型名称有误，请核验");
-            }
-            return Result.error("AI解答失败: " + e.getMessage());
-        }
-    }
-    
-    private boolean isSimpleQuestion(String questionText, String questionType) {
-        if (questionText == null) return false;
-        
-        if ("multiple_choice".equals(questionType)) {
-            return false;
-        }
-        
-        if ("single_choice".equals(questionType) || "true_false".equals(questionType)) {
-            return true;
-        }
-        
-        if (questionText.length() < 50 && !"calculation".equals(questionType)) {
-            return true;
-        }
-        
-        return false;
-    }
-    
-    private Result<String> aiSolveAllInOne(String questionText, String questionType, String optionsJson, String ragContext, Long userId) {
-        try {
-            String prompt = buildAllInOnePrompt(questionText, questionType, optionsJson, ragContext);
-            
-            Agent agent = reactAgentFactory.getMultiModelReactAgent(userId);
-            String threadId = "ai_solve:" + userId + ":" + System.currentTimeMillis();
-            RunnableConfig config = RunnableConfig.builder()
-                    .threadId(threadId)
-                    .build();
-            
-            StringBuilder result = new StringBuilder();
-            Optional<OverAllState> invoke = agent.invoke(prompt, config);
-            if (invoke.isPresent()) {
-                OverAllState state = invoke.get();
-                state.value("final_answer").ifPresent(finalAnswer ->
-                        result.append(extractMessageText(finalAnswer)));
-            }
-
-            String aiResponse = result.toString().trim();
-            Map<String, String> results = parseAllInOneResponse(aiResponse, questionType);
-
-            // 多模型并行模式（两个辅助模型）时，将各模型回答附加到解析中，并标注总结模型
-            if (invoke.isPresent() && isDualAssistantMode(invoke.get())) {
-                String[] names = getDualAssistantModelNames(userId);
-                results.put("explanation", "【" + names[2] + " 的总结】\n"
-                        + results.get("explanation") + "\n\n"
-                        + buildAssistantAnswersText(names, invoke.get()));
-            }
-
-            results.replaceAll((k, v) -> LatexMathCleaner.clean(v));
-            String jsonResult = objectMapper.writeValueAsString(results);
-            log.info("[AI解答] 单次调用完成");
-            return Result.success(jsonResult);
-        } catch (Exception e) {
-            log.error("[AI解答] 单次调用失败: ", e);
-            throw new RuntimeException("AI调用失败: " + e.getMessage(), e);
-        }
-    }
-    
-    private String buildAllInOnePrompt(String questionText, String questionType, String optionsJson, String ragContext) {
-        StringBuilder prompt = new StringBuilder();
-        
-        if (ragContext != null && !ragContext.isEmpty()) {
-            prompt.append("以下是从知识库中检索到的相关内容，请参考这些内容来回答问题：\n\n");
-            prompt.append(ragContext);
-            prompt.append("\n\n---\n\n");
-        }
-        
-        String typeDesc = getTypeDescription(questionType);
-        prompt.append("请根据以下").append(typeDesc).append("，一次性生成答案和解析");
-        if ("calculation".equals(questionType)) {
-            prompt.append("以及计算步骤");
-        }
-        prompt.append("。\n\n");
-        
-        if (optionsJson != null && !optionsJson.isEmpty() && !optionsJson.equals("[]")) {
-            prompt.append("选项：\n").append(optionsJson).append("\n\n");
-        }
-        
-        prompt.append("题目：\n").append(questionText).append("\n\n");
-        
-        prompt.append("请严格按照以下JSON格式返回，不要包含任何其他内容：\n");
-        prompt.append("{\n");
-        
-        if ("true_false".equals(questionType)) {
-            prompt.append("  \"answer\": \"正确或错误\",\n");
-        } else if ("single_choice".equals(questionType) || "multiple_choice".equals(questionType)) {
-            prompt.append("  \"answer\": \"选项字母，如A或A,B,C\",\n");
-        } else if ("short_answer".equals(questionType)) {
-            prompt.append("  \"answer\": \"答案要点\",\n");
-        } else if ("calculation".equals(questionType)) {
-            prompt.append("  \"answer\": \"最终计算结果\",\n");
-        }
-        
-        prompt.append("  \"explanation\": \"题目解析，150字以内\"\n");
-        
-        if ("calculation".equals(questionType)) {
-            prompt.append(",\n  \"steps\": \"计算步骤，每步用换行分隔\"");
-        }
-        
-        prompt.append("\n}\n\n");
-        prompt.append("注意：只返回JSON，不要有任何其他文字。");
-        
-        return prompt.toString();
-    }
-    
-    private Map<String, String> parseAllInOneResponse(String aiResponse, String questionType) {
-        Map<String, String> results = new HashMap<>();
-        results.put("answer", "");
-        results.put("explanation", "");
-        results.put("steps", "");
-        
-        if (aiResponse == null || aiResponse.isEmpty()) {
-            log.warn("[AI解答] AI返回为空");
-            return results;
-        }
-        
-        String jsonStr = aiResponse;
-        if (jsonStr.contains("```")) {
-            jsonStr = jsonStr.replaceAll("```json\\s*", "").replaceAll("```\\s*", "").trim();
-        }
-        
-        int start = jsonStr.indexOf("{");
-        int end = jsonStr.lastIndexOf("}");
-        if (start >= 0 && end > start) {
-            jsonStr = jsonStr.substring(start, end + 1);
-        }
-        
-        try {
-            JsonNode node = objectMapper.readTree(jsonStr);
-            
-            if (node.has("answer")) {
-                results.put("answer", node.get("answer").asText().trim());
-            }
-            if (node.has("explanation")) {
-                results.put("explanation", node.get("explanation").asText().trim());
-            }
-            if (node.has("steps")) {
-                results.put("steps", node.get("steps").asText().trim());
-            }
-            
-            if (results.get("answer").isEmpty() && results.get("explanation").isEmpty()) {
-                log.warn("[AI解答] JSON解析后内容为空，原始响应: {}", aiResponse.substring(0, Math.min(100, aiResponse.length())));
-            }
-        } catch (Exception e) {
-            log.warn("[AI解答] JSON解析失败，尝试提取内容: {}, 原始响应前100字符: {}", 
-                    e.getMessage(), aiResponse.substring(0, Math.min(100, aiResponse.length())));
-            
-            if (aiResponse.contains("答案") || aiResponse.contains("正确") || aiResponse.contains("错误")) {
-                results.put("answer", aiResponse);
-            } else {
-                results.put("answer", aiResponse);
-                results.put("explanation", "AI返回格式异常，请重新生成");
-            }
-        }
-        
-        return results;
-    }
-    
-    private Result<String> aiSolveAllParallel(String questionText, String questionType, String optionsJson, String ragContext, Long userId) {
-        try {
-            CompletableFuture<String[]> answerFuture = CompletableFuture.supplyAsync(() -> {
-                String prompt = buildAiSolvePromptWithRagContext(questionText, questionType, optionsJson, "answer", ragContext);
-                if (prompt == null) return new String[]{"", ""};
-                return callMultiModelReactAgent(prompt, userId);
-            }, AI_EXECUTOR);
-
-            CompletableFuture<String[]> explanationFuture = CompletableFuture.supplyAsync(() -> {
-                String prompt = buildAiSolvePromptWithRagContext(questionText, questionType, optionsJson, "explanation", ragContext);
-                if (prompt == null) return new String[]{"", ""};
-                return callMultiModelReactAgent(prompt, userId);
-            }, AI_EXECUTOR);
-
-            CompletableFuture<String[]> stepsFuture = CompletableFuture.completedFuture(new String[]{"", ""});
-            if ("calculation".equals(questionType)) {
-                stepsFuture = CompletableFuture.supplyAsync(() -> {
-                    String prompt = buildAiSolvePromptWithRagContext(questionText, questionType, optionsJson, "steps", ragContext);
-                    if (prompt == null) return new String[]{"", ""};
-                    return callMultiModelReactAgent(prompt, userId);
-                }, AI_EXECUTOR);
-            }
-            
-            try {
-                CompletableFuture.allOf(answerFuture, explanationFuture, stepsFuture).get(120, java.util.concurrent.TimeUnit.SECONDS);
-            } catch (TimeoutException e) {
-                log.error("[AI解题] 并行解题超时", e);
-                throw new RuntimeException("AI解题超时，请稍后重试");
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new RuntimeException("AI解题被中断");
-            } catch (ExecutionException e) {
-                log.error("[AI解题] 并行解题执行异常", e);
-                throw new RuntimeException("AI解题执行失败: " + e.getCause().getMessage());
-            }
-            
-            Map<String, String> results = new HashMap<>();
-            results.put("answer", answerFuture.get()[1]);
-            results.put("explanation", explanationFuture.get()[1]);
-            results.put("steps", stepsFuture.get()[1]);
-
-            // 多模型并行模式（两个辅助模型）时，仅将辅助模型的回答附加到解析字段，避免答案/步骤字段重复冗余
-            String assistantText = explanationFuture.get()[0];
-            if (!assistantText.isEmpty()) {
-                String[] names = getDualAssistantModelNames(userId);
-                results.put("explanation", "【" + names[2] + " 的总结】\n"
-                        + results.get("explanation") + "\n\n" + assistantText);
-            }
-
-            results.replaceAll((k, v) -> LatexMathCleaner.clean(v));
-            String jsonResult = objectMapper.writeValueAsString(results);
-            log.info("[AI解答] 并行调用完成");
-            return Result.success(jsonResult);
-        } catch (java.util.concurrent.ExecutionException e) {
-            Throwable cause = e.getCause();
-            log.error("[AI解答] 并行调用执行异常: ", cause);
-            if (cause instanceof RuntimeException) {
-                throw (RuntimeException) cause;
-            }
-            throw new RuntimeException("AI调用失败: " + (cause != null ? cause.getMessage() : e.getMessage()), cause);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.error("[AI解答] 并行调用被中断: ", e);
-            throw new RuntimeException("AI调用被中断: " + e.getMessage(), e);
-        } catch (Exception e) {
-            log.error("[AI解答] 并行调用失败: ", e);
-            throw new RuntimeException("AI调用失败: " + e.getMessage(), e);
-        }
-    }
-    
-    private String buildAiSolvePromptWithRagContext(String questionText, String questionType, String optionsJson, String generateType, String ragContext) {
-        StringBuilder prompt = new StringBuilder();
-        
-        if (ragContext != null && !ragContext.isEmpty()) {
-            prompt.append("以下是从知识库中检索到的相关内容，请参考这些内容来回答问题：\n\n");
-            prompt.append(ragContext);
-            prompt.append("\n\n---\n\n");
-        }
-        
-        prompt.append("请根据以下题目内容");
-        
-        String typeDesc = getTypeDescription(questionType);
-        prompt.append("（").append(typeDesc).append("）");
-        
-        if (optionsJson != null && !optionsJson.isEmpty() && !optionsJson.equals("[]")) {
-            prompt.append("\n\n选项：\n").append(optionsJson);
-        }
-        
-        prompt.append("\n\n题目：\n").append(questionText);
-        
-        switch (generateType) {
-            case "answer":
-                prompt.append("\n\n请直接给出正确答案，不要包含任何解释。");
-                if ("true_false".equals(questionType)) {
-                    prompt.append(" 判断题请回答:正确或错误");
-                } else if ("short_answer".equals(questionType)) {
-                    prompt.append(" 简答题请给出简洁的答案要点。");
-                } else if ("calculation".equals(questionType)) {
-                    prompt.append(" 计算题请给出最终计算结果。");
-                } else {
-                    prompt.append(" 选择题请直接给出选项字母（如A、B、C、D，多选用逗号分隔）。");
-                }
-                break;
-            case "explanation":
-                prompt.append("\n\n请给出这道题的详细解析，字数控制在150字以内，要求简洁明了，突出重点。");
-                break;
-            case "steps":
-                if (!"calculation".equals(questionType)) {
-                    return null;
-                }
-                prompt.append("\n\n请给出这道计算题的详细计算步骤，每步一行，格式如下：\n");
-                prompt.append("步骤1: xxx\n步骤2: xxx\n...");
-                break;
-            default:
-                return null;
-        }
-        
-        return prompt.toString();
-    }
-    
-    /**
-     * 判断是否为多模型并行模式（用户配置了两个辅助模型，两个辅助Agent都产生了回答）
-     */
-    private boolean isDualAssistantMode(OverAllState state) {
-        return state.value("assistant_1_response").isPresent()
-                && state.value("assistant_2_response").isPresent();
-    }
-
-    /**
-     * 提取Agent输出的文本（AssistantMessage或其他类型）
-     */
-    private String extractMessageText(Object value) {
-        if (value instanceof AssistantMessage) {
-            return ((AssistantMessage) value).getText();
-        }
-        return value != null ? value.toString() : "";
-    }
-
-    /**
-     * 获取多模型名称：[辅助模型1, 辅助模型2, 主模型]，取不到配置时使用默认名
-     */
-    private String[] getDualAssistantModelNames(Long userId) {
-        List<ModelsEntity> assistantModels = userApiKeyService.getAssistantModels(userId);
-        ModelsEntity mainModel = userApiKeyService.getMainModel(userId);
-        String name1 = (assistantModels != null && assistantModels.size() > 0 && assistantModels.get(0) != null)
-                ? assistantModels.get(0).getModelName() : "辅助模型1";
-        String name2 = (assistantModels != null && assistantModels.size() > 1 && assistantModels.get(1) != null)
-                ? assistantModels.get(1).getModelName() : "辅助模型2";
-        String mainName = (mainModel != null) ? mainModel.getModelName() : "主模型";
-        return new String[]{name1, name2, mainName};
-    }
-
-    /**
-     * 构建多模型Agent的最终输出：
-     * 多模型并行模式（两个辅助模型）时，输出两个辅助模型的回答和主模型的总结，并标注模型名称；
-     * 其他模式仅返回最终答案。
-     */
-    private String buildAgentFinalOutput(OverAllState state, Long userId) {
-        String finalAnswer = state.value("final_answer")
-                .map(this::extractMessageText).orElse("");
-        if (!isDualAssistantMode(state)) {
-            return finalAnswer;
-        }
-        String[] names = getDualAssistantModelNames(userId);
-        return buildAssistantAnswersText(names, state)
-                + "\n\n【" + names[2] + " 的总结】\n"
-                + finalAnswer;
-    }
-
-    /**
-     * 构建带模型名标注的两个辅助模型回答文本（仅在多模型并行模式下调用）
-     */
-    private String buildAssistantAnswersText(String[] names, OverAllState state) {
-        return "【" + names[0] + " 的回答】\n"
-                + extractMessageText(state.value("assistant_1_response").get())
-                + "\n\n【" + names[1] + " 的回答】\n"
-                + extractMessageText(state.value("assistant_2_response").get());
-    }
-
-    /**
-     * 调用多模型Agent（使用Multi-agent模式），返回 [辅助模型回答文本, 最终答案]。
-     * 辅助模型回答文本仅在多模型并行模式（两个辅助模型）时非空。
-     */
-    private String[] callMultiModelReactAgent(String prompt, Long userId) {
-        try {
-            Agent agent = reactAgentFactory.getMultiModelReactAgent(userId);
-            String threadId = "ai_solve:" + userId + ":" + System.currentTimeMillis();
-            RunnableConfig config = RunnableConfig.builder()
-                    .threadId(threadId)
-                    .build();
-
-            String assistantText = "";
-            String finalAnswer = "";
-            Optional<OverAllState> invoke = agent.invoke(prompt, config);
-            if (invoke.isPresent()) {
-                OverAllState state = invoke.get();
-                finalAnswer = state.value("final_answer")
-                        .map(this::extractMessageText).orElse("");
-                if (isDualAssistantMode(state)) {
-                    String[] names = getDualAssistantModelNames(userId);
-                    assistantText = buildAssistantAnswersText(names, state);
-                }
-            }
-            return new String[]{assistantText, finalAnswer};
-        } catch (Exception e) {
-            log.error("[ReactAgent文本调用] 调用失败: ", e);
-            throw new RuntimeException("AI调用失败: " + e.getMessage(), e);
-        }
-    }
-    
-    private String buildAiSolvePromptWithRag(String questionText, String questionType, String optionsJson, String generateType, Long userId) {
-        StringBuilder prompt = new StringBuilder();
-        
-        String ragContext = searchVectorStore(questionText, userId);
-        if (ragContext != null && !ragContext.isEmpty()) {
-            prompt.append("以下是从知识库中检索到的相关内容，请参考这些内容来回答问题：\n\n");
-            prompt.append(ragContext);
-            prompt.append("\n\n---\n\n");
-        }
-        
-        prompt.append("请根据以下题目内容");
-        
-        String typeDesc = getTypeDescription(questionType);
-        prompt.append("（").append(typeDesc).append("）");
-        
-        if (optionsJson != null && !optionsJson.isEmpty() && !optionsJson.equals("[]")) {
-            prompt.append("\n\n选项：\n").append(optionsJson);
-        }
-        
-        prompt.append("\n\n题目：\n").append(questionText);
-        
-        switch (generateType) {
-            case "answer":
-                prompt.append("\n\n请直接给出正确答案，不要包含任何解释。");
-                if ("true_false".equals(questionType)) {
-                    prompt.append(" 判断题请回答:正确或错误");
-                } else if ("short_answer".equals(questionType)) {
-                    prompt.append(" 简答题请给出简洁的答案要点。");
-                } else if ("calculation".equals(questionType)) {
-                    prompt.append(" 计算题请给出最终计算结果。");
-                } else {
-                    prompt.append(" 选择题请直接给出选项字母（如A、B、C、D，多选用逗号分隔）。");
-                }
-                break;
-            case "explanation":
-                prompt.append("\n\n请给出这道题的详细解析，字数控制在150字以内，要求简洁明了，突出重点。");
-                break;
-            case "steps":
-                if (!"calculation".equals(questionType)) {
-                    return null;
-                }
-                prompt.append("\n\n请给出这道计算题的详细计算步骤，每步一行，格式如下：\n");
-                prompt.append("步骤1: xxx\n步骤2: xxx\n...");
-                break;
-            default:
-                return null;
-        }
-        
-        return prompt.toString();
-    }
-    
-    private String searchVectorStore(String query, Long userId) {
-        try {
-            // 粗排：扩大召回，为精排提供更多候选
-            SearchRequest searchRequest = SearchRequest.builder()
-                    .query(query)
-                    .topK(20)
-                    .similarityThreshold(0.5)
-                    .build();
-            
-            List<Document> documents = vectorStore.similaritySearch(searchRequest);
-            
-            if (documents == null || documents.isEmpty()) {
-                log.info("[AI解答-向量检索] 未找到相关文档");
-                return null;
-            }
-            
-            log.info("[AI解答-向量检索] 粗排召回 {} 个候选文档，开始精排", documents.size());
-
-            // 精排：使用 qwen3-rerank 重排序，取 Top5
-            List<Document> rerankedDocs = rerankService.rerank(query, documents, 5);
-
-            String result = rerankedDocs.stream()
-                    .map(doc -> {
-                        String content = doc.getText();
-                        String source = doc.getMetadata() != null ? 
-                                (String) doc.getMetadata().getOrDefault("source", "未知来源") : "未知来源";
-                        return "【来源: " + source + "】\n" + content;
-                    })
-                    .collect(Collectors.joining("\n\n---\n\n"));
-            
-            log.info("[AI解答-向量检索] 精排完成，保留 {} 个文档片段", rerankedDocs.size());
-            return result;
-        } catch (Exception e) {
-            log.warn("[AI解答-向量检索] 检索失败: {}", e.getMessage());
-            return null;
-        }
-    }
-    
-    private String getTypeDescription(String questionType) {
-        if (questionType == null) return "题目";
-        switch (questionType) {
-            case "single_choice": return "单选题";
-            case "multiple_choice": return "多选题";
-            case "true_false": return "判断题";
-            case "short_answer": return "简答题";
-            case "calculation": return "计算题";
-            default: return questionType;
-        }
+        // AI 解题全链路已拆分至 AiQuestionSolver，此处仅作接口委托
+        return aiQuestionSolver.aiSolveQuestion(questionText, questionType, optionsJson, generateType, userId);
     }
 
     private List<Document> getDocuments(MultipartFile file) {
@@ -2228,8 +1026,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         if (numberPattern >= 3) {questionScore += 20;}
         else if (numberPattern >= 2) {questionScore += 10;}
 
-        for (String word : QUESTION_WORDS) {
-            questionScore += countMatches(sample, word) * 3;
+        for (Pattern wordPattern : QUESTION_WORD_PATTERNS) {
+            questionScore += countMatches(sample, wordPattern) * 3;
         }
 
         for (String kw : NOTE_KEYWORDS) {
@@ -2249,22 +1047,14 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             else if (avgParagraphLength > 100) {noteScore += 8;}
         }
 
-        for (String conn : CONNECTIVES) {
-            noteScore += countMatches(sample, conn) * 5;
+        for (Pattern connPattern : CONNECTIVE_PATTERNS) {
+            noteScore += countMatches(sample, connPattern) * 5;
         }
 
         int headingPattern = countMatches(sample, HEADING_PATTERN);
         if (headingPattern >= 2) {noteScore += 15;}
 
         return questionScore > noteScore;
-    }
-
-    private int countMatches(String text, String regex) {
-        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(regex);
-        java.util.regex.Matcher matcher = pattern.matcher(text);
-        int count = 0;
-        while (matcher.find()) {count++;}
-        return count;
     }
 
     private int countMatches(String text, Pattern pattern) {
@@ -2326,54 +1116,8 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         }
 
         List<AiRubric> rubrics = converter.convert(jsonStr);
-        sanitizeRubricMath(rubrics);
+        AiCommonSupport.sanitizeRubricMath(rubrics);
         return rubrics;
     }
 
-    /**
-     * 将AI返回题目中残留的LaTeX数学语法转换为Unicode符号，避免前端纯文本展示出现乱码
-     */
-    private void sanitizeRubricMath(List<AiRubric> rubrics) {
-        if (rubrics == null) {
-            return;
-        }
-        for (AiRubric rubric : rubrics) {
-            if (rubric == null) continue;
-            rubric.setQuestion(LatexMathCleaner.clean(rubric.getQuestion()));
-            rubric.setAnswer(LatexMathCleaner.clean(rubric.getAnswer()));
-            rubric.setExplanation(LatexMathCleaner.clean(rubric.getExplanation()));
-            if (rubric.getOptions() != null) {
-                for (int i = 0; i < rubric.getOptions().length; i++) {
-                    rubric.getOptions()[i] = LatexMathCleaner.clean(rubric.getOptions()[i]);
-                }
-            }
-            if (rubric.getCalculationSteps() != null) {
-                rubric.setCalculationSteps(rubric.getCalculationSteps().stream()
-                        .map(LatexMathCleaner::clean)
-                        .collect(Collectors.toList()));
-            }
-        }
-    }
-
-    private boolean isApiKeyOrModelError(Throwable e) {
-        if (e == null) return false;
-        String message = e.getMessage();
-        if (message == null) {
-            message = e.getClass().getSimpleName();
-        }
-        String lowerMessage = message.toLowerCase();
-        return lowerMessage.contains("invalid api") 
-                || lowerMessage.contains("invalid api-key")
-                || lowerMessage.contains("invalid apikey")
-                || lowerMessage.contains("invalid key")
-                || lowerMessage.contains("api key") && lowerMessage.contains("invalid")
-                || lowerMessage.contains("authentication")
-                || lowerMessage.contains("unauthorized")
-                || lowerMessage.contains("401")
-                || lowerMessage.contains("403")
-                || lowerMessage.contains("model") && lowerMessage.contains("not found")
-                || lowerMessage.contains("model") && lowerMessage.contains("does not exist")
-                || lowerMessage.contains("quota")
-                || lowerMessage.contains("rate limit");
-    }
 }

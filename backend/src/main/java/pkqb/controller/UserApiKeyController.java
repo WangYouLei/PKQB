@@ -15,7 +15,6 @@ import pkqb.enums.ModelType;
 import pkqb.pojo.dto.SaveApiKeyRequest;
 import pkqb.pojo.entity.ModelsEntity;
 import pkqb.pojo.dto.ModelValidationResult;
-import pkqb.service.RateLimitService;
 import pkqb.service.UserApiKeyService;
 
 import java.util.HashMap;
@@ -29,14 +28,12 @@ import java.util.Map;
 public class UserApiKeyController {
 
     private final UserApiKeyService userApiKeyService;
-    private final RateLimitService rateLimitService;
     private final ReactAgentFactory reactAgentFactory;
 
-    public UserApiKeyController(UserApiKeyService userApiKeyService, 
-                                RateLimitService rateLimitService,
+    // 状态查询已聚合到 UserApiKeyService.getApiKeyStatusView，不再需要注入 RateLimitService
+    public UserApiKeyController(UserApiKeyService userApiKeyService,
                                 ReactAgentFactory reactAgentFactory) {
         this.userApiKeyService = userApiKeyService;
-        this.rateLimitService = rateLimitService;
         this.reactAgentFactory = reactAgentFactory;
     }
 
@@ -84,29 +81,8 @@ public class UserApiKeyController {
         if (userId == null) {
             return Result.error(401, "未登录或登录已过期");
         }
-        Map<String, Object> status = new HashMap<>();
-        
-        boolean hasOwnKey = userApiKeyService.hasUserOwnApiKey(userId);
-        ApiKeyMode mode = userApiKeyService.getApiKeyMode(userId);
-        boolean shouldLimit = rateLimitService.shouldRateLimit(userId);
-        ModelsEntity mainModel = userApiKeyService.getMainModel(userId);
-        List<ModelsEntity> assistantModels = userApiKeyService.getAssistantModels(userId);
-        ModelsEntity visionModel = userApiKeyService.getVisionModel(userId);
-        List<ModelsEntity> allModels = userApiKeyService.getUserModels(userId);
-        
-        status.put("hasOwnApiKey", hasOwnKey);
-        status.put("currentMode", mode.name());
-        status.put("hasRateLimit", shouldLimit);
-        status.put("mainModel", mainModel != null ? mainModel.getModelName() : null);
-        status.put("assistantModels", assistantModels);
-        status.put("visionModel", visionModel);
-        status.put("allModels", allModels);
-        status.put("modelCount", allModels.size());
-        status.put("maxModelCount", UserApiKeyService.MAX_MODEL_COUNT);
-        status.put("canAddModel", userApiKeyService.canAddModel(userId));
-        status.put("supportsMultiModel", userApiKeyService.supportsMultiModel(userId));
-        
-        return Result.success(status);
+        // 聚合到服务层一次性构建：此前控制器串行发起8+次服务调用（各自查库/查缓存）
+        return Result.success(userApiKeyService.getApiKeyStatusView(userId));
     }
 
     @PostMapping("/model")

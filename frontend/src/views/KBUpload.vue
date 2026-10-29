@@ -32,14 +32,28 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import { apiAddDocumentsFile } from '@/api'
+import { ref, onUnmounted } from 'vue'
+import { apiAddDocumentsFile, apiGetKbUploadTask } from '@/api'
 
 const selectedFile = ref<File|null>(null)
 const dragOver = ref(false)
 const fileInput = ref<HTMLInputElement|null>(null)
 const uploading = ref(false)
 const uploadResult = ref<{ success: boolean; message: string } | null>(null)
+
+let pollTimer: number | null = null
+// 连续失败计数：状态接口持续异常时终止轮询，避免无限重试与反复弹错提示
+let pollFailCount = 0
+const MAX_POLL_FAILURES = 5
+
+function stopPolling() {
+  if (pollTimer !== null) {
+    clearTimeout(pollTimer)
+    pollTimer = null
+  }
+}
+
+onUnmounted(stopPolling)
 
 function triggerFileInput() { fileInput.value?.click() }
 function handleFileSelect(e: Event) {
@@ -56,8 +70,55 @@ async function handleFileUpload() {
   uploading.value = true
   try {
     const res = await apiAddDocumentsFile(selectedFile.value)
-    uploadResult.value = { success: res.code === 200, message: res.message || (res.code === 200 ? '上传成功' : '上传失败') }
-    if (res.code === 200) selectedFile.value = null
+    if (res.code !== 200) {
+      uploadResult.value = { success: false, message: res.message || '上传失败' }
+      return
+    }
+    // 后端为异步任务：提交后立即返回taskId，轮询任务状态直至完成
+    // （上传含AI内容判断+全文向量化，大文件可能耗时较久，此前同步等待请求可挂2分钟以上）
+    const taskId = res.data
+    pollFailCount = 0
+    await new Promise<void>((resolve) => {
+      // 用setTimeout链代替setInterval：上一次请求返回后才调度下一次，避免单次请求超2秒时并发叠加
+      const poll = async () => {
+        try {
+          const task = await apiGetKbUploadTask(taskId)
+          pollFailCount = 0
+          if (task.code !== 200) {
+            // 任务不存在/已过期，终止轮询
+            stopPolling()
+            uploadResult.value = { success: false, message: task.message || '查询任务状态失败' }
+            resolve()
+            return
+          }
+          const st = task.data
+          if (st?.status === 'SUCCESS') {
+            stopPolling()
+            uploadResult.value = { success: true, message: st.message || '上传成功' }
+            selectedFile.value = null
+            resolve()
+          } else if (st?.status === 'FAILED') {
+            stopPolling()
+            uploadResult.value = { success: false, message: st.message || '上传失败' }
+            resolve()
+          } else {
+            // RUNNING：2秒后再查
+            pollTimer = window.setTimeout(poll, 2000)
+          }
+        } catch {
+          // 网络异常：连续失败达上限后终止轮询并提示
+          pollFailCount++
+          if (pollFailCount >= MAX_POLL_FAILURES) {
+            stopPolling()
+            uploadResult.value = { success: false, message: '查询任务状态连续失败，请稍后重新上传' }
+            resolve()
+          } else {
+            pollTimer = window.setTimeout(poll, 2000)
+          }
+        }
+      }
+      poll()
+    })
   } catch (e: unknown) {
     uploadResult.value = { success: false, message: (e as Error).message || '上传失败' }
   } finally { uploading.value = false }

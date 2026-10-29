@@ -1,6 +1,7 @@
 package pkqb.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -10,6 +11,7 @@ import pkqb.mapper.QuestionMapper;
 import pkqb.mapper.RubricMapper;
 import pkqb.mapper.WrongQuestionMapper;
 import pkqb.pojo.dto.ReviewResultRequest;
+import pkqb.pojo.dto.WrongQuestionPageDTO;
 import pkqb.pojo.dto.WrongQuestionRequest;
 import pkqb.pojo.entity.QuestionEntity;
 import pkqb.pojo.entity.QuestionResourceEntity;
@@ -74,6 +76,22 @@ public class WrongQuestionServiceImpl implements WrongQuestionService {
             throw new IllegalArgumentException("题目不存在");
         }
 
+        // 越权校验：题目所属试卷必须为公开或本人创建，
+        // 防止通过枚举题目ID把他人私有试卷的题目（含答案、解析）复制进自己的错题本
+        Long questionRubricId = question.getRubricId() != null ? question.getRubricId() : request.getRubricId();
+        if (questionRubricId != null) {
+            RubricEntity questionRubric = rubricMapper.selectById(questionRubricId);
+            if (questionRubric == null) {
+                throw new IllegalArgumentException("题目所属试卷不存在");
+            }
+            boolean isPrivateRubric = questionRubric.getIsPrivate() != null && questionRubric.getIsPrivate();
+            if (isPrivateRubric && !questionRubric.getCreateId().equals(userId)) {
+                log.warn("[添加错题] 越权拦截, userId={}, questionId={}, rubricId={}, createId={}",
+                        userId, request.getQuestionId(), questionRubricId, questionRubric.getCreateId());
+                throw new IllegalArgumentException("无权将该题目加入错题本");
+            }
+        }
+
         // 创建新错题记录
         WrongQuestionEntity entity = new WrongQuestionEntity();
         entity.setUserId(userId);
@@ -101,53 +119,28 @@ public class WrongQuestionServiceImpl implements WrongQuestionService {
     }
 
     @Override
-    public Result<List<WrongQuestionEntity>> getWrongQuestions(Long userId) {
+    public Result<WrongQuestionPageDTO> getWrongQuestions(Long userId, Integer page, Integer pageSize) {
         try {
+            // 分页参数钳制：page 下限1；pageSize 范围1-100，默认20
+            long currentPage = (page == null || page < 1) ? 1 : page;
+            long size = (pageSize == null || pageSize < 1) ? 20 : Math.min(pageSize, 100);
+
+            Page<WrongQuestionEntity> pageParam = new Page<>(currentPage, size);
             LambdaQueryWrapper<WrongQuestionEntity> wrapper = new LambdaQueryWrapper<>();
             wrapper.eq(WrongQuestionEntity::getUserId, userId)
                    .orderByDesc(WrongQuestionEntity::getCreateTime);
-            List<WrongQuestionEntity> list = wrongQuestionMapper.selectList(wrapper);
+            Page<WrongQuestionEntity> result = wrongQuestionMapper.selectPage(pageParam, wrapper);
 
-            // 批量获取试卷标题
-            List<Long> rubricIds = list.stream()
-                    .map(WrongQuestionEntity::getRubricId)
-                    .filter(Objects::nonNull)
-                    .distinct()
-                    .collect(Collectors.toList());
-            Map<Long, String> rubricTitleMap = Map.of();
-            if (!rubricIds.isEmpty()) {
-                List<RubricEntity> rubrics = rubricMapper.selectBatchIds(rubricIds);
-                rubricTitleMap = rubrics.stream()
-                        .collect(Collectors.toMap(RubricEntity::getId, RubricEntity::getTitle, (a, b) -> a));
-            }
+            // 只对当前页数据补齐视图信息
+            List<WrongQuestionEntity> records = result.getRecords();
+            enrichWrongQuestions(records);
 
-            // 批量获取题目资源
-            List<Long> questionIds = list.stream()
-                    .map(WrongQuestionEntity::getQuestionId)
-                    .filter(Objects::nonNull)
-                    .distinct()
-                    .collect(Collectors.toList());
-            Map<Long, List<QuestionResourceEntity>> resourceMap = Map.of();
-            if (!questionIds.isEmpty()) {
-                // 含已软删资源：原试卷被删除后错题仍需显示图片
-                resourceMap = questionResourceService.getAllByQuestionIds(questionIds);
-            }
-
-            for (WrongQuestionEntity wq : list) {
-                // 历史数据入库时被HTML转义（数学符号变成&deg;等实体），反转义恢复后再返回前端
-                wq.setQuestionText(HtmlEscapeUtil.unescape(wq.getQuestionText()));
-                wq.setAnswer(HtmlEscapeUtil.unescape(wq.getAnswer()));
-                wq.setExplanation(HtmlEscapeUtil.unescape(wq.getExplanation()));
-                wq.setUserAnswer(HtmlEscapeUtil.unescape(wq.getUserAnswer()));
-                if (wq.getRubricId() != null) {
-                    wq.setRubricTitle(rubricTitleMap.get(wq.getRubricId()));
-                }
-                if (wq.getQuestionId() != null) {
-                    wq.setResources(resourceMap.getOrDefault(wq.getQuestionId(), List.of()));
-                }
-            }
-
-            return Result.success(list);
+            WrongQuestionPageDTO dto = new WrongQuestionPageDTO();
+            dto.setList(records);
+            dto.setTotal(result.getTotal());
+            dto.setPage(result.getCurrent());
+            dto.setPageSize(result.getSize());
+            return Result.success(dto);
         } catch (Exception e) {
             log.error("[获取错题] 获取失败", e);
             return Result.error("获取错题列表失败");
@@ -165,49 +158,63 @@ public class WrongQuestionServiceImpl implements WrongQuestionService {
                    .orderByAsc(WrongQuestionEntity::getNextReviewDate);
             List<WrongQuestionEntity> list = wrongQuestionMapper.selectList(wrapper);
 
-            // 批量获取试卷标题
-            List<Long> rubricIds = list.stream()
-                    .map(WrongQuestionEntity::getRubricId)
-                    .filter(Objects::nonNull)
-                    .distinct()
-                    .collect(Collectors.toList());
-            Map<Long, String> rubricTitleMap = Map.of();
-            if (!rubricIds.isEmpty()) {
-                List<RubricEntity> rubrics = rubricMapper.selectBatchIds(rubricIds);
-                rubricTitleMap = rubrics.stream()
-                        .collect(Collectors.toMap(RubricEntity::getId, RubricEntity::getTitle, (a, b) -> a));
-            }
-
-            // 批量获取题目资源
-            List<Long> questionIds = list.stream()
-                    .map(WrongQuestionEntity::getQuestionId)
-                    .filter(Objects::nonNull)
-                    .distinct()
-                    .collect(Collectors.toList());
-            Map<Long, List<QuestionResourceEntity>> resourceMap = Map.of();
-            if (!questionIds.isEmpty()) {
-                // 含已软删资源：原试卷被删除后错题仍需显示图片
-                resourceMap = questionResourceService.getAllByQuestionIds(questionIds);
-            }
-
-            for (WrongQuestionEntity wq : list) {
-                // 历史数据入库时被HTML转义（数学符号变成&deg;等实体），反转义恢复后再返回前端
-                wq.setQuestionText(HtmlEscapeUtil.unescape(wq.getQuestionText()));
-                wq.setAnswer(HtmlEscapeUtil.unescape(wq.getAnswer()));
-                wq.setExplanation(HtmlEscapeUtil.unescape(wq.getExplanation()));
-                wq.setUserAnswer(HtmlEscapeUtil.unescape(wq.getUserAnswer()));
-                if (wq.getRubricId() != null) {
-                    wq.setRubricTitle(rubricTitleMap.get(wq.getRubricId()));
-                }
-                if (wq.getQuestionId() != null) {
-                    wq.setResources(resourceMap.getOrDefault(wq.getQuestionId(), List.of()));
-                }
-            }
+            enrichWrongQuestions(list);
 
             return Result.success(list);
         } catch (Exception e) {
             log.error("[获取今日复习] 获取失败", e);
             return Result.error("获取复习题目失败");
+        }
+    }
+
+    /**
+     * 统一补齐错题视图数据：反转义历史HTML实体、批量填充试卷标题与题目资源
+     * 错题列表与今日复习两个接口原本各自重复同一段填充逻辑，抽出后避免后续改动漏改
+     *
+     * @param list 待补齐的错题列表
+     */
+    private void enrichWrongQuestions(List<WrongQuestionEntity> list) {
+        if (list == null || list.isEmpty()) {
+            return;
+        }
+
+        // 批量获取试卷标题
+        List<Long> rubricIds = list.stream()
+                .map(WrongQuestionEntity::getRubricId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toList());
+        Map<Long, String> rubricTitleMap = Map.of();
+        if (!rubricIds.isEmpty()) {
+            List<RubricEntity> rubrics = rubricMapper.selectBatchIds(rubricIds);
+            rubricTitleMap = rubrics.stream()
+                    .collect(Collectors.toMap(RubricEntity::getId, RubricEntity::getTitle, (a, b) -> a));
+        }
+
+        // 批量获取题目资源
+        List<Long> questionIds = list.stream()
+                .map(WrongQuestionEntity::getQuestionId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toList());
+        Map<Long, List<QuestionResourceEntity>> resourceMap = Map.of();
+        if (!questionIds.isEmpty()) {
+            // 含已软删资源：原试卷被删除后错题仍需显示图片
+            resourceMap = questionResourceService.getAllByQuestionIds(questionIds);
+        }
+
+        for (WrongQuestionEntity wq : list) {
+            // 历史数据入库时被HTML转义（数学符号变成&deg;等实体），反转义恢复后再返回前端
+            wq.setQuestionText(HtmlEscapeUtil.unescape(wq.getQuestionText()));
+            wq.setAnswer(HtmlEscapeUtil.unescape(wq.getAnswer()));
+            wq.setExplanation(HtmlEscapeUtil.unescape(wq.getExplanation()));
+            wq.setUserAnswer(HtmlEscapeUtil.unescape(wq.getUserAnswer()));
+            if (wq.getRubricId() != null) {
+                wq.setRubricTitle(rubricTitleMap.get(wq.getRubricId()));
+            }
+            if (wq.getQuestionId() != null) {
+                wq.setResources(resourceMap.getOrDefault(wq.getQuestionId(), List.of()));
+            }
         }
     }
 

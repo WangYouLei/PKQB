@@ -37,7 +37,7 @@ public class AuthController {
 
     private final UserService userService;
     private final JwtUtil jwtUtil;
-    private final RedisTemplate<String, String> redisTemplate;
+    private final RedisTemplate<String, Object> redisTemplate;
 
     @Value("${jwt.expiration}")
     private long jwtExpiration;
@@ -73,7 +73,8 @@ public class AuthController {
         LoginResponse loginResponse = userService.login(request);
 
         int maxAge = (int) (jwtExpiration / 1000);
-        String cookieValue = String.format("token=%s; Path=/; Max-Age=%d; SameSite=Lax%s",
+        // HttpOnly：禁止JS读取Cookie，防止XSS直接窃取JWT令牌（前端从响应体获取token，不受影响）
+        String cookieValue = String.format("token=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Lax%s",
                 loginResponse.getToken(),
                 maxAge,
                 cookieSecure ? "; Secure" : "");

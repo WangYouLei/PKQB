@@ -43,27 +43,21 @@ public interface FileService {
 
     /**
      * 下载文件
-     * 获取文件内容字节数组
+     * 一次查询同时返回文件元数据与内容，避免调用方重复查库与重复鉴权
      *
      * @param fileId 文件ID
      * @param userId 用户ID
-     * @return 文件内容字节数组
+     * @return 文件元数据与内容
      * @throws pkqb.config.GlobalExceptionHandler.ResourceNotFoundException 文件不存在时抛出
      * @throws pkqb.config.GlobalExceptionHandler.PermissionDeniedException 无权访问时抛出
      */
-    byte[] downloadFile(Long fileId, Long userId);
+    FileDownload downloadFile(Long fileId, Long userId);
 
     /**
-     * 获取文件实体
-     * 获取文件的基本信息
-     *
-     * @param fileId 文件ID
-     * @param userId 用户ID
-     * @return 文件实体
-     * @throws pkqb.config.GlobalExceptionHandler.ResourceNotFoundException 文件不存在时抛出
-     * @throws pkqb.config.GlobalExceptionHandler.PermissionDeniedException 无权访问时抛出
+     * 文件下载结果（元数据 + 内容）
      */
-    FileEntity getFileEntity(Long fileId, Long userId);
+    record FileDownload(FileEntity entity, byte[] content) {
+    }
 
     /**
      * 更新文件信息

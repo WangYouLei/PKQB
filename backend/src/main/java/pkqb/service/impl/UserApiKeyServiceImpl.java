@@ -24,7 +24,9 @@ import pkqb.service.UserApiKeyService;
 import pkqb.util.ApiKeyEncryptor;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -83,6 +85,46 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
     }
 
     @Override
+    public Map<String, Object> getApiKeyStatusView(Long userId) {
+        Map<String, Object> status = new HashMap<>();
+
+        boolean hasOwnKey = hasUserOwnApiKey(userId);
+        // shouldRateLimit的实现即为 !hasUserOwnApiKey，此处直接派生，省一次服务调用
+        boolean shouldLimit = !hasOwnKey;
+
+        // 一次getUserModels（带缓存）后按类型派生主/辅助/视觉模型，
+        // 替代此前各自独立查库，串行服务调用由8+次降为常数次缓存查询
+        List<ModelsEntity> allModels = getUserModels(userId);
+        ModelsEntity mainModel = allModels.stream()
+                .filter(m -> m.getModelType().equals(ModelType.MAIN.getCode()))
+                .findFirst().orElse(null);
+        // 与getAssistantModels保持一致：按创建时间取最新的前2条
+        List<ModelsEntity> assistantModels = allModels.stream()
+                .filter(m -> m.getModelType().equals(ModelType.ASSISTANT.getCode()))
+                .limit(MAX_ASSISTANT_MODEL_COUNT)
+                .collect(Collectors.toList());
+        ModelsEntity visionModel = allModels.stream()
+                .filter(m -> m.getModelType().equals(ModelType.VISION.getCode()))
+                .findFirst().orElse(null);
+
+        status.put("hasOwnApiKey", hasOwnKey);
+        status.put("currentMode", getApiKeyMode(userId).name());
+        status.put("hasRateLimit", shouldLimit);
+        status.put("mainModel", mainModel != null ? mainModel.getModelName() : null);
+        status.put("assistantModels", assistantModels);
+        status.put("visionModel", visionModel);
+        status.put("allModels", allModels);
+        status.put("modelCount", allModels.size());
+        status.put("maxModelCount", MAX_MODEL_COUNT);
+        status.put("canAddModel", allModels.size() < MAX_MODEL_COUNT);
+        // 与supportsMultiModel等价：有自己的Key + 有主模型 + 至少1个辅助模型，直接派生省一次调用
+        status.put("supportsMultiModel", hasOwnKey && mainModel != null && !assistantModels.isEmpty());
+
+        log.info("[API Key管理] 用户 {} 状态视图聚合完成, modelCount={}", userId, allModels.size());
+        return status;
+    }
+
+    @Override
     @Transactional(rollbackFor = Exception.class)
     public void deleteApiKey(Long userId) {
         LambdaUpdateWrapper<UserEntity> updateWrapper = new LambdaUpdateWrapper<>();
@@ -103,10 +145,16 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
     @Override
     public String getPlainApiKey(Long userId) {
         String cacheKey = CACHE_PREFIX + userId + PLAIN_API_KEY_SUFFIX;
-        String cached = stringRedisTemplate.opsForValue().get(cacheKey);
-
-        if (cached != null) {
-            return cached;
+        // Redis 只缓存加密后的密文，避免明文 API Key 泄露到 Redis 内存/RDB/AOF；使用时再解密
+        String cachedCipher = stringRedisTemplate.opsForValue().get(cacheKey);
+        if (cachedCipher != null) {
+            try {
+                return apiKeyEncryptor.decrypt(cachedCipher);
+            } catch (Exception e) {
+                // 兼容历史明文缓存：解密失败说明缓存不可信，清除后回源数据库重新加载
+                log.warn("[API Key管理] 用户 {} 的缓存解密失败，清除缓存并回源数据库", userId);
+                stringRedisTemplate.delete(cacheKey);
+            }
         }
 
         LambdaQueryWrapper<UserEntity> queryWrapper = new LambdaQueryWrapper<>();
@@ -114,17 +162,15 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
                 .select(UserEntity::getApiKey);
 
         UserEntity user = userMapper.selectOne(queryWrapper);
-        String result = null;
         if (user != null && user.getApiKey() != null && !user.getApiKey().isEmpty()) {
-            result = apiKeyEncryptor.decrypt(user.getApiKey());
-        }
-
-        if (result != null) {
-            stringRedisTemplate.opsForValue().set(cacheKey, result,
+            // 缓存DB中已有的密文，需要明文时解密返回
+            stringRedisTemplate.opsForValue().set(cacheKey, user.getApiKey(),
                     CACHE_EXPIRE_HOURS, TimeUnit.HOURS);
+            log.debug("[API Key管理] 用户 {} 缓存API Key密文至Redis", userId);
+            return apiKeyEncryptor.decrypt(user.getApiKey());
         }
 
-        return result;
+        return null;
     }
 
     @Override

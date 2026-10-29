@@ -102,7 +102,8 @@ public class FileServiceImpl implements FileService {
     }
 
     @Override
-    public byte[] downloadFile(Long fileId, Long userId) {
+    public FileDownload downloadFile(Long fileId, Long userId) {
+        // 一次查询完成元数据获取与归属校验，原来元数据与内容分两次查库、两次鉴权
         FileEntity entity = fileMapper.selectById(fileId);
         if (entity == null) {
             throw new ResourceNotFoundException("文件不存在");
@@ -112,21 +113,9 @@ public class FileServiceImpl implements FileService {
             throw new PermissionDeniedException("无权访问该文件");
         }
 
-        return minioService.getFile(entity.getMinioKey());
-    }
-
-    @Override
-    public FileEntity getFileEntity(Long fileId, Long userId) {
-        FileEntity entity = fileMapper.selectById(fileId);
-        if (entity == null) {
-            throw new ResourceNotFoundException("文件不存在");
-        }
-
-        if (!entity.getUserId().equals(userId) && Boolean.TRUE.equals(entity.getIsPrivate())) {
-            throw new PermissionDeniedException("无权访问该文件");
-        }
-
-        return entity;
+        byte[] content = minioService.getFile(entity.getMinioKey());
+        log.info("[文件管理] 用户 {} 下载文件 fileId={} size={}B", userId, fileId, content.length);
+        return new FileDownload(entity, content);
     }
 
     @Override
@@ -198,23 +187,26 @@ public class FileServiceImpl implements FileService {
             return 0;
         }
 
-        int successCount = 0;
-        for (Long fileId : fileIds) {
-            FileEntity entity = fileMapper.selectById(fileId);
-            if (entity == null || !entity.getUserId().equals(userId)) {
-                continue;
+        // 一次性批量查出本批文件再过滤本人文件，避免循环内逐条selectById（100个文件=100次查询）
+        List<FileEntity> ownedFiles = fileMapper.selectBatchIds(fileIds.stream().distinct().toList()).stream()
+                .filter(entity -> userId.equals(entity.getUserId()))
+                .toList();
+
+        if (!ownedFiles.isEmpty()) {
+            // 批量删除DB记录
+            fileMapper.deleteBatchIds(ownedFiles.stream().map(FileEntity::getId).toList());
+            // 逐个清理MinIO对象（失败仅告警，接受孤立文件）
+            for (FileEntity entity : ownedFiles) {
+                try {
+                    minioService.remove(entity.getMinioKey());
+                } catch (Exception e) {
+                    log.warn("[文件删除] Minio文件删除失败，fileId={}, minioKey={}: {}",
+                            entity.getId(), entity.getMinioKey(), e.getMessage());
+                }
             }
-            fileMapper.deleteById(fileId);
-            try {
-                minioService.remove(entity.getMinioKey());
-            } catch (Exception e) {
-                log.warn("[文件删除] Minio文件删除失败，fileId={}, minioKey={}: {}", fileId, entity.getMinioKey(), e.getMessage());
-                // 不抛异常，接受孤立文件
-            }
-            successCount++;
         }
 
-        log.info("[批量删除文件] userId={}, 总数={}, 成功={}", userId, fileIds.size(), successCount);
-        return successCount;
+        log.info("[批量删除文件] userId={}, 总数={}, 成功={}", userId, fileIds.size(), ownedFiles.size());
+        return ownedFiles.size();
     }
 }

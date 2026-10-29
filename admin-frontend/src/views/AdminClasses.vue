@@ -34,7 +34,7 @@
         </div>
         <div class="modal-footer">
           <button class="btn" @click="modal.visible = false">取消</button>
-          <button class="btn btn-primary" @click="submit">确定</button>
+          <button class="btn btn-primary" :disabled="submitting" @click="submit">{{ submitting ? '提交中...' : '确定' }}</button>
         </div>
       </div>
     </div>
@@ -49,6 +49,7 @@ import type { ClassEntity } from '@/types'
 
 const toast = useToast()
 const list = ref<ClassEntity[]>([])
+const submitting = ref(false)
 const modal = reactive({ visible: false, id: 0, form: { className: '' } })
 
 async function loadList() {
@@ -73,11 +74,14 @@ function openEdit(row: ClassEntity) {
 }
 
 async function submit() {
+  // 提交中直接返回，避免重复提交
+  if (submitting.value) return
   const name = modal.form.className.trim()
   if (!name) {
     toast.error('班级名称不能为空')
     return
   }
+  submitting.value = true
   try {
     if (modal.id) {
       await apiAdminClassUpdate(modal.id, name)
@@ -90,6 +94,8 @@ async function submit() {
     loadList()
   } catch (e: any) {
     toast.error(e?.message || '操作失败')
+  } finally {
+    submitting.value = false
   }
 }
 

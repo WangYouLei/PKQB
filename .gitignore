@@ -1,0 +1,18 @@
+# 构建产物
+backend/target/
+frontend/dist/
+admin-frontend/dist/
+
+# 依赖
+node_modules/
+
+# IDE
+.idea/
+.codebuddy/
+.trae/
+*.iml
+backend/classpath.txt
+
+# 环境与缓存
+*.log
+.DS_Store

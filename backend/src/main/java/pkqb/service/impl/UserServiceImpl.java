@@ -86,18 +86,24 @@ public class UserServiceImpl implements UserService {
         }
     }
 
+    /** 时序侧信道防护用的固定哈希：用户不存在时也执行一次同代价的密码验证，抹平响应时间差 */
+    private static final String DUMMY_PASSWORD_HASH = Argon2idUtil.hash("timing-equalizer-dummy");
+
     @Override
     public LoginResponse login(LoginRequest request) {
         LambdaQueryWrapper<UserEntity> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(UserEntity::getStudentNo, request.getStudentNo());
         UserEntity user = userMapper.selectOne(wrapper);
 
+        // 统一失败提示：不区分“用户不存在/密码错误”，防止通过报错差异枚举有效学号
         if (user == null) {
-            throw new ResourceNotFoundException("用户不存在");
+            // 用户不存在也执行一次Argon2验证（结果丢弃），避免“不存在快返回/密码错误慢返回”的时间差泄露学号是否有效
+            Argon2idUtil.verify(DUMMY_PASSWORD_HASH, request.getPassword());
+            throw new PermissionDeniedException("学号或密码错误");
         }
 
         if (!Argon2idUtil.verify(user.getPasswordHash(), request.getPassword())) {
-            throw new PermissionDeniedException("密码错误");
+            throw new PermissionDeniedException("学号或密码错误");
         }
 
         String token = jwtUtil.generateToken(user.getId(), user.getUsername());
@@ -134,6 +140,14 @@ public class UserServiceImpl implements UserService {
     @Transactional(rollbackFor = Exception.class)
     public String updateAvatar(Long userId, String objectKey) {
         log.info("开始更新用户 {} 的头像, objectKey: {}", userId, objectKey);
+
+        // 安全校验：objectKey 必须位于当前用户自己的头像目录下，
+        // 防止恶意传入他人对象Key（如知识库、试卷文件）导致换头像时被 minioService.remove 删除
+        String expectedPrefix = "avatar/" + userId + "/";
+        if (objectKey == null || !objectKey.startsWith(expectedPrefix)) {
+            log.warn("[头像更新] 拒绝非法objectKey, userId={}, objectKey={}", userId, objectKey);
+            throw new IllegalArgumentException("非法的头像文件路径");
+        }
 
         UserEntity existingUser = userMapper.selectById(userId);
         String oldAvatarUrl = (existingUser != null && existingUser.getAvatarUrl() != null && !existingUser.getAvatarUrl().isEmpty())

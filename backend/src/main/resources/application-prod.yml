@@ -1,0 +1,12 @@
+# 生产环境配置（启动时通过 --spring.profiles.active=prod 激活，覆盖默认开发配置）
+# 安全：生产环境关闭接口文档，避免API结构对外暴露
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+logging:
+  level:
+    # 生产环境将MyBatis的SQL日志降为warn，避免全量SQL参数落盘
+    org.mybatis: warn

@@ -227,7 +227,7 @@
               <div v-if="q.explanation" class="question-explanation">解析: {{ q.explanation }}</div>
               <div v-if="q.calculationStepsJson" class="question-steps">
                 <div>计算步骤:</div>
-                <div v-for="(step, si) in parseJson(q.calculationStepsJson)" :key="si">{{ si + 1 }}. {{ step }}</div>
+                <div v-for="(step, si) in getSteps(q)" :key="si">{{ si + 1 }}. {{ step }}</div>
               </div>
             </div>
           </div>
@@ -258,7 +258,7 @@
                 <label>选项：</label>
                 <div v-for="(_, oi) in getOptionsForEdit(q)" :key="oi" class="option-edit-row">
                   <span class="option-label">{{ String.fromCharCode(65 + oi) }}.</span>
-                  <input v-model="getOptionsForEdit(q)[oi]" class="edit-input" :disabled="q.questionType === 'true_false'" />
+                  <input :value="getOptionsForEdit(q)[oi]" @input="updateOption(q, oi, ($event.target as HTMLInputElement).value)" class="edit-input" :disabled="q.questionType === 'true_false'" />
                   <button 
                     v-if="q.questionType !== 'true_false' && getOptionsForEdit(q).length > 2" 
                     class="option-action-btn delete" 
@@ -350,14 +350,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, reactive, watch } from 'vue'
-import { apiGetClassPublicFiles, apiGetPublicRubrics, apiGetQuestionsByRubricId, apiAiSolveQuestion, apiDeleteFile, apiBatchSaveQuestions, apiAddWrongQuestion } from '@/api'
+import { ref, onMounted } from 'vue'
+import { apiGetClassPublicFiles, apiGetPublicRubrics, apiDeleteFile } from '@/api'
+import { authHeaders } from '@/api/request'
 import { useUserStore } from '@/stores/user'
-import type { HtmlFileItem, RubricItem, RubricQuestion } from '@/types'
+import type { HtmlFileItem, RubricItem } from '@/types'
 import FileCard from '@/components/FileCard.vue'
 import { getQuestionImages } from '@/composables/useQuestionResources'
+import { useToast } from '@/composables/useToast'
+import { useExamPlayer } from '@/composables/useExamPlayer'
 
 const userStore = useUserStore()
+const toast = useToast()
 
 // 标签页切换
 const activeTab = ref<'files' | 'rubrics'>('files')
@@ -366,34 +370,12 @@ const activeTab = ref<'files' | 'rubrics'>('files')
 const files = ref<HtmlFileItem[]>([])
 const loading = ref(true)
 
-// 试卷相关
+// 试卷相关（试卷详情、题目与作答状态统一由 useExamPlayer 管理）
 const rubrics = ref<RubricItem[]>([])
 const rubricLoading = ref(true)
-const showRubricDetail = ref(false)
-const currentRubric = ref<RubricItem | null>(null)
-const questions = ref<RubricQuestion[]>([])
-const questionsLoading = ref(false)
-
-watch(questions, (newQuestions) => {
-  newQuestions.forEach(q => {
-    initQuestionOptions(q)
-  })
-}, { deep: true })
-
-// 考试模式
-const examMode = ref<'practice' | 'review' | 'edit'>('practice')
-const currentQuestionIndex = ref(0)
-const userAnswers = ref<Record<number, string>>({})  // 选择题/判断题答案
-const userTextAnswers = ref<Record<number, string>>({})  // 简答题/计算题答案
-const showAnswer = ref(false)
 
 // 是否为创建者
 const isCreator = ref(false)
-
-// AI解答加载状态
-const aiLoading = reactive<Record<number, boolean>>({})
-const aiResults = reactive<Record<number, { answer?: string; explanation?: string; steps?: string }>>({})
-const saveAllLoading = ref(false)
 
 // 提示弹窗
 const showToast = ref(false)
@@ -405,6 +387,57 @@ function showToastMsg(title: string, message: string) {
   toastMessage.value = message
   showToast.value = true
 }
+
+// 试卷作答/背题/改题的公共逻辑（与 MyFiles.vue 共用）
+const {
+  showRubricDetail,
+  currentRubric,
+  questions,
+  questionsLoading,
+  examMode,
+  currentQuestionIndex,
+  userAnswers,
+  userTextAnswers,
+  showAnswer,
+  aiLoading,
+  aiResults,
+  saveAllLoading,
+  openRubric,
+  resetProgress,
+  hasOptions,
+  needsOptions,
+  getOptions,
+  getOptionsForEdit,
+  updateOption,
+  getSteps,
+  addOption,
+  removeOption,
+  formatAnswer,
+  getCorrectAnswer,
+  isTextQuestion,
+  isMultipleChoice,
+  isOptionSelected,
+  isOptionCorrect,
+  selectAnswer,
+  submitChoiceAnswer,
+  submitAnswer,
+  isCurrentAnswerCorrect,
+  prevQuestion,
+  nextQuestion,
+  skipQuestion,
+  getUserAnswer,
+  getTypeLabel,
+  generateAiAll,
+  useAiAnswer,
+  useAiExplanation,
+  useAiSteps,
+  clearAiAnswer,
+  clearAiExplanation,
+  clearAiSteps,
+  addQuestionAfter,
+  deleteQuestion,
+  saveAllQuestions
+} = useExamPlayer({ notify: showToastMsg })
 
 onMounted(async () => {
   await loadFiles()
@@ -445,7 +478,7 @@ async function handleDeleteFile(file: HtmlFileItem) {
     }
   } catch (e) {
     console.error('删除文件失败', e)
-    alert('删除文件失败')
+    toast.error('删除文件失败')
   }
 }
 
@@ -456,166 +489,18 @@ function handleFileUpdated(updatedFile: HtmlFileItem) {
   }
 }
 
-async function handleOpenRubric(rubric: RubricItem) {
-  currentRubric.value = rubric
-  showRubricDetail.value = true
-  questionsLoading.value = true
-  examMode.value = 'practice'
-  
+function handleOpenRubric(rubric: RubricItem) {
   isCreator.value = rubric.createId === userStore.userId
-  
-  try {
-    const res = await apiGetQuestionsByRubricId(rubric.id)
-    if (res.code === 200) {
-      questions.value = res.data || []
-    }
-  } catch (e) {
-    console.error('获取题目列表失败', e)
-  } finally {
-    questionsLoading.value = false
-  }
-}
-
-async function generateAiAll(idx: number) {
-  const q = questions.value[idx]
-  if (!q) return
-  
-  aiLoading[idx] = true
-  try {
-    const res = await apiAiSolveQuestion({
-      questionText: q.questionText,
-      questionType: q.questionType,
-      optionsJson: q.optionsJson,
-      generateType: 'all'
-    })
-    if (res.code === 200) {
-      const data = JSON.parse(res.data)
-      aiResults[idx] = {
-        answer: data.answer || '',
-        explanation: data.explanation || '',
-        steps: data.steps || ''
-      }
-      showToastMsg('成功', 'AI解答完成，请查看下方生成结果')
-    } else {
-      const errorMsg = res.message || ''
-      if (errorMsg.includes('API') || errorMsg.includes('key') || errorMsg.includes('Key') || errorMsg.includes('model') || errorMsg.includes('Model')) {
-        showToastMsg('错误', '上传的API Key或模型名称有误，请核验')
-      } else {
-        showToastMsg('错误', res.message || 'AI解答失败')
-      }
-    }
-  } catch (e: unknown) {
-    console.error('AI解答失败', e)
-    const errorMsg = (e as Error)?.message || ''
-    if (errorMsg.includes('API') || errorMsg.includes('key') || errorMsg.includes('Key') || errorMsg.includes('model') || errorMsg.includes('Model') || errorMsg.includes('401') || errorMsg.includes('403') || errorMsg.includes('invalid')) {
-      showToastMsg('错误', '上传的API Key或模型名称有误，请核验')
-    } else {
-      showToastMsg('错误', 'AI解答失败')
-    }
-  } finally {
-    aiLoading[idx] = false
-  }
-}
-
-function useAiAnswer(idx: number) {
-  if (aiResults[idx]?.answer) {
-    const q = questions.value[idx]
-    if (q.questionType === 'true_false') {
-      q.answer = normalizeAnswerText(aiResults[idx].answer!)
-    } else {
-      q.answer = aiResults[idx].answer
-    }
-  }
-}
-
-function useAiExplanation(idx: number) {
-  if (aiResults[idx]?.explanation) {
-    questions.value[idx].explanation = aiResults[idx].explanation
-  }
-}
-
-function useAiSteps(idx: number) {
-  if (aiResults[idx]?.steps) {
-    const steps = aiResults[idx].steps.split('\n').filter((s: string) => s.trim())
-    questions.value[idx].calculationStepsJson = JSON.stringify(steps)
-  }
-}
-
-function clearAiAnswer(idx: number) {
-  if (aiResults[idx]) {
-    aiResults[idx].answer = ''
-  }
-}
-
-function clearAiExplanation(idx: number) {
-  if (aiResults[idx]) {
-    aiResults[idx].explanation = ''
-  }
-}
-
-function clearAiSteps(idx: number) {
-  if (aiResults[idx]) {
-    aiResults[idx].steps = ''
-  }
-}
-
-function addQuestionAfter(idx: number) {
-  const newQuestion: RubricQuestion = {
-    id: -Date.now(),
-    rubricId: currentRubric.value?.id || 0,
-    questionType: 'single_choice',
-    questionText: '',
-    optionsJson: '[]',
-    answer: '',
-    explanation: '',
-    calculationStepsJson: '',
-    orderIndex: idx + 2
-  }
-  questions.value.splice(idx + 1, 0, newQuestion)
-}
-
-function deleteQuestion(idx: number) {
-  if (confirm('确定要删除这道题目吗？')) {
-    questions.value.splice(idx, 1)
-  }
-}
-
-async function saveAllQuestions() {
-  if (!currentRubric.value) return
-  
-  saveAllLoading.value = true
-  try {
-    const questionsData = questions.value.map((q, idx) => ({
-      questionType: q.questionType,
-      questionText: q.questionText,
-      optionsJson: q.optionsJson,
-      answer: q.answer,
-      explanation: q.explanation,
-      calculationStepsJson: q.calculationStepsJson,
-      resources: q.resources || [],
-      orderIndex: idx + 1
-    }))
-    
-    const res = await apiBatchSaveQuestions(currentRubric.value.id, questionsData)
-    if (res.code === 200) {
-      showToastMsg('成功', '保存成功')
-    } else {
-      showToastMsg('错误', res.message || '保存失败')
-    }
-  } catch (e) {
-    console.error('保存题目失败', e)
-    showToastMsg('错误', '保存失败')
-  } finally {
-    saveAllLoading.value = false
-  }
+  // 与MyFiles保持一致：切换试卷时重置题号与作答，避免上一份试卷的答案残留到新试卷
+  resetProgress()
+  openRubric(rubric)
 }
 
 // 预览文件 - 在新窗口打开
 async function handlePreviewFile(file: HtmlFileItem) {
   try {
-    const token = localStorage.getItem('token')
     const response = await fetch(`/api/files/download/${file.id}`, {
-      headers: { 'token': token || '' }
+      headers: authHeaders()
     })
     if (!response.ok) {
       throw new Error('预览失败')
@@ -627,7 +512,7 @@ async function handlePreviewFile(file: HtmlFileItem) {
     const blobUrl = URL.createObjectURL(htmlBlob)
     const newWindow = window.open(blobUrl, '_blank')
     if (!newWindow) {
-      alert('无法打开新窗口，请允许弹窗')
+      toast.warning('无法打开新窗口，请允许弹窗')
     }
     // 延迟释放 URL，确保新窗口能够加载
     setTimeout(() => {
@@ -635,16 +520,15 @@ async function handlePreviewFile(file: HtmlFileItem) {
     }, 10000)
   } catch (e) {
     console.error('预览文件失败', e)
-    alert('预览文件失败')
+    toast.error('预览文件失败')
   }
 }
 
 // 下载文件 - 直接触发下载
 async function handleDownloadFile(file: HtmlFileItem) {
   try {
-    const token = localStorage.getItem('token')
     const response = await fetch(`/api/files/download/${file.id}`, {
-      headers: { 'token': token || '' }
+      headers: authHeaders()
     })
     if (!response.ok) {
       throw new Error('下载失败')
@@ -665,300 +549,13 @@ async function handleDownloadFile(file: HtmlFileItem) {
     window.URL.revokeObjectURL(url)
   } catch (e) {
     console.error('下载文件失败', e)
-    alert('下载文件失败')
+    toast.error('下载文件失败')
   }
-}
-
-// 判断题目是否有选项
-function hasOptions(q: RubricQuestion): boolean {
-  if (!q.optionsJson) return false
-  try {
-    const opts = JSON.parse(q.optionsJson)
-    return Array.isArray(opts) && opts.length > 0
-  } catch { return false }
-}
-
-function needsOptions(questionType: string): boolean {
-  return questionType === 'single_choice' || questionType === 'multiple_choice' || questionType === 'true_false'
-}
-
-function getOptionsForEdit(q: RubricQuestion): string[] {
-  if (q.questionType === 'true_false') {
-    return ['正确', '错误']
-  }
-  if (!q.optionsJson) {
-    return ['', '', '', '']
-  }
-  try {
-    const opts = JSON.parse(q.optionsJson)
-    return Array.isArray(opts) && opts.length > 0 ? opts : ['', '', '', '']
-  } catch { 
-    return ['', '', '', '']
-  }
-}
-
-function addOption(q: RubricQuestion) {
-  const options = getOptionsForEdit(q)
-  options.push('')
-  q.optionsJson = JSON.stringify(options)
-}
-
-function removeOption(q: RubricQuestion, index: number) {
-  const options = getOptionsForEdit(q)
-  if (options.length > 2) {
-    options.splice(index, 1)
-    q.optionsJson = JSON.stringify(options)
-  }
-}
-
-function initQuestionOptions(q: RubricQuestion) {
-  if (q.questionType === 'true_false') {
-    q.optionsJson = JSON.stringify(['正确', '错误'])
-    normalizeTrueFalseAnswer(q)
-  } else if ((q.questionType === 'single_choice' || q.questionType === 'multiple_choice') && !q.optionsJson) {
-    q.optionsJson = JSON.stringify(['', '', '', ''])
-  }
-}
-
-function normalizeTrueFalseAnswer(q: RubricQuestion) {
-  if (q.questionType !== 'true_false' || !q.answer) return
-  const answer = q.answer.trim()
-  const positiveKeywords = ['√', '正确', '对', '是', 'yes', 'YES', 'Yes', 'true', 'TRUE', 'True', '1', 'A', 'a']
-  const negativeKeywords = ['×', '错误', '错', '否', 'no', 'NO', 'No', 'false', 'FALSE', 'False', '0', 'B', 'b']
-  
-  if (positiveKeywords.includes(answer)) {
-    q.answer = '正确'
-  } else if (negativeKeywords.includes(answer)) {
-    q.answer = '错误'
-  }
-}
-
-function normalizeAnswerText(answer: string): string {
-  if (!answer) return ''
-  const trimmed = answer.trim()
-  const positiveKeywords = ['√', '正确', '对', '是', 'yes', 'YES', 'Yes', 'true', 'TRUE', 'True', '1', 'A', 'a']
-  const negativeKeywords = ['×', '错误', '错', '否', 'no', 'NO', 'No', 'false', 'FALSE', 'False', '0', 'B', 'b']
-  
-  if (positiveKeywords.includes(trimmed)) {
-    return '正确'
-  } else if (negativeKeywords.includes(trimmed)) {
-    return '错误'
-  }
-  return answer
-}
-
-function formatAnswer(q: RubricQuestion): string {
-  if (q.questionType === 'true_false') {
-    return normalizeAnswerText(q.answer || '')
-  }
-  return q.answer || ''
-}
-
-// 获取选项数组
-function getOptions(q: RubricQuestion): string[] {
-  if (!q.optionsJson) return []
-  try {
-    return JSON.parse(q.optionsJson)
-  } catch { return [] }
-}
-
-// 解析JSON
-function parseJson(str: string): string[] {
-  if (!str) return []
-  try {
-    return JSON.parse(str)
-  } catch { return [] }
-}
-
-// 获取正确答案
-function getCorrectAnswer(q: RubricQuestion): string {
-  return q.answer || ''
-}
-
-// 判断是否为简答题/计算题
-function isTextQuestion(q: RubricQuestion): boolean {
-  if (!q) return false
-  return q.questionType === 'short_answer' || q.questionType === 'calculation'
-}
-
-// 判断是否为多选题
-function isMultipleChoice(q: RubricQuestion): boolean {
-  return q?.questionType === 'multiple_choice'
-}
-
-// 判断选项是否被用户选中（支持多选答案如 "A,C"）
-function isOptionSelected(index: number, optionLetter: string): boolean {
-  const answer = userAnswers.value[index]
-  if (!answer) return false
-  return answer.split(',').map(s => s.trim()).includes(optionLetter)
-}
-
-// 判断选项是否为正确答案
-function isOptionCorrect(q: RubricQuestion, optionLetter: string, optionIndex: number): boolean {
-  const options = getOptions(q)
-  const correctAnswer = getCorrectAnswer(q)
-  return optionLetter === correctAnswer || options[optionIndex] === correctAnswer ||
-    correctAnswer.split(',').map(s => s.trim()).includes(optionLetter)
-}
-
-// 选择答案（单选直接判断，多选 toggle）
-function selectAnswer(answer: string) {
-  if (showAnswer.value) return
-  const q = questions.value[currentQuestionIndex.value]
-
-  if (isMultipleChoice(q)) {
-    // 多选题：toggle 选项
-    const current = userAnswers.value[currentQuestionIndex.value] || ''
-    const selected = current ? current.split(',').map(s => s.trim()) : []
-    const idx = selected.indexOf(answer)
-    if (idx >= 0) {
-      selected.splice(idx, 1)
-    } else {
-      selected.push(answer)
-    }
-    selected.sort()
-    userAnswers.value[currentQuestionIndex.value] = selected.join(',')
-  } else {
-    // 单选题/判断题：直接判断
-    userAnswers.value[currentQuestionIndex.value] = answer
-    if (hasOptions(q)) {
-      const options = getOptions(q)
-      const selectedIndex = answer.charCodeAt(0) - 65
-      const selectedContent = options[selectedIndex]
-      const isCorrect = answer === q.answer || selectedContent === q.answer
-      if (isCorrect) {
-        setTimeout(() => {
-          if (currentQuestionIndex.value < questions.value.length - 1) {
-            currentQuestionIndex.value++
-            showAnswer.value = false
-          } else {
-            showRubricDetail.value = false
-          }
-        }, 300)
-      } else {
-        showAnswer.value = true
-        // 答错时自动添加到错题本
-        apiAddWrongQuestion({
-          questionId: q.id!,
-          rubricId: currentRubric.value?.id || 0,
-          userAnswer: answer
-        }).catch(e => console.error('添加错题失败', e))
-      }
-    }
-  }
-}
-
-// 多选题确认答案
-function submitChoiceAnswer() {
-  const q = questions.value[currentQuestionIndex.value]
-  if (!q || !userAnswers.value[currentQuestionIndex.value]) return
-  showAnswer.value = true
-  // 答错时自动添加到错题本
-  if (!isCurrentAnswerCorrect()) {
-    apiAddWrongQuestion({
-      questionId: q.id!,
-      rubricId: currentRubric.value?.id || 0,
-      userAnswer: userAnswers.value[currentQuestionIndex.value]
-    }).catch(e => console.error('添加错题失败', e))
-  }
-}
-
-// 提交答案
-function submitAnswer() {
-  const q = questions.value[currentQuestionIndex.value]
-  if (isTextQuestion(q) && userTextAnswers.value[currentQuestionIndex.value]) {
-    userAnswers.value[currentQuestionIndex.value] = userTextAnswers.value[currentQuestionIndex.value]
-  }
-  showAnswer.value = true
-  // 简答题/计算题答错时自动添加到错题本
-  if (q && !isCurrentAnswerCorrect()) {
-    apiAddWrongQuestion({
-      questionId: q.id!,
-      rubricId: currentRubric.value?.id || 0,
-      userAnswer: userTextAnswers.value[currentQuestionIndex.value] || ''
-    }).catch(e => console.error('添加错题失败', e))
-  }
-}
-
-// 判断当前答案是否正确
-function isCurrentAnswerCorrect(): boolean {
-  const q = questions.value[currentQuestionIndex.value]
-  if (!q) return false
-  const userAnswer = userAnswers.value[currentQuestionIndex.value]
-  if (!userAnswer) return false
-  
-  if (hasOptions(q)) {
-    if (isMultipleChoice(q)) {
-      // 多选题：将用户答案和正确答案都拆分为集合比较
-      const userSet = new Set(userAnswer.split(',').map(s => s.trim().toUpperCase()))
-      const correctAnswer = q.answer || ''
-      const correctSet = new Set(correctAnswer.split(',').map(s => s.trim().toUpperCase()))
-      if (userSet.size !== correctSet.size) return false
-      for (const item of userSet) {
-        if (!correctSet.has(item)) return false
-      }
-      return true
-    }
-    const options = getOptions(q)
-    const selectedIndex = userAnswer.charCodeAt(0) - 65
-    const selectedContent = options[selectedIndex]
-    return userAnswer === q.answer || selectedContent === q.answer
-  }
-  return userAnswer.trim() === q.answer?.trim()
-}
-
-// 上一题
-function prevQuestion() {
-  if (currentQuestionIndex.value > 0) {
-    currentQuestionIndex.value--
-    showAnswer.value = !!userAnswers.value[currentQuestionIndex.value] || !!userTextAnswers.value[currentQuestionIndex.value]
-  }
-}
-
-// 下一题
-function nextQuestion() {
-  if (currentQuestionIndex.value < questions.value.length - 1) {
-    currentQuestionIndex.value++
-    showAnswer.value = false
-  } else {
-    showRubricDetail.value = false
-  }
-}
-
-// 跳过当前题
-function skipQuestion() {
-  if (currentQuestionIndex.value < questions.value.length - 1) {
-    currentQuestionIndex.value++
-    showAnswer.value = false
-  } else {
-    showRubricDetail.value = false
-  }
-}
-
-// 获取当前题目用户填写的答案
-function getUserAnswer(): string {
-  const q = questions.value[currentQuestionIndex.value]
-  if (!q) return ''
-  if (isTextQuestion(q)) {
-    return userTextAnswers.value[currentQuestionIndex.value] || ''
-  }
-  return userAnswers.value[currentQuestionIndex.value] || ''
 }
 
 function formatDate(dateStr: string): string {
   if (!dateStr) return ''
   return dateStr.substring(0, 10)
-}
-
-function getTypeLabel(type: string): string {
-  const map: Record<string, string> = {
-    single_choice: '单选题',
-    multiple_choice: '多选题',
-    true_false: '判断题',
-    short_answer: '简答题',
-    calculation: '计算题'
-  }
-  return map[type] || type
 }
 </script>
 

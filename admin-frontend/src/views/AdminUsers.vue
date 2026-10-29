@@ -98,7 +98,7 @@
 
         <div class="modal-footer">
           <button class="btn" @click="modal.visible = false">取消</button>
-          <button class="btn btn-primary" @click="submit">确定</button>
+          <button class="btn btn-primary" :disabled="submitting" @click="submit">{{ submitting ? '提交中...' : '确定' }}</button>
         </div>
       </div>
     </div>
@@ -116,9 +116,12 @@ import {
   apiAdminClassList
 } from '@/api'
 import { useToast } from '@/composables/useToast'
+import { useAuthStore } from '@/stores/auth'
 import type { AdminUserVO, ClassEntity, IPage } from '@/types'
 
 const toast = useToast()
+const auth = useAuthStore()
+const submitting = ref(false)
 const list = ref<AdminUserVO[]>([])
 const total = ref(0)
 const query = reactive({
@@ -154,13 +157,19 @@ async function loadClasses() {
   }
 }
 
+// 请求序号：避免筛选条件快速变化时旧响应覆盖新响应
+let listSeq = 0
+
 async function loadList() {
+  const seq = ++listSeq
   try {
     const res = await apiAdminUserPage(query)
+    if (seq !== listSeq) return
     const p: IPage<AdminUserVO> = res.data!
     list.value = p.records
     total.value = p.total
   } catch (e: any) {
+    if (seq !== listSeq) return
     toast.error(e?.message || '加载失败')
   }
 }
@@ -192,6 +201,11 @@ function openCreate() {
 }
 
 function openEdit(row: AdminUserVO) {
+  // 禁止对自己执行编辑操作
+  if (row.id === auth.userId) {
+    toast.error('不能对自己执行该操作')
+    return
+  }
   modal.type = 'edit'
   modal.visible = true
   modal.id = row.id
@@ -205,6 +219,11 @@ function openEdit(row: AdminUserVO) {
 }
 
 function openReset(row: AdminUserVO) {
+  // 自我保护：不能通过管理端重置自己的密码
+  if (row.id === auth.userId) {
+    toast.error('不能对自己执行该操作')
+    return
+  }
   modal.type = 'reset'
   modal.visible = true
   modal.id = row.id
@@ -212,6 +231,9 @@ function openReset(row: AdminUserVO) {
 }
 
 async function submit() {
+  // 提交中直接返回，避免重复提交
+  if (submitting.value) return
+  submitting.value = true
   try {
     if (modal.type === 'create') {
       if (!modal.form.username.trim()) {
@@ -266,14 +288,25 @@ async function submit() {
     loadList()
   } catch (e: any) {
     toast.error(e?.message || '操作失败')
+  } finally {
+    submitting.value = false
   }
 }
 
 async function remove(row: AdminUserVO) {
+  // 禁止删除自己
+  if (row.id === auth.userId) {
+    toast.error('不能对自己执行该操作')
+    return
+  }
   if (!window.confirm(`确认删除账号「${row.username}」？`)) return
   try {
     await apiAdminUserDelete(row.id)
     toast.success('删除成功')
+    // 删除的是当前页最后一条记录时回退页码，避免停留在空白页
+    if (list.value.length === 1 && query.page > 1) {
+      query.page -= 1
+    }
     loadList()
   } catch (e: any) {
     toast.error(e?.message || '删除失败')
@@ -286,8 +319,8 @@ function goPage(p: number) {
   loadList()
 }
 
-onMounted(async () => {
-  await loadClasses()
-  await loadList()
+onMounted(() => {
+  // 班级与账号列表互不依赖，并行加载
+  return Promise.all([loadClasses(), loadList()])
 })
 </script>

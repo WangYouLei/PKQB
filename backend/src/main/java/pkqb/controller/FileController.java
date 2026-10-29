@@ -12,7 +12,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import pkqb.common.Result;
 import pkqb.pojo.dto.FileResponse;
-import pkqb.pojo.entity.FileEntity;
 import pkqb.service.FileService;
 
 import java.util.List;
@@ -66,13 +65,13 @@ public class FileController {
     public ResponseEntity<Resource> downloadFile(
             @Parameter(description = "文件ID") @PathVariable Long fileId,
             @Parameter(description = "用户ID") @RequestAttribute("userId") Long userId) {
-        FileEntity entity = fileService.getFileEntity(fileId, userId);
-        byte[] data = fileService.downloadFile(fileId, userId);
-        
-        ByteArrayResource resource = new ByteArrayResource(data);
-        
+        // 单次调用同时拿到元数据与内容，避免重复查库与重复鉴权
+        FileService.FileDownload download = fileService.downloadFile(fileId, userId);
+
+        ByteArrayResource resource = new ByteArrayResource(download.content());
+
         HttpHeaders headers = new HttpHeaders();
-        String fileName = entity.getFileName();
+        String fileName = download.entity().getFileName();
         String encodedFileName;
         try {
             encodedFileName = java.net.URLEncoder.encode(fileName, "UTF-8");

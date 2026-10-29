@@ -44,6 +44,12 @@ async function handleLogin() {
   loading.value = true
   try {
     await auth.login(form.username, form.password)
+    // 非管理员账号不允许进入管理端，给出明确提示并清除登录态
+    if (auth.role !== 1) {
+      auth.logout()
+      error.value = '该账号不是管理员账号'
+      return
+    }
     toast.success('登录成功')
     router.push('/')
   } catch (e: any) {

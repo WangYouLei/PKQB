@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 import pkqb.common.Result;
 import pkqb.pojo.dto.ReviewResultRequest;
+import pkqb.pojo.dto.WrongQuestionPageDTO;
 import pkqb.pojo.dto.WrongQuestionRequest;
 import pkqb.pojo.entity.WrongQuestionEntity;
 import pkqb.service.WrongQuestionService;
@@ -37,13 +38,15 @@ public class WrongQuestionController {
     }
 
     @GetMapping("/list")
-    @Operation(summary = "获取错题列表", description = "获取当前用户的所有错题")
-    public Result<List<WrongQuestionEntity>> getWrongQuestions(HttpServletRequest httpRequest) {
+    @Operation(summary = "获取错题列表", description = "分页获取当前用户的错题，按创建时间倒序，默认每页20条")
+    public Result<WrongQuestionPageDTO> getWrongQuestions(@RequestParam(defaultValue = "1") Integer page,
+                                                          @RequestParam(defaultValue = "20") Integer pageSize,
+                                                          HttpServletRequest httpRequest) {
         Long userId = (Long) httpRequest.getAttribute("userId");
         if (userId == null) {
             return Result.error("未登录或登录已过期");
         }
-        return wrongQuestionService.getWrongQuestions(userId);
+        return wrongQuestionService.getWrongQuestions(userId, page, pageSize);
     }
 
     @GetMapping("/today-review")

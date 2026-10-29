@@ -138,6 +138,12 @@
             </div>
           </div>
         </div>
+        <!-- 分页 -->
+        <div v-if="totalPages > 1" class="pagination">
+          <button class="btn btn-sm btn-secondary" :disabled="page <= 1" @click="goToPage(page - 1)">上一页</button>
+          <span class="page-info">第 {{ page }} / {{ totalPages }} 页</span>
+          <button class="btn btn-sm btn-secondary" :disabled="page >= totalPages" @click="goToPage(page + 1)">下一页</button>
+        </div>
       </div>
     </div>
 
@@ -334,6 +340,12 @@ const loading = ref(true)
 const expandedGroups = ref(new Set<number>())
 const expandedQuestions = ref(new Set<number>())
 
+// 分页（全部错题）
+const page = ref(1)
+const pageSize = 20
+const total = ref(0)
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
+
 // 今日复习
 const reviewQuestions = ref<WrongQuestion[]>([])
 const reviewLoading = ref(true)
@@ -372,9 +384,10 @@ async function loadStats() {
 async function loadWrongQuestions() {
   loading.value = true
   try {
-    const res = await apiGetWrongQuestions()
-    if (res.code === 200) {
-      wrongQuestions.value = res.data || []
+    const res = await apiGetWrongQuestions(page.value, pageSize)
+    if (res.code === 200 && res.data) {
+      wrongQuestions.value = res.data.list || []
+      total.value = res.data.total || 0
       // 默认展开第一个分组
       if (wrongQuestions.value.length > 0) {
         expandedGroups.value.add(wrongQuestions.value[0].rubricId)
@@ -382,6 +395,13 @@ async function loadWrongQuestions() {
     }
   } catch (e) { console.error('获取错题列表失败', e) }
   finally { loading.value = false }
+}
+
+// 切换页码
+function goToPage(target: number) {
+  if (target < 1 || target > totalPages.value || target === page.value) return
+  page.value = target
+  loadWrongQuestions()
 }
 
 async function loadReviewQuestions() {
@@ -497,10 +517,13 @@ async function confirmDelete() {
   try {
     const res = await apiDeleteWrongQuestion(pendingDeleteId.value)
     if (res.code === 200) {
-      wrongQuestions.value = wrongQuestions.value.filter(q => q.id !== pendingDeleteId.value)
       showDeleteConfirm.value = false
       pendingDeleteId.value = null
-      await loadStats()
+      // 当前页删空且不是第一页时，回退一页再刷新
+      if (wrongQuestions.value.length <= 1 && page.value > 1) {
+        page.value--
+      }
+      await Promise.all([loadWrongQuestions(), loadStats()])
     }
   } catch (e) { console.error('删除错题失败', e) }
   finally { deleteLoading.value = false }
@@ -537,11 +560,15 @@ async function confirmBatchDelete() {
   try {
     const res = await apiBatchDeleteWrongQuestions(Array.from(selectedIds.value))
     if (res.code === 200) {
-      wrongQuestions.value = wrongQuestions.value.filter(q => !selectedIds.value.has(q.id))
+      // 当前页删空且不是第一页时，回退一页再刷新
+      const remaining = wrongQuestions.value.filter(q => !selectedIds.value.has(q.id)).length
+      if (remaining === 0 && page.value > 1) {
+        page.value--
+      }
       selectedIds.value.clear()
       batchMode.value = false
       showDeleteConfirm.value = false
-      await loadStats()
+      await Promise.all([loadWrongQuestions(), loadStats()])
     }
   } catch (e) { console.error('批量删除错题失败', e) }
   finally { deleteLoading.value = false }
@@ -728,6 +755,10 @@ function getMasteryColor(level: number): string {
 .wq-meta { display: flex; gap: 16px; font-size: 12px; color: var(--text-muted); }
 
 .wq-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+
+/* 分页 */
+.pagination { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 24px; }
+.page-info { font-size: 14px; color: var(--text-muted); }
 
 /* 复习模式 */
 .review-mode { display: flex; flex-direction: column; gap: 24px; }

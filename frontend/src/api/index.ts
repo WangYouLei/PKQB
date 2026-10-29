@@ -1,5 +1,5 @@
 import { post, get, del, put } from './request'
-import type { Result, RegisterRequest, LoginRequest, LoginResponse, HtmlFileItem, QuestionItem, RubricItem, RubricQuestion, RubricGenerateResponse, ApiKeyStatus, HistorySessionData, WrongQuestion, WrongQuestionStats, NotificationItem } from '@/types'
+import type { Result, RegisterRequest, LoginRequest, LoginResponse, HtmlFileItem, QuestionItem, RubricItem, RubricQuestion, RubricGenerateResponse, ApiKeyStatus, HistorySessionData, WrongQuestion, WrongQuestionPage, WrongQuestionStats, NotificationItem } from '@/types'
 
 export const apiRegister = async (data: RegisterRequest) => {
   const res = await post<void>('/auth/register', data)
@@ -91,6 +91,12 @@ export interface RubricParseTaskStatus {
 /** 查询题目文件异步解析任务状态（轮询获取进度与结果） */
 export const apiGetRubricParseTask = async (taskId: string) => {
   const res = await get<RubricParseTaskStatus>(`/ai/rubric-parse-task/${taskId}`)
+  return res
+}
+
+/** 查询知识库上传异步任务状态（轮询获取进度与结果） */
+export const apiGetKbUploadTask = async (taskId: string) => {
+  const res = await get<RubricParseTaskStatus>(`/ai/kb-upload-task/${taskId}`)
   return res
 }
 
@@ -320,9 +326,9 @@ export const apiAddWrongQuestion = async (data: { questionId: number; rubricId: 
   return res
 }
 
-/** 获取错题列表 */
-export const apiGetWrongQuestions = async () => {
-  const res = await get<WrongQuestion[]>('/wrong-question/list')
+/** 获取错题列表（服务端分页） */
+export const apiGetWrongQuestions = async (page = 1, pageSize = 20) => {
+  const res = await get<WrongQuestionPage>('/wrong-question/list', { page, pageSize })
   return res
 }
 

@@ -5,7 +5,9 @@ import io.minio.PutObjectArgs;
 import io.minio.GetObjectArgs;
 import io.minio.RemoveObjectArgs;
 import io.minio.BucketExistsArgs;
+import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MakeBucketArgs;
+import io.minio.http.Method;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -15,6 +17,7 @@ import java.io.InputStream;
 import java.io.ByteArrayOutputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
@@ -29,17 +32,29 @@ public class MinioService {
     @Value("${minio.endpoint}")
     private String endpoint;
 
+    // 桶存在性只需确认一次：缓存结果，避免每次上传/下载都多一次bucketExists网络往返
+    private volatile boolean bucketChecked = false;
+
     public void ensureBucketExists() {
-        try {
-            boolean exists = minioClient.bucketExists(
-                    BucketExistsArgs.builder().bucket(bucketName).build());
-            if (!exists) {
-                minioClient.makeBucket(
-                        MakeBucketArgs.builder().bucket(bucketName).build());
-                log.info("Created bucket: {}", bucketName);
+        if (bucketChecked) {
+            return;
+        }
+        synchronized (this) {
+            if (bucketChecked) {
+                return;
             }
-        } catch (Exception e) {
-            throw new RuntimeException("创建Bucket失败: " + e.getMessage(), e);
+            try {
+                boolean exists = minioClient.bucketExists(
+                        BucketExistsArgs.builder().bucket(bucketName).build());
+                if (!exists) {
+                    minioClient.makeBucket(
+                            MakeBucketArgs.builder().bucket(bucketName).build());
+                    log.info("Created bucket: {}", bucketName);
+                }
+                bucketChecked = true;
+            } catch (Exception e) {
+                throw new RuntimeException("创建Bucket失败: " + e.getMessage(), e);
+            }
         }
     }
 
@@ -88,6 +103,29 @@ public class MinioService {
             }
         } catch (Exception e) {
             throw new RuntimeException("获取文件失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 生成临时上传地址（预签名 PUT）
+     * 只对指定 objectKey 生效且限时有效，避免把内网 endpoint 与桶的永久写权限暴露给前端
+     *
+     * @param objectKey     对象路径
+     * @param expirySeconds 有效期（秒）
+     * @return 预签名上传URL
+     */
+    public String getPresignedPutUrl(String objectKey, int expirySeconds) {
+        try {
+            ensureBucketExists();
+            return minioClient.getPresignedObjectUrl(
+                    GetPresignedObjectUrlArgs.builder()
+                            .method(Method.PUT)
+                            .bucket(bucketName)
+                            .object(objectKey)
+                            .expiry(expirySeconds, TimeUnit.SECONDS)
+                            .build());
+        } catch (Exception e) {
+            throw new RuntimeException("生成临时上传地址失败: " + e.getMessage(), e);
         }
     }
 

@@ -1,5 +1,6 @@
 package pkqb.interceptor;
 
+import io.jsonwebtoken.Claims;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -20,7 +21,7 @@ import pkqb.util.JwtUtil;
 public class JwtInterceptor implements HandlerInterceptor {
 
     private final JwtUtil jwtUtil;
-    private final RedisTemplate<String, String> redisTemplate;
+    private final RedisTemplate<String, Object> redisTemplate;
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
@@ -30,47 +31,49 @@ public class JwtInterceptor implements HandlerInterceptor {
 
         String token = getTokenFromRequest(request);
 
-        if (token == null) {
-            response.setStatus(401);
-            response.setContentType("application/json;charset=UTF-8");
-            log.info("未登录或token已过期");
-            response.getWriter().write("{\"code\":401,\"message\":\"未登录或token已过期\"}");
-            response.getWriter().flush();
-            return false;
+        // 一次解析并复用Claims，避免validate/getUserId/getUsername各自重复解析同一token（此前同token解析3次）
+        Claims claims = null;
+        if (token != null) {
+            try {
+                claims = jwtUtil.parseToken(token);
+            } catch (Exception e) {
+                log.info("token解析失败或已过期: {}", e.getMessage());
+            }
         }
-
-        if (!jwtUtil.validateToken(token)) {
-            response.setStatus(401);
-            response.setContentType("application/json;charset=UTF-8");
-            log.info("未登录或token已过期");
-            response.getWriter().write("{\"code\":401,\"message\":\"未登录或token已过期\"}");
-            response.getWriter().flush();
-            return false;
+        if (claims == null) {
+            return unauthorized(response, "未登录或token已过期");
         }
 
         // 检查 token 是否在黑名单中（已登出）
         if (Boolean.TRUE.equals(redisTemplate.hasKey("token:blacklist:" + token))) {
-            response.setStatus(401);
-            response.setContentType("application/json;charset=UTF-8");
-            log.info("token已失效，请重新登录");
-            response.getWriter().write("{\"code\":401,\"message\":\"token已失效，请重新登录\"}");
-            response.getWriter().flush();
-            return false;
+            return unauthorized(response, "token已失效，请重新登录");
         }
 
-        request.setAttribute("userId", jwtUtil.getUserId(token));
-        request.setAttribute("username", jwtUtil.getUsername(token));
+        request.setAttribute("userId", claims.get("userId", Long.class));
+        request.setAttribute("username", claims.getSubject());
 
         return true;
     }
-    
+
+    /**
+     * 统一返回401未认证响应
+     */
+    private boolean unauthorized(HttpServletResponse response, String message) throws Exception {
+        response.setStatus(401);
+        response.setContentType("application/json;charset=UTF-8");
+        log.info(message);
+        response.getWriter().write("{\"code\":401,\"message\":\"" + message + "\"}");
+        response.getWriter().flush();
+        return false;
+    }
+
     private String getTokenFromRequest(HttpServletRequest request) {
         String token = request.getHeader("token");
         if (token != null) {
             return token;
         }
 
-        // SSE 的 EventSource 无法自定义请求头，从 URL 参数获取
+        // SSE 的 EventSource 无法自定义请求头，从 URL 参数获取（现已由Cookie鉴权覆盖，保留兼容旧客户端）
         token = request.getParameter("token");
         if (token != null) {
             return token;
@@ -84,7 +87,7 @@ public class JwtInterceptor implements HandlerInterceptor {
                 }
             }
         }
-        
+
         return null;
     }
 }

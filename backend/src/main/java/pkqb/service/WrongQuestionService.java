@@ -2,6 +2,7 @@ package pkqb.service;
 
 import pkqb.common.Result;
 import pkqb.pojo.dto.ReviewResultRequest;
+import pkqb.pojo.dto.WrongQuestionPageDTO;
 import pkqb.pojo.dto.WrongQuestionRequest;
 import pkqb.pojo.entity.WrongQuestionEntity;
 
@@ -21,11 +22,13 @@ public interface WrongQuestionService {
     Result<?> addWrongQuestion(WrongQuestionRequest request, Long userId);
 
     /**
-     * 获取用户所有错题
+     * 分页获取用户错题列表
      * @param userId 用户ID
-     * @return 错题列表
+     * @param page 页码（从1开始，默认1）
+     * @param pageSize 每页条数（默认20，范围1-100）
+     * @return 分页错题列表
      */
-    Result<List<WrongQuestionEntity>> getWrongQuestions(Long userId);
+    Result<WrongQuestionPageDTO> getWrongQuestions(Long userId, Integer page, Integer pageSize);
 
     /**
      * 获取今日待复习的错题

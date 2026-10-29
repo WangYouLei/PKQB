@@ -6,6 +6,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import pkqb.common.Result;
@@ -23,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/rubric")
 @RequiredArgsConstructor
@@ -193,7 +195,9 @@ public class RubricController {
             String url = ossService.upload(objectKey, file.getBytes(), contentType);
             return Result.success("上传成功", Map.of("url", url));
         } catch (Exception e) {
-            return Result.error("上传失败: " + e.getMessage());
+            // 异常细节仅记录到服务端日志，避免把内部实现/存储信息暴露给前端
+            log.error("[试卷资源] 上传资源图片失败, userId={}", userId, e);
+            return Result.error("上传失败，请稍后重试");
         }
     }
 }

@@ -259,10 +259,13 @@
 import { ref, computed, onUnmounted } from 'vue'
 import { apiAddRubricFile, apiAddRubricFileLocal, apiAppendRubricQuestions, apiGetMyRubrics, apiGetPublicRubrics, apiUploadResourceImage, apiGetRubricParseTask } from '@/api'
 import { useUserStore } from '@/stores/user'
+import { useToast } from '@/composables/useToast'
+import { authHeaders } from '@/api/request'
 import type { QuestionItem, QuestionResource, RubricItem } from '@/types'
 import { getQuestionImages, getOptionImage, getAnswerImage, getExplanationImage } from '@/composables/useQuestionResources'
 
 const userStore = useUserStore()
+const toast = useToast()
 
 const selectedFile = ref<File|null>(null)
 const dragOver = ref(false)
@@ -341,7 +344,7 @@ async function uploadImageToResource(q: QuestionItem, type: string, label: strin
       q.resources.push({ type: type as QuestionResource['type'], label, url: res.data.url })
     }
   } else {
-    alert(res.message || '图片上传失败')
+    toast.error(res.message || '图片上传失败')
   }
 }
 
@@ -401,7 +404,7 @@ async function handleUploadRubric() {
   // 加入已有试卷
   if (uploadMode.value === 'existing') {
     if (!selectedRubricId.value) {
-      alert('请选择要加入的试卷')
+      toast.error('请选择要加入的试卷')
       return
     }
     uploadLoading.value = true
@@ -409,13 +412,13 @@ async function handleUploadRubric() {
       const res = await apiAppendRubricQuestions(selectedRubricId.value, buildRubricsPayload())
       if (res.code === 200) {
         showUploadModal.value = false
-        alert('题目已成功加入所选试卷！')
+        toast.success('题目已成功加入所选试卷')
         resetForm()
       } else {
-        alert(res.message || '上传失败')
+        toast.error(res.message || '上传失败')
       }
     } catch (e: unknown) {
-      alert((e as Error).message || '上传失败')
+      toast.error((e as Error).message || '上传失败')
     } finally {
       uploadLoading.value = false
     }
@@ -424,7 +427,7 @@ async function handleUploadRubric() {
 
   // 新建试卷
   if (!rubricTitle.value.trim() || !rubricClassName.value.trim()) {
-    alert('请填写完整的试卷信息')
+    toast.error('请填写完整的试卷信息')
     return
   }
   uploadLoading.value = true
@@ -441,8 +444,8 @@ async function handleUploadRubric() {
     const res = await fetch('/api/rubric/add-rubric', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'token': userStore.token
+        ...authHeaders(),
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
     })
@@ -450,13 +453,13 @@ async function handleUploadRubric() {
     
     if (result.code === 200) {
       showUploadModal.value = false
-      alert('上传成功！')
+      toast.success('上传成功')
       resetForm()
     } else {
-      alert(result.message || '上传失败')
+      toast.error(result.message || '上传失败')
     }
   } catch (e: unknown) {
-    alert((e as Error).message || '上传失败')
+    toast.error((e as Error).message || '上传失败')
   } finally {
     uploadLoading.value = false
   }

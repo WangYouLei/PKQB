@@ -6,6 +6,7 @@ import pkqb.pojo.entity.ModelsEntity;
 import pkqb.pojo.dto.ModelValidationResult;
 
 import java.util.List;
+import java.util.Map;
 
 public interface UserApiKeyService {
 
@@ -18,6 +19,14 @@ public interface UserApiKeyService {
     int MAX_MODEL_COUNT = MAX_MAIN_MODEL_COUNT + MAX_ASSISTANT_MODEL_COUNT + MAX_VISION_MODEL_COUNT;
 
     void saveApiKey(Long userId, String apiKey);
+
+    /**
+     * 聚合获取API Key状态视图（主/辅助/视觉模型由一次模型查询派生，供状态接口使用）
+     *
+     * @param userId 用户ID
+     * @return 状态字段集合
+     */
+    Map<String, Object> getApiKeyStatusView(Long userId);
 
     void deleteApiKey(Long userId);
 

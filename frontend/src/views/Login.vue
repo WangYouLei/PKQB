@@ -59,10 +59,12 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { apiLogin } from '@/api'
+import { useToast } from '@/composables/useToast'
 import type { LoginRequest } from '@/types'
 
 const router = useRouter()
 const userStore = useUserStore()
+const toast = useToast()
 const form = ref<LoginRequest>({ studentNo: '', password: '' })
 const loading = ref(false)
 
@@ -74,11 +76,11 @@ async function handleLogin() {
       userStore.setUser(res.data)
       router.push('/')
     } else {
-      alert(res.message || '登录失败')
+      toast.error(res.message || '登录失败')
     }
   } catch (e: unknown) {
     const msg = (e as { message?: string })?.message || '登录失败，请重试'
-    alert(msg)
+    toast.error(msg)
   } finally {
     loading.value = false
   }

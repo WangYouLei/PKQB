@@ -10,6 +10,7 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import pkqb.common.Result;
+import pkqb.common.RateLimitConstants;
 import pkqb.pojo.dto.AiRubric;
 import pkqb.pojo.dto.QueryRequest;
 import pkqb.service.RateLimitService;
@@ -55,6 +56,18 @@ public class SpringAiAlibabaController {
             return Result.error("不支持的文件类型: " + extension);
         }
         return saaService.addDocuments(file, userId);
+    }
+
+    @GetMapping("/kb-upload-task/{taskId}")
+    @Operation(summary = "查询知识库上传任务状态", description = "轮询获取异步上传任务的进度与结果：RUNNING进行中、SUCCESS成功、FAILED失败")
+    public Result<pkqb.pojo.dto.RubricParseTaskStatus> getKbUploadTask(
+            @Parameter(description = "任务ID") @PathVariable("taskId") String taskId,
+            HttpServletRequest httpRequest) {
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        if (userId == null) {
+            return Result.error("未登录或登录已过期");
+        }
+        return saaService.getKbUploadTask(taskId, userId);
     }
 
     @PostMapping("/handle-rubricFile")
@@ -237,7 +250,8 @@ public class SpringAiAlibabaController {
         
         if (shouldLimit) {
             long used = rateLimitService.getTodayUsage(userId, type);
-            int limit = "chat".equals(type) ? 30 : 30;
+            // 引用限流常量，保证展示额度与实际限流值一致（此前硬编码30与实际值不符，用户第11次即被拒）
+            int limit = "chat".equals(type) ? RateLimitConstants.CHAT_LIMIT : RateLimitConstants.RAG_LIMIT;
             result.put("used", used);
             result.put("limit", limit);
             result.put("remaining", Math.max(0, limit - used));

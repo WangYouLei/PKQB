@@ -30,7 +30,10 @@ function connect() {
 
   intentionalClose = false
 
-  const sseUrl = `/api/notification/subscribe?token=${encodeURIComponent(token)}`
+  // 鉴权依赖登录时种下的 HttpOnly token Cookie（同源请求 EventSource 会自动携带，
+  // 后端 JwtInterceptor 支持从 Cookie 取 token），不再把 token 拼进 URL，
+  // 避免其明文进入服务器访问日志、代理日志
+  const sseUrl = '/api/notification/subscribe'
   const source = new EventSource(sseUrl)
 
   source.addEventListener('notification', (event) => {
@@ -60,8 +63,8 @@ function connect() {
 
   source.onerror = () => {
     // EventSource 原生自动重连（CONNECTING 状态）
-    // 但服务器拒绝连接（如 token 失效返回 401）时会进入 CLOSED，
-    // 此时需用 localStorage 的最新 token 手动重建连接
+    // 但服务器拒绝连接（如 Cookie 过期返回 401）时会进入 CLOSED，
+    // 此时延时重建连接（用户重新登录后会种下新的 Cookie）
     if (source.readyState === EventSource.CLOSED) {
       es.value = null
       if (!intentionalClose) {

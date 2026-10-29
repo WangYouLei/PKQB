@@ -6,10 +6,10 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 import pkqb.common.Result;
 import pkqb.pojo.dto.AvatarUpdateRequest;
+import pkqb.service.MinioService;
 import pkqb.service.UserService;
 
 @Slf4j
@@ -20,20 +20,18 @@ import pkqb.service.UserService;
 public class AvatarController {
 
     private final UserService userService;
-
-    @Value("${minio.endpoint}")
-    private String minioEndpoint;
-
-    @Value("${minio.bucket-name}")
-    private String bucketName;
+    private final MinioService minioService;
 
     @GetMapping("/upload-path")
-    @Operation(summary = "获取头像上传路径", description = "获取头像上传的objectKey和公开URL")
+    @Operation(summary = "获取头像上传路径", description = "获取头像上传的objectKey和限时预签名上传URL")
     public Result<AvatarUploadInfo> getUploadPath(
             @Parameter(description = "用户ID") @RequestAttribute("userId") Long userId) {
         String objectKey = "avatar/" + userId + "/" + System.currentTimeMillis();
-        String publicUrl = minioEndpoint + "/" + bucketName + "/" + objectKey;
-        return Result.success(new AvatarUploadInfo(objectKey, publicUrl));
+        // 返回预签名PUT地址：仅对该objectKey生效且10分钟内有效，
+        // 不再把内网MinIO endpoint与桶的写权限直接暴露给前端
+        String uploadUrl = minioService.getPresignedPutUrl(objectKey, 600);
+        log.info("[头像管理] 用户 {} 获取头像上传地址 objectKey={}", userId, objectKey);
+        return Result.success(new AvatarUploadInfo(objectKey, uploadUrl));
     }
 
     @PutMapping

@@ -19,7 +19,11 @@ request.interceptors.request.use((config) => {
 request.interceptors.response.use(
   (response: AxiosResponse) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    // 登录接口的 401 表示账号密码错误，不应触发“登录已过期”跳转
+    // config.url 保存调用时的相对路径（如 /admin/auth/login），用前缀精确匹配避免误伤其他接口
+    const url = String(error.config?.url || '')
+    const isLoginRequest = url === '/admin/auth/login' || url.startsWith('/admin/auth/login?')
+    if (error.response?.status === 401 && !isLoginRequest) {
       localStorage.removeItem('admin_token')
       localStorage.removeItem('admin_userId')
       localStorage.removeItem('admin_username')

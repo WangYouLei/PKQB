@@ -61,5 +61,14 @@ async function del<T = unknown>(url: string, data?: unknown, params?: Record<str
   return res.data
 }
 
+/**
+ * 供无法走 axios 的原生 fetch / SSE 请求复用的鉴权头
+ * 统一从 localStorage 读取 token，避免各组件各自手写一份（原来散落在 5 个视图里）
+ */
+export function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem('token')
+  return token ? { token } : {}
+}
+
 export { get, post, put, del }
 export default request

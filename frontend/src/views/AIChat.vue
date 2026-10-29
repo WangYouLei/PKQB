@@ -36,17 +36,6 @@
       </div>
     </div>
 
-    <!-- Toast 提示 -->
-    <Transition name="toast">
-      <div v-if="showToast" class="toast" :class="toastType">
-        <svg v-if="toastType === 'success'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-          <polyline points="22 4 12 14.01 9 11.01"></polyline>
-        </svg>
-        <span>{{ toastMessage }}</span>
-      </div>
-    </Transition>
-
     <aside class="chat-sidebar">
       <div class="sidebar-header">
         <div class="header-icon">
@@ -238,6 +227,17 @@
             @input="autoResize"
           ></textarea>
           <button
+            v-if="streaming"
+            class="send-btn stop-btn"
+            @click="stopGenerating"
+            title="停止生成"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="6" y="6" width="12" height="12" rx="2"/>
+            </svg>
+          </button>
+          <button
+            v-else
             class="send-btn"
             @click="sendMessage"
             :disabled="!inputText.trim() || streaming"
@@ -254,477 +254,63 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, onMounted, watch } from 'vue'
 import { useUserStore } from '@/stores/user'
-import { apiGetHistoryList, apiGetHistoryBySessionId, apiDeleteHistory, apiGetUsage, apiDeleteMessages } from '@/api'
+import { useChatSession } from '@/composables/useChatSession'
 import { marked } from 'marked'
 
-interface ChatMessage {
-  role: 'user' | 'assistant'
-  content: string
-  thinking?: string
-  thinkingExpanded?: boolean
-  timestamp: number
-}
-
-// 处理流式chunk：正文为纯字符串，思考内容为 {thinking:true,text:...} 对象
-function appendStreamChunk(msg: ChatMessage, jsonStr: string) {
-  try {
-    const content = JSON.parse(jsonStr)
-    if (typeof content === 'string') {
-      msg.content += content
-      // 正文开始输出后自动收起思考区块
-      if (msg.thinking && msg.thinkingExpanded) msg.thinkingExpanded = false
-    } else if (content && typeof content === 'object' && content.thinking) {
-      msg.thinking = (msg.thinking || '') + content.text
-      if (msg.thinkingExpanded === undefined) msg.thinkingExpanded = true
-    }
-  } catch (e) {
-    msg.content += jsonStr
-  }
+// 与 RAGChat 的差异点：本页用 marked 渲染 Markdown
+function formatContent(text: string): string {
+  if (!text) return ''
+  // 防XSS：先将HTML特殊字符转义再交给marked解析，
+  // 阻止AI回复（可能被提问注入污染）中的<script>/<img onerror>等原生HTML经v-html执行
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+  return marked.parse(escaped) as string
 }
 
 const userStore = useUserStore()
-const sessions = ref<string[]>([])
-const currentSessionId = ref<string | null>(null)
-const messages = ref<ChatMessage[]>([])
-const inputText = ref('')
-const streaming = ref(false)
-const loadingSessions = ref(false)
-const chatContainer = ref<HTMLElement | null>(null)
-const showDeleteConfirm = ref(false)
-const pendingDeleteSessionId = ref<string | null>(null)
-const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
-// 使用次数相关
-const showLimitModal = ref(false)
-const limitMessage = ref('')
-const remainingUsage = ref<number>(-1)
-const hasOwnApiKey = ref(false)
-
-// 选择模式相关
-const selectMode = ref(false)
-const selectedMessageIndices = ref<Set<number>>(new Set())
-const showDeleteMessagesConfirm = ref(false)
-const hoveredMessageIdx = ref(-1)
-
-// Toast 提示
-const showToast = ref(false)
-const toastMessage = ref('')
-const toastType = ref<'success' | 'error'>('success')
-
-function showToastMessage(message: string, type: 'success' | 'error' = 'success') {
-  toastMessage.value = message
-  toastType.value = type
-  showToast.value = true
-  setTimeout(() => {
-    showToast.value = false
-  }, 2000)
-}
-
-function scrollToBottom() {
-  nextTick(() => {
-    if (chatContainer.value) chatContainer.value.scrollTop = chatContainer.value.scrollHeight
-  })
-}
-
-function autoResize() {
-  const textarea = textareaRef.value
-  if (!textarea) return
-  textarea.style.height = 'auto'
-  const lineHeight = 21
-  const maxHeight = lineHeight * 4
-  const newHeight = Math.min(textarea.scrollHeight, maxHeight)
-  textarea.style.height = newHeight + 'px'
-}
-
-function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Enter') {
-    if (e.shiftKey || e.altKey) {
-      e.preventDefault()
-      const textarea = textareaRef.value
-      if (!textarea) return
-      const start = textarea.selectionStart
-      const end = textarea.selectionEnd
-      inputText.value = inputText.value.substring(0, start) + '\n' + inputText.value.substring(end)
-      nextTick(() => {
-        textarea.selectionStart = textarea.selectionEnd = start + 1
-        autoResize()
-      })
-    } else {
-      e.preventDefault()
-      sendMessage()
-    }
-  }
-}
-
-watch(inputText, () => {
-  nextTick(() => {
-    autoResize()
-  })
-})
-
-function formatContent(text: string): string {
-  if (!text) return ''
-  return marked.parse(text) as string
-}
-
-function formatTime(ts: number): string {
-  const d = new Date(ts)
-  const month = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  const hour = String(d.getHours()).padStart(2, '0')
-  const min = String(d.getMinutes()).padStart(2, '0')
-  return `${month}-${day} ${hour}:${min}`
-}
-
-async function loadSessions() {
-  loadingSessions.value = true
-  try {
-    const res = await apiGetHistoryList('chat')
-    if (res.code === 200 && res.data) {
-      sessions.value = Array.isArray(res.data) ? (res.data as string[]) : []
-    }
-  } catch (e) {
-    console.error('加载会话列表失败', e)
-  } finally {
-    loadingSessions.value = false
-  }
-}
-
-async function selectSession(sessionId: string) {
-  currentSessionId.value = sessionId
-  messages.value = []
-  cancelSelectMode()
-  try {
-    const res = await apiGetHistoryBySessionId(sessionId, 'chat')
-    if (res.code === 200 && res.data) {
-      const list = Array.isArray(res.data) ? res.data : []
-      messages.value = list.map((m) => ({
-        role: m.role === 'user' ? 'user' : 'assistant',
-        content: m.content || '',
-        timestamp: m.timestamp || Date.now()
-      }))
-      scrollToBottom()
-    }
-  } catch (e) {
-    console.error('加载历史消息失败', e)
-  }
-}
-
-function newSession() {
-  if (sessions.value.length >= 20) {
-    limitMessage.value = '会话数量已达上限(20个)，请删除一个会话后再创建新会话。'
-    showLimitModal.value = true
-    return
-  }
-  currentSessionId.value = null
-  messages.value = []
-  cancelSelectMode()
-}
-
-function newSessionFromLimit() {
-  showLimitModal.value = false
-  newSession()
-}
-
-async function checkUsage() {
-  try {
-    const res = await apiGetUsage('chat')
-    if (res.code === 200 && res.data) {
-      hasOwnApiKey.value = res.data.hasOwnApiKey
-      remainingUsage.value = res.data.remaining
-    }
-  } catch (e) {
-    console.error('获取使用次数失败', e)
-  }
-}
-
-function deleteSession(sessionId: string) {
-  pendingDeleteSessionId.value = sessionId
-  showDeleteConfirm.value = true
-}
-
-async function confirmDelete() {
-  if (!pendingDeleteSessionId.value) return
-  const sessionId = pendingDeleteSessionId.value
-  showDeleteConfirm.value = false
-  
-  try {
-    const res = await apiDeleteHistory(sessionId, 'chat')
-    if (res.code === 200) {
-      sessions.value = sessions.value.filter(s => s !== sessionId)
-      if (currentSessionId.value === sessionId) {
-        currentSessionId.value = null
-        messages.value = []
-        cancelSelectMode()
-      }
-    }
-  } catch (e) {
-    console.error('删除会话失败', e)
-  } finally {
-    pendingDeleteSessionId.value = null
-  }
-}
-
-// 选择模式相关方法
-function enterSelectModeFromMessage(userMsgIdx: number) {
-  selectMode.value = true
-  selectedMessageIndices.value = new Set()
-  toggleMessageSelection(userMsgIdx)
-}
-
-function cancelSelectMode() {
-  selectMode.value = false
-  selectedMessageIndices.value = new Set()
-}
-
-function toggleMessageSelection(idx: number) {
-  const newSet = new Set(selectedMessageIndices.value)
-  const msg = messages.value[idx]
-  
-  if (msg.role === 'user') {
-    if (newSet.has(idx)) {
-      newSet.delete(idx)
-      if (idx + 1 < messages.value.length && messages.value[idx + 1].role === 'assistant') {
-        newSet.delete(idx + 1)
-      }
-    } else {
-      newSet.add(idx)
-      if (idx + 1 < messages.value.length && messages.value[idx + 1].role === 'assistant') {
-        newSet.add(idx + 1)
-      }
-    }
-  } else {
-    if (newSet.has(idx)) {
-      newSet.delete(idx)
-      if (idx - 1 >= 0 && messages.value[idx - 1].role === 'user') {
-        newSet.delete(idx - 1)
-      }
-    } else {
-      newSet.add(idx)
-      if (idx - 1 >= 0 && messages.value[idx - 1].role === 'user') {
-        newSet.add(idx - 1)
-      }
-    }
-  }
-  
-  selectedMessageIndices.value = newSet
-}
-
-function requestDeleteMessages() {
-  if (selectedMessageIndices.value.size === 0) return
-  showDeleteMessagesConfirm.value = true
-}
-
-function copyMessage(content: string) {
-  navigator.clipboard.writeText(content).then(() => {
-    showToastMessage('复制成功')
-  }).catch(err => {
-    console.error('复制失败', err)
-    showToastMessage('复制失败', 'error')
-  })
-}
-
-async function regenerateMessage(aiMsgIdx: number) {
-  if (streaming.value) return
-  
-  const userMsgIdx = aiMsgIdx - 1
-  if (userMsgIdx < 0 || messages.value[userMsgIdx].role !== 'user') {
-    showToastMessage('无法重新生成', 'error')
-    return
-  }
-  
-  const userMsg = messages.value[userMsgIdx]
-  
-  messages.value.splice(aiMsgIdx, 1)
-  
-  const text = userMsg.content
-  streaming.value = true
-  scrollToBottom()
-
-  const assistantMsg: ChatMessage = { role: 'assistant', content: '', timestamp: Date.now() }
-  messages.value.push(assistantMsg)
-
-  try {
-    const token = localStorage.getItem('token') || ''
-    const userId = String(userStore.userId || localStorage.getItem('userId') || '')
-
-    const response = await fetch(`/api/ai/query?userId=${userId}`, {
-      method: 'POST',
-      headers: {
-        'token': token,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        query: text,
-        sessionId: currentSessionId.value
-      })
-    })
-
-    if (!response.ok) {
-      throw new Error('请求失败')
-    }
-
-    const reader = response.body?.getReader()
-    if (!reader) throw new Error('无法读取响应流')
-
-    const decoder = new TextDecoder()
-    let buffer = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-      for (const line of lines) {
-        if (line.startsWith('data:')) {
-          const jsonStr = line.substring(5).trim()
-          if (jsonStr === '[DONE]') continue
-          if (!jsonStr) continue
-          appendStreamChunk(assistantMsg, jsonStr)
-          messages.value = [...messages.value]
-          scrollToBottom()
-        }
-      }
-    }
-
-    if (!assistantMsg.content.trim()) {
-      assistantMsg.content = '抱歉，暂时无法回答。'
-    }
-    
-    showToastMessage('重新生成成功')
-  } catch (e: unknown) {
-    const index = messages.value.indexOf(assistantMsg)
-    if (index !== -1) {
-      messages.value[index] = { ...assistantMsg, content: `请求出错：${(e as Error).message}` }
-    }
-    showToastMessage('重新生成失败', 'error')
-  } finally {
-    streaming.value = false
-    scrollToBottom()
-  }
-}
-
-async function confirmDeleteMessages() {
-  if (selectedMessageIndices.value.size === 0) return
-  
-  try {
-    const indices = Array.from(selectedMessageIndices.value)
-    const res = await apiDeleteMessages(currentSessionId.value!, 'chat', indices)
-    
-    if (res.code === 200) {
-      messages.value = messages.value.filter((_, idx) => !selectedMessageIndices.value.has(idx))
-      cancelSelectMode()
-      showToastMessage('删除成功')
-    }
-  } catch (e) {
-    console.error('删除消息失败', e)
-    showToastMessage('删除失败', 'error')
-  } finally {
-    showDeleteMessagesConfirm.value = false
-  }
-}
-
-async function sendMessage() {
-  const text = inputText.value.trim()
-  if (!text || streaming.value) return
-
-  // 检查使用次数
-  if (!hasOwnApiKey.value && remainingUsage.value === 0) {
-    limitMessage.value = '今日免费对话次数已用完，请切换使用您自己的模型或明天再试。'
-    showLimitModal.value = true
-    return
-  }
-
-  if (!currentSessionId.value) {
-    currentSessionId.value = `chat_${Date.now()}`
-  }
-
-  // 退出选择模式
-  cancelSelectMode()
-
-  messages.value.push({ role: 'user', content: text, timestamp: Date.now() })
-  inputText.value = ''
-  streaming.value = true
-  scrollToBottom()
-
-  const assistantMsg: ChatMessage = { role: 'assistant', content: '', timestamp: Date.now() }
-  messages.value.push(assistantMsg)
-
-  try {
-    const token = localStorage.getItem('token') || ''
-    const userId = String(userStore.userId || localStorage.getItem('userId') || '')
-
-    const response = await fetch(`/api/ai/query?userId=${userId}`, {
-      method: 'POST',
-      headers: {
-        'token': token,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        query: text,
-        sessionId: currentSessionId.value
-      })
-    })
-    if (!response.ok) {
-      const errorText = await response.text()
-      if (errorText.includes('今日使用次数已达上限')) {
-        throw new Error('今日免费对话次数已用完，请切换使用您自己的模型或明天再试')
-      }
-      if (errorText.includes('API') || errorText.includes('key') || errorText.includes('Key') || errorText.includes('model') || errorText.includes('Model') || errorText.includes('401') || errorText.includes('403') || errorText.includes('invalid')) {
-        throw new Error('上传的API Key或模型名称有误，请核验')
-      }
-      throw new Error('请求失败')
-    }
-
-    const reader = response.body?.getReader()
-    if (!reader) throw new Error('无法读取响应流')
-
-    const decoder = new TextDecoder()
-    let buffer = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-      for (const line of lines) {
-        if (line.startsWith('data:')) {
-          const jsonStr = line.substring(5).trim()
-          if (jsonStr === '[DONE]') continue
-          if (!jsonStr) continue
-          appendStreamChunk(assistantMsg, jsonStr)
-          messages.value = [...messages.value]
-          scrollToBottom()
-        }
-      }
-    }
-
-    if (!assistantMsg.content.trim()) {
-      assistantMsg.content = '抱歉，暂时无法回答。'
-    }
-
-    await loadSessions()
-    await checkUsage()
-  } catch (e: unknown) {
-    const index = messages.value.indexOf(assistantMsg)
-    if (index !== -1) {
-      if (assistantMsg.content.trim()) {
-        messages.value[index] = { ...assistantMsg }
-      } else {
-        messages.value[index] = { ...assistantMsg, content: `请求出错：${(e as Error).message}` }
-      }
-    }
-  } finally {
-    streaming.value = false
-    scrollToBottom()
-  }
-}
-
-onMounted(() => {
-  loadSessions()
-  checkUsage()
+const {
+  sessions,
+  currentSessionId,
+  messages,
+  inputText,
+  streaming,
+  loadingSessions,
+  chatContainer,
+  textareaRef,
+  showDeleteConfirm,
+  showLimitModal,
+  limitMessage,
+  selectMode,
+  selectedMessageIndices,
+  showDeleteMessagesConfirm,
+  hoveredMessageIdx,
+  autoResize,
+  handleKeydown,
+  formatTime,
+  selectSession,
+  newSession,
+  newSessionFromLimit,
+  deleteSession,
+  confirmDelete,
+  enterSelectModeFromMessage,
+  cancelSelectMode,
+  toggleMessageSelection,
+  requestDeleteMessages,
+  copyMessage,
+  regenerateMessage,
+  confirmDeleteMessages,
+  sendMessage,
+  stopGenerating
+} = useChatSession({
+  type: 'chat',
+  sessionIdPrefix: 'chat_',
+  endpoint: '/api/ai/query',
+  emptyReply: '抱歉，暂时无法回答。',
+  quotaMessage: '今日免费对话次数已用完，请切换使用您自己的模型或明天再试。'
 })
 </script>
 
@@ -883,48 +469,13 @@ onMounted(() => {
 .send-btn svg { width: 18px; height: 18px; }
 .send-btn:hover:not(:disabled) { transform: translate(-2px, -2px); box-shadow: 5px 5px 0 var(--shadow-ink); }
 .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.stop-btn { background: var(--error); color: #fff; }
 
 .confirm-modal { background: var(--card-bg); border: 2px solid var(--ink); border-radius: var(--card-radius); padding: 24px; min-width: 320px; text-align: center; box-shadow: 8px 8px 0 var(--shadow-ink); }
 .confirm-modal h3 { margin: 0 0 12px; font-size: 18px; font-weight: 700; color: var(--text-primary); }
 .confirm-modal p { margin: 0 0 20px; color: var(--text-secondary); font-size: 14px; }
 .confirm-btns { display: flex; gap: 12px; justify-content: center; }
 .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-
-/* Toast 提示 */
-.toast {
-  position: fixed;
-  top: 80px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 20px;
-  background: var(--card-bg);
-  border: 2px solid var(--ink);
-  border-radius: var(--card-radius);
-  box-shadow: 4px 4px 0 var(--shadow-ink);
-  z-index: 2000;
-  font-size: 14px;
-  color: var(--text-primary);
-}
-.toast svg { width: 18px; height: 18px; }
-.toast.success { border-color: var(--success); }
-.toast.success svg { color: var(--success); }
-.toast.error { border-color: var(--error); }
-.toast.error svg { color: var(--error); }
-
-/* Toast 动画 */
-.toast-enter-active { animation: toastIn 0.3s ease; }
-.toast-leave-active { animation: toastOut 0.3s ease; }
-@keyframes toastIn {
-  from { opacity: 0; transform: translateX(-50%) translateY(-20px); }
-  to { opacity: 1; transform: translateX(-50%) translateY(0); }
-}
-@keyframes toastOut {
-  from { opacity: 1; transform: translateX(-50%) translateY(0); }
-  to { opacity: 0; transform: translateX(-50%) translateY(-20px); }
-}
 
 @media (max-width: 768px) {
   .chat-sidebar { width: 240px; }

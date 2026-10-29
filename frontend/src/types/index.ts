@@ -159,6 +159,14 @@ export interface WrongQuestionStats {
   learningCount: number
 }
 
+/** 错题列表分页数据 */
+export interface WrongQuestionPage {
+  list: WrongQuestion[]
+  total: number
+  page: number
+  pageSize: number
+}
+
 // ========== 通知相关类型 ==========
 
 export interface NotificationItem {

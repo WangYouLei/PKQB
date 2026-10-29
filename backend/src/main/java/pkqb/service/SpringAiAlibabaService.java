@@ -81,6 +81,15 @@ public interface SpringAiAlibabaService {
     Result<RubricParseTaskStatus> getRubricParseTask(String taskId, Long userId);
 
     /**
+     * 查询知识库上传异步任务状态（与题目解析任务共用任务状态存储）
+     *
+     * @param taskId 任务ID
+     * @param userId 用户ID（校验任务归属）
+     * @return 任务状态
+     */
+    Result<RubricParseTaskStatus> getKbUploadTask(String taskId, Long userId);
+
+    /**
      * 上传题库文件（本地解析）
      *
      * @param file 文件

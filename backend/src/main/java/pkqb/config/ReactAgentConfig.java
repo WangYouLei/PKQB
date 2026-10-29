@@ -40,8 +40,9 @@ public class ReactAgentConfig {
 
     @Bean
     public MemorySaver memorySaver() {
-        log.info("[MemorySaver] 创建 MemorySaver");
-        return new MemorySaver();
+        // 使用带TTL淘汰的子类：官方MemorySaver的checkpoint永久驻留堆内，配合AgentSessionCleaner定期清理
+        log.info("[MemorySaver] 创建 TtlMemorySaver（支持空闲会话淘汰）");
+        return new TtlMemorySaver();
     }
 
     @Bean("chatReactAgent")
