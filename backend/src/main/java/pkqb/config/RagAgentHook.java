@@ -7,14 +7,13 @@ import com.alibaba.cloud.ai.graph.agent.hook.HookPosition;
 import com.alibaba.cloud.ai.graph.agent.hook.HookPositions;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import pkqb.service.DashScopeRerankService;
+import pkqb.service.RagDataIsolationService;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -25,8 +24,12 @@ import java.util.stream.Collectors;
 @Slf4j
 public class RagAgentHook extends AgentHook {
 
+    /** 调用方通过 RunnableConfig metadata 携带当前用户ID，供检索过滤使用 */
+    public static final String USER_ID_METADATA_KEY = "rag_user_id";
+
     private final VectorStore vectorStore;
     private final DashScopeRerankService rerankService;
+    private final RagDataIsolationService dataIsolationService;
 
     /** 粗排召回数量，扩大召回为精排提供更多候选 */
     private static final int RECALL_TOP_K = 20;
@@ -36,9 +39,11 @@ public class RagAgentHook extends AgentHook {
     private static final int RERANK_TOP_N = 5;
     private static final String RAG_CONTEXT_KEY = "rag_context";
 
-    public RagAgentHook(VectorStore vectorStore, DashScopeRerankService rerankService) {
+    public RagAgentHook(VectorStore vectorStore, DashScopeRerankService rerankService,
+                        RagDataIsolationService dataIsolationService) {
         this.vectorStore = vectorStore;
         this.rerankService = rerankService;
+        this.dataIsolationService = dataIsolationService;
     }
 
     @Override
@@ -48,6 +53,14 @@ public class RagAgentHook extends AgentHook {
 
     @Override
     public CompletableFuture<Map<String, Object>> beforeAgent(OverAllState state, RunnableConfig config) {
+        // 数据隔离：从调用方配置中取当前用户ID，缺失时直接跳过检索（fail-closed，宁可不引用知识库也不越权）
+        Optional<Object> userIdOpt = config.metadata(USER_ID_METADATA_KEY);
+        if (userIdOpt.isEmpty()) {
+            log.warn("[RAG Hook] RunnableConfig 缺少用户身份({})，跳过检索以避免越权访问知识库", USER_ID_METADATA_KEY);
+            return CompletableFuture.completedFuture(Map.of());
+        }
+        Long userId = (Long) userIdOpt.get();
+
         //从状态中提取用户问题
         Optional<Object> messagesOpt = state.value("messages");
         if (messagesOpt.isEmpty()) {
@@ -68,14 +81,15 @@ public class RagAgentHook extends AgentHook {
             return CompletableFuture.completedFuture(Map.of());
         }
 
-        log.info("[RAG Hook] 开始检索，查询: {}", userQuery);
-
+        log.info("[RAG Hook] 开始检索，userId={}, 查询: {}", userId, userQuery);
 
         // Step 1: 粗排——向量检索召回较多候选文档（只执行一次，整个Agent执行过程中）
+        // 过滤表达式将候选限定为：本人文档 或 同班共享文档
         SearchRequest searchRequest = SearchRequest.builder()
                 .query(userQuery)
                 .topK(RECALL_TOP_K)
                 .similarityThreshold(RECALL_SIMILARITY_THRESHOLD)
+                .filterExpression(dataIsolationService.buildFilterExpression(userId))
                 .build();
         List<Document> relevantDocs = vectorStore.similaritySearch(searchRequest);
 

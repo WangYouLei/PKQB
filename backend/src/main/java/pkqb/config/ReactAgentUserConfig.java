@@ -13,6 +13,7 @@ import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.stereotype.Component;
 import pkqb.pojo.entity.ModelsEntity;
 import pkqb.service.DashScopeRerankService;
+import pkqb.service.RagDataIsolationService;
 
 import java.util.List;
 
@@ -74,14 +75,17 @@ public class ReactAgentUserConfig {
     private final MemorySaver memorySaver;
     private final VectorStore vectorStore;
     private final DashScopeRerankService rerankService;
+    private final RagDataIsolationService dataIsolationService;
 
     public ReactAgentUserConfig(DashScopeModelFactory modelFactory, MemorySaver memorySaver,
                                 VectorStore vectorStore,
-                                DashScopeRerankService rerankService) {
+                                DashScopeRerankService rerankService,
+                                RagDataIsolationService dataIsolationService) {
         this.modelFactory = modelFactory;
         this.memorySaver = memorySaver;
         this.vectorStore = vectorStore;
         this.rerankService = rerankService;
+        this.dataIsolationService = dataIsolationService;
     }
 
     public ReactAgent createUserChatReactAgent(String apiKey) {
@@ -130,7 +134,7 @@ public class ReactAgentUserConfig {
 
         //ModelCallLimitHook limitHook = createModelCallLimitHook();
         ModelCallLimitHook limitHook = ModelCallLimitHook.builder().runLimit(1).build();
-        RagAgentHook ragHook = new RagAgentHook(vectorStore, rerankService);
+        RagAgentHook ragHook = new RagAgentHook(vectorStore, rerankService, dataIsolationService);
         return ReactAgent.builder()
                 .name("rag_agent_user")
                 .model(chatModel)
@@ -149,7 +153,7 @@ public class ReactAgentUserConfig {
         SummarizationHook userHook = createUserSummarizationHook(chatModel);
 
         ModelCallLimitHook limitHook = ModelCallLimitHook.builder().runLimit(1).build();
-        RagAgentHook ragHook = new RagAgentHook(vectorStore, rerankService);
+        RagAgentHook ragHook = new RagAgentHook(vectorStore, rerankService, dataIsolationService);
         return ReactAgent.builder()
                 .name("rag_agent_user")
                 .model(chatModel)

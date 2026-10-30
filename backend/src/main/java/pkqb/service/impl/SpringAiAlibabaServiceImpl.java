@@ -27,6 +27,7 @@ import org.springframework.web.multipart.MultipartFile;
 import pkqb.common.Result;
 import pkqb.common.RateLimitConstants;
 import pkqb.config.DashScopeModelFactory;
+import pkqb.config.RagAgentHook;
 import pkqb.config.ReactAgentFactory;
 import pkqb.enums.ApiKeyMode;
 import pkqb.enums.RubricQuestionTypeEnum;
@@ -37,6 +38,7 @@ import pkqb.mapper.FileMapper;
 import pkqb.pojo.entity.FileEntity;
 import pkqb.service.MinioService;
 import pkqb.service.NotificationService;
+import pkqb.service.RagDataIsolationService;
 import pkqb.service.RateLimitService;
 import pkqb.service.SpringAiAlibabaService;
 import pkqb.service.UserApiKeyService;
@@ -73,6 +75,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     private final NotificationService notificationService;
     private final UserApiKeyService userApiKeyService;
     private final FileMapper fileMapper;
+    private final RagDataIsolationService ragDataIsolationService;
     /** 视觉模型解析组件：PDF→图片→视觉模型的题目解析全链路（见 RubricVisionParser） */
     private final RubricVisionParser visionParser;
     /** AI 解题组件：答案/解析/步骤生成全链路（见 AiQuestionSolver） */
@@ -203,6 +206,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                                       NotificationService notificationService,
                                       UserApiKeyService userApiKeyService,
                                       FileMapper fileMapper,
+                                      RagDataIsolationService ragDataIsolationService,
                                       RubricVisionParser visionParser,
                                       AiQuestionSolver aiQuestionSolver) {
         this.vectorStore = vectorStore;
@@ -216,6 +220,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         this.notificationService = notificationService;
         this.userApiKeyService = userApiKeyService;
         this.fileMapper = fileMapper;
+        this.ragDataIsolationService = ragDataIsolationService;
         this.visionParser = visionParser;
         this.aiQuestionSolver = aiQuestionSolver;
     }
@@ -343,7 +348,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             }
 
             // 6. 写入向量库
-            Result<String> result = processDocumentsContent(content, "文件上传", userId);
+            Result<String> result = processDocumentsContent(content, "文件上传", userId, fileRecordId);
             if (result.getCode() != 200) {
                 // 向量库写入失败，回滚Minio文件和DB记录
                 log.error("[知识库-文件上传] 写入向量库失败，回滚Minio文件和DB记录");
@@ -385,12 +390,15 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
 
     private static final int EMBEDDING_BATCH_SIZE = 10;
 
-    private Result<String> processDocumentsContent(String content, String operationType, Long userId) {
+    private Result<String> processDocumentsContent(String content, String operationType, Long userId, Long fileId) {
         log.info("[知识库-{}] 开始分割文档", operationType);
-        
+
+        // 权限元数据：检索时按"本人文档或同班共享"过滤，同一文件的所有片段共享同一份元数据
+        Map<String, Object> isolationMetadata = ragDataIsolationService.buildUploadMetadata(userId, fileId);
+
         List<Document> documents = Arrays.stream(content.split("\n\n+"))
                 .filter(s -> !s.trim().isEmpty())
-                .map(Document::new)
+                .map(s -> new Document(s, isolationMetadata))
                 .collect(Collectors.toList());
         log.info("[知识库-{}] 文档分段完成，共 {} 段", operationType, documents.size());
         
@@ -423,7 +431,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
 
         String historyKey = "spring_ai_alibaba_chat_memory:history:rag:" + userId + ":" + sessionId;
         String threadId = "rag:" + userId + ":" + sessionId;
-        return streamChat("RAG查询", reactAgentFactory.getRagReactAgent(userId), query, sessionId, historyKey, threadId);
+        return streamChat("RAG查询", reactAgentFactory.getRagReactAgent(userId), query, sessionId, historyKey, threadId, userId);
     }
 
     /**
@@ -434,9 +442,10 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
      * @param agent      已按用户Key模式构建好的ReactAgent
      * @param historyKey Redis历史记录key
      * @param threadId   Agent会话线程ID
+     * @param userId     当前用户ID，经 RunnableConfig metadata 传递给 RagAgentHook 做检索数据隔离
      */
     private Flux<String> streamChat(String logTag, ReactAgent agent, String query, String sessionId,
-                                    String historyKey, String threadId) {
+                                    String historyKey, String threadId, Long userId) {
         try {
             String userMsgJson = objectMapper.writeValueAsString(Map.of(
                     "messageType", "USER",
@@ -457,6 +466,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
 
             RunnableConfig config = RunnableConfig.builder()
                     .threadId(threadId)
+                    .addMetadata(RagAgentHook.USER_ID_METADATA_KEY, userId)
                     .build();
 
             return agent.stream(query, config)
@@ -549,7 +559,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
 
         String historyKey = "spring_ai_alibaba_chat_memory:history:chat:" + userId + ":" + sessionId;
         String threadId = "chat:" + userId + ":" + sessionId;
-        return streamChat("AI对话", reactAgentFactory.getChatReactAgent(userId), query, sessionId, historyKey, threadId);
+        return streamChat("AI对话", reactAgentFactory.getChatReactAgent(userId), query, sessionId, historyKey, threadId, userId);
     }
 
     private void recordSessionId(String userId, String sessionId, String type) {

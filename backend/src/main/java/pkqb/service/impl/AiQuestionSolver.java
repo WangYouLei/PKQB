@@ -12,9 +12,11 @@ import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.stereotype.Component;
 import pkqb.common.Result;
+import pkqb.config.RagAgentHook;
 import pkqb.config.ReactAgentFactory;
 import pkqb.pojo.entity.ModelsEntity;
 import pkqb.service.DashScopeRerankService;
+import pkqb.service.RagDataIsolationService;
 import pkqb.service.UserApiKeyService;
 import pkqb.util.LatexMathCleaner;
 
@@ -39,17 +41,20 @@ public class AiQuestionSolver {
     private final UserApiKeyService userApiKeyService;
     private final VectorStore vectorStore;
     private final DashScopeRerankService rerankService;
+    private final RagDataIsolationService ragDataIsolationService;
 
     public AiQuestionSolver(ObjectMapper objectMapper,
                             ReactAgentFactory reactAgentFactory,
                             UserApiKeyService userApiKeyService,
                             VectorStore vectorStore,
-                            DashScopeRerankService rerankService) {
+                            DashScopeRerankService rerankService,
+                            RagDataIsolationService ragDataIsolationService) {
         this.objectMapper = objectMapper;
         this.reactAgentFactory = reactAgentFactory;
         this.userApiKeyService = userApiKeyService;
         this.vectorStore = vectorStore;
         this.rerankService = rerankService;
+        this.ragDataIsolationService = ragDataIsolationService;
     }
 
     Result<String> aiSolveQuestion(String questionText, String questionType, String optionsJson, String generateType, Long userId) {
@@ -73,6 +78,7 @@ public class AiQuestionSolver {
             String threadId = "ai_solve:" + userId + ":" + System.currentTimeMillis();
             RunnableConfig config = RunnableConfig.builder()
                     .threadId(threadId)
+                    .addMetadata(RagAgentHook.USER_ID_METADATA_KEY, userId)
                     .build();
 
             StringBuilder result = new StringBuilder();
@@ -139,6 +145,7 @@ public class AiQuestionSolver {
             String threadId = "ai_solve:" + userId + ":" + System.currentTimeMillis();
             RunnableConfig config = RunnableConfig.builder()
                     .threadId(threadId)
+                    .addMetadata(RagAgentHook.USER_ID_METADATA_KEY, userId)
                     .build();
 
             StringBuilder result = new StringBuilder();
@@ -459,6 +466,7 @@ public class AiQuestionSolver {
             String threadId = "ai_solve:" + userId + ":" + System.currentTimeMillis();
             RunnableConfig config = RunnableConfig.builder()
                     .threadId(threadId)
+                    .addMetadata(RagAgentHook.USER_ID_METADATA_KEY, userId)
                     .build();
 
             String assistantText = "";
@@ -533,11 +541,12 @@ public class AiQuestionSolver {
 
     private String searchVectorStore(String query, Long userId) {
         try {
-            // 粗排：扩大召回，为精排提供更多候选
+            // 粗排：扩大召回，为精排提供更多候选；过滤表达式限定本人文档或同班共享文档
             SearchRequest searchRequest = SearchRequest.builder()
                     .query(query)
                     .topK(20)
                     .similarityThreshold(0.5)
+                    .filterExpression(ragDataIsolationService.buildFilterExpression(userId))
                     .build();
 
             List<Document> documents = vectorStore.similaritySearch(searchRequest);

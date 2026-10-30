@@ -15,6 +15,7 @@ import pkqb.pojo.entity.FileEntity;
 import pkqb.pojo.entity.UserEntity;
 import pkqb.service.FileService;
 import pkqb.service.MinioService;
+import pkqb.service.RagDataIsolationService;
 
 import java.util.List;
 import java.util.Map;
@@ -33,6 +34,7 @@ public class FileServiceImpl implements FileService {
     private final FileMapper fileMapper;
     private final UserMapper userMapper;
     private final MinioService minioService;
+    private final RagDataIsolationService ragDataIsolationService;
 
     @Value("${minio.endpoint}")
     private String minioEndpoint;
@@ -68,6 +70,9 @@ public class FileServiceImpl implements FileService {
         fileMapper.deleteById(fileId);
 
         minioService.remove(entity.getMinioKey());
+
+        // 同步清理向量库中该文件的文档片段，避免已删文件仍可被 RAG 检索到
+        ragDataIsolationService.deleteDocumentsByFileId(fileId);
     }
 
     @Override
@@ -132,11 +137,17 @@ public class FileServiceImpl implements FileService {
         if (fileName != null && !fileName.trim().isEmpty()) {
             entity.setFileName(fileName);
         }
-        if (isPrivate != null) {
+        boolean privacyChanged = isPrivate != null && !isPrivate.equals(entity.getIsPrivate());
+        if (privacyChanged) {
             entity.setIsPrivate(isPrivate);
         }
 
         fileMapper.updateById(entity);
+
+        if (privacyChanged) {
+            // 同步向量库中该文件片段的 isPrivate 元数据，保证 RAG 检索可见性与文件列表一致
+            ragDataIsolationService.updateDocumentsPrivacy(fileId, isPrivate);
+        }
         return toResponse(entity);
     }
 
@@ -204,6 +215,9 @@ public class FileServiceImpl implements FileService {
                             entity.getId(), entity.getMinioKey(), e.getMessage());
                 }
             }
+            // 同步清理向量库中这些文件的文档片段（失败仅告警，见 RagDataIsolationServiceImpl）
+            ragDataIsolationService.deleteDocumentsByFileIds(
+                    ownedFiles.stream().map(FileEntity::getId).toList());
         }
 
         log.info("[批量删除文件] userId={}, 总数={}, 成功={}", userId, fileIds.size(), ownedFiles.size());

@@ -9,6 +9,7 @@ import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import pkqb.service.DashScopeRerankService;
+import pkqb.service.RagDataIsolationService;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -18,10 +19,13 @@ public class ReactAgentConfig {
 
     private final VectorStore vectorStore;
     private final DashScopeRerankService rerankService;
+    private final RagDataIsolationService dataIsolationService;
 
-    public ReactAgentConfig(VectorStore vectorStore, DashScopeRerankService rerankService) {
+    public ReactAgentConfig(VectorStore vectorStore, DashScopeRerankService rerankService,
+                            RagDataIsolationService dataIsolationService) {
         this.vectorStore = vectorStore;
         this.rerankService = rerankService;
+        this.dataIsolationService = dataIsolationService;
     }
 
     @Bean
@@ -62,7 +66,7 @@ public class ReactAgentConfig {
                 .name("rag_agent")
                 .model(chatModel)
                 .systemPrompt(AiConstants.RAG_SYSTEM_PROMPT)
-                .hooks(new RagAgentHook(vectorStore, rerankService),summarizationHook, modelCallLimitHook)
+                .hooks(new RagAgentHook(vectorStore, rerankService, dataIsolationService),summarizationHook, modelCallLimitHook)
                 .saver(memorySaver)
                 .interceptors(new RAGContextInterceptor())
                 .build();
