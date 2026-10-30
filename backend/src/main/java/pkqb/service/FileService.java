@@ -1,0 +1,83 @@
+package pkqb.service;
+
+import pkqb.pojo.dto.FileResponse;
+import pkqb.pojo.entity.FileEntity;
+
+import java.util.List;
+
+/**
+ * 文件服务接口
+ * 提供文件上传、下载、删除、更新等核心业务功能
+ */
+public interface FileService {
+
+    /**
+     * 获取用户文件列表
+     * 获取指定用户上传的所有文件
+     *
+     * @param userId 用户ID
+     * @return 文件响应列表
+     */
+    List<FileResponse> getUserFiles(Long userId);
+
+    /**
+     * 删除文件
+     * 从MinIO和数据库中删除指定文件
+     *
+     * @param fileId 文件ID
+     * @param userId 用户ID
+     * @throws pkqb.config.GlobalExceptionHandler.ResourceNotFoundException 文件不存在时抛出
+     * @throws pkqb.config.GlobalExceptionHandler.PermissionDeniedException 无权删除时抛出
+     */
+    void deleteFile(Long fileId, Long userId);
+
+    /**
+     * 获取班级公开文件列表
+     * 获取同班级其他用户公开的文件
+     *
+     * @param userId 用户ID
+     * @return 公开文件列表
+     * @throws pkqb.config.GlobalExceptionHandler.ResourceNotFoundException 用户不存在或未加入班级时抛出
+     */
+    List<FileResponse> getClassPublicFiles(Long userId);
+
+    /**
+     * 下载文件
+     * 一次查询同时返回文件元数据与内容，避免调用方重复查库与重复鉴权
+     *
+     * @param fileId 文件ID
+     * @param userId 用户ID
+     * @return 文件元数据与内容
+     * @throws pkqb.config.GlobalExceptionHandler.ResourceNotFoundException 文件不存在时抛出
+     * @throws pkqb.config.GlobalExceptionHandler.PermissionDeniedException 无权访问时抛出
+     */
+    FileDownload downloadFile(Long fileId, Long userId);
+
+    /**
+     * 文件下载结果（元数据 + 内容）
+     */
+    record FileDownload(FileEntity entity, byte[] content) {
+    }
+
+    /**
+     * 更新文件信息
+     * 更新文件名称和可见性
+     *
+     * @param fileId 文件ID
+     * @param userId 用户ID
+     * @param fileName 新文件名（可选）
+     * @param isPrivate 是否私有（可选）
+     * @return 更新后的文件响应
+     * @throws pkqb.config.GlobalExceptionHandler.ResourceNotFoundException 文件不存在时抛出
+     * @throws pkqb.config.GlobalExceptionHandler.PermissionDeniedException 无权修改时抛出
+     */
+    FileResponse updateFile(Long fileId, Long userId, String fileName, Boolean isPrivate);
+
+    /**
+     * 批量删除文件
+     * @param fileIds 文件ID列表
+     * @param userId 用户ID
+     * @return 成功删除的数量
+     */
+    int batchDeleteFiles(List<Long> fileIds, Long userId);
+}
