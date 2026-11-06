@@ -160,15 +160,32 @@ async function submitEdit() {
 </script>
 
 <style scoped>
-.file-card {
+.file-card { 
   cursor: pointer; 
   position: relative;
+  overflow: hidden;
+}
+
+.file-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--accent-gradient);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.file-card:hover::before {
+  opacity: 1;
 }
 
 .card-header-icon svg {
   width: 22px;
   height: 22px;
-  color: #141414;
+  color: #fff;
 }
 
 .card-header-text h3 {
@@ -266,21 +283,21 @@ async function submitEdit() {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(20,20,20,0.55);
+  background: rgba(0,0,0,0.5);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
+  backdrop-filter: blur(4px);
 }
 
 .edit-modal {
   background: var(--card-bg);
-  border: 2px solid var(--ink);
-  border-radius: var(--card-radius);
+  border: 1px solid var(--border-glass);
+  border-radius: 16px;
   padding: 24px;
   min-width: 360px;
   max-width: 90vw;
-  box-shadow: 8px 8px 0 var(--shadow-ink);
 }
 
 .edit-modal h3 {
@@ -304,27 +321,27 @@ async function submitEdit() {
 .form-input {
   width: 100%;
   padding: 10px 14px;
-  border: 2px solid var(--input-border);
-  border-radius: 6px;
-  background: var(--input-bg);
+  border: 1px solid var(--border-glass);
+  border-radius: 10px;
+  background: var(--bg-glass);
   color: var(--text-primary);
   font-size: 14px;
-  transition: box-shadow 0.12s ease;
+  transition: all 0.3s ease;
   box-sizing: border-box;
 }
 
 .form-input:focus {
   outline: none;
-  border-color: var(--input-focus);
-  box-shadow: 3px 3px 0 var(--accent);
+  border-color: var(--tertiary);
+  box-shadow: 0 0 0 3px rgba(6,182,212,0.1);
 }
 
 .toggle { position: relative; display: inline-block; width: 48px; height: 26px; }
 .toggle input { opacity: 0; width: 0; height: 0; }
-.toggle-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--bg-secondary); border: 2px solid var(--ink); transition: .15s; border-radius: 6px; }
-.toggle-slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; top: 3px; background-color: var(--ink); transition: .15s; border-radius: 4px; }
-.toggle input:checked + .toggle-slider { background: var(--accent); }
-.toggle input:checked + .toggle-slider:before { transform: translateX(22px); }
+.toggle-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.2); transition: .3s; border-radius: 26px; }
+.toggle-slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: #888; transition: .3s; border-radius: 50%; }
+.toggle input:checked + .toggle-slider { background: linear-gradient(135deg,#22c55e,#16a34a); border-color: transparent; }
+.toggle input:checked + .toggle-slider:before { transform: translateX(22px); background-color: #4ade80; }
 
 .modal-actions {
   display: flex;

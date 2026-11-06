@@ -208,7 +208,7 @@ const showFeedbackModal = ref(false)
 
 onMounted(() => {
   const savedTheme = localStorage.getItem('theme')
-  isLightMode.value = savedTheme !== 'dark'
+  isLightMode.value = savedTheme === 'light'
 
   const savedCollapsed = localStorage.getItem('sidebarCollapsed')
   isCollapsed.value = savedCollapsed === 'true'
@@ -227,9 +227,9 @@ function setTheme(light: boolean) {
   isLightMode.value = light
   localStorage.setItem('theme', light ? 'light' : 'dark')
   if (light) {
-    document.documentElement.classList.remove('dark')
+    document.documentElement.classList.add('light')
   } else {
-    document.documentElement.classList.add('dark')
+    document.documentElement.classList.remove('light')
   }
 }
 
@@ -289,26 +289,28 @@ async function handleLogout() {
   width: 40px;
   height: 40px;
   min-width: 40px;
-  background: var(--accent);
-  border: 2px solid var(--ink);
-  border-radius: 8px;
+  background: var(--accent-gradient);
+  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 3px 3px 0 var(--shadow-ink);
+  box-shadow: 0 4px 16px rgba(99,102,241,0.3);
 }
 
 .logo-icon svg {
   width: 22px;
   height: 22px;
-  color: #141414;
+  color: #fff;
 }
 
 .logo-text {
   font-size: 24px;
   font-weight: 800;
-  color: var(--text-primary);
-  letter-spacing: 2px;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: 1px;
   white-space: nowrap;
   transition: opacity 0.2s ease;
 }
@@ -387,10 +389,10 @@ async function handleLogout() {
 }
 
 .theme-btn.active {
-  background: var(--accent);
-  border-color: var(--ink);
-  box-shadow: 2px 2px 0 var(--shadow-ink);
-  color: #141414;
+  background: var(--accent-gradient);
+  border-color: transparent;
+  box-shadow: 0 4px 16px rgba(99,102,241,0.3);
+  color: #fff;
 }
 
 .sidebar-nav {
@@ -464,17 +466,39 @@ async function handleLogout() {
 }
 
 .sidebar-link:hover {
-  background: var(--bg-tertiary);
+  background: rgba(255,255,255,0.04);
   color: var(--text-primary);
+  transform: translateX(4px);
 }
 
 .sidebar.collapsed .sidebar-link:hover {
-  transform: scale(1.03);
+  transform: translateX(0) scale(1.05);
+}
+
+:root.light .sidebar-link:hover {
+  background: rgba(0,0,0,0.04);
 }
 
 .sidebar-link.active {
-  background: var(--accent);
-  color: #141414;
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+.sidebar-link.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 20px;
+  background: var(--accent-gradient);
+  border-radius: 0 3px 3px 0;
+  transition: opacity 0.2s ease;
+}
+
+.sidebar.collapsed .sidebar-link.active::before {
+  opacity: 0;
 }
 
 .sidebar-user {
@@ -484,8 +508,8 @@ async function handleLogout() {
   padding: 16px 20px;
   border-top: 1px solid var(--border-glass);
   margin-top: auto;
-  background: transparent;
-  border-radius: 8px;
+  background: rgba(255,255,255,0.02);
+  border-radius: 16px;
   margin-left: 12px;
   margin-right: 12px;
   flex-shrink: 0;
@@ -496,9 +520,8 @@ async function handleLogout() {
   width: 40px;
   height: 40px;
   min-width: 40px;
-  border-radius: 8px;
-  background: var(--secondary);
-  border: 2px solid var(--ink);
+  border-radius: 12px;
+  background: var(--accent-gradient);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -516,6 +539,7 @@ async function handleLogout() {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  border-radius: 12px;
 }
 
 .user-info {
@@ -607,17 +631,18 @@ async function handleLogout() {
   transform: translateY(-50%);
   width: 40px;
   height: 40px;
-  border-radius: 8px;
-  border: 2px solid var(--ink);
-  background: var(--bg-secondary);
+  border-radius: 12px;
+  border: 1px solid var(--border-glass);
+  background: var(--bg-glass);
+  backdrop-filter: blur(20px);
   color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.12s ease;
+  transition: all 0.3s ease;
   z-index: 100;
-  box-shadow: 3px 3px 0 var(--shadow-ink);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.1);
 }
 
 .sidebar-expand-btn svg {
@@ -626,11 +651,11 @@ async function handleLogout() {
 }
 
 .sidebar-expand-btn:hover {
-  background: var(--accent);
-  border-color: var(--ink);
-  color: #141414;
-  transform: translateY(-50%) scale(1.05);
-  box-shadow: 4px 4px 0 var(--shadow-ink);
+  background: var(--accent-light);
+  border-color: var(--accent-border);
+  color: var(--accent);
+  transform: translateY(-50%) scale(1.1);
+  box-shadow: 0 6px 24px rgba(99,102,241,0.3);
 }
 
 .main-content {
@@ -671,7 +696,8 @@ async function handleLogout() {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(20, 20, 20, 0.55);
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -689,15 +715,15 @@ async function handleLogout() {
 }
 
 .feedback-modal {
-  background: var(--bg-secondary);
-  border: 2px solid var(--ink);
-  border-radius: var(--card-radius);
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  border-radius: 20px;
   padding: 32px;
   max-width: 400px;
   width: 90%;
   position: relative;
   animation: slideUp 0.3s ease;
-  box-shadow: 8px 8px 0 var(--shadow-ink);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
 }
 
 @keyframes slideUp {
@@ -766,9 +792,8 @@ async function handleLogout() {
 .qrcode-container {
   background: #fff;
   padding: 16px;
-  border: 2px solid var(--ink);
-  border-radius: var(--card-radius);
-  box-shadow: 4px 4px 0 var(--shadow-ink);
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
   margin-bottom: 16px;
 }
 
@@ -781,12 +806,11 @@ async function handleLogout() {
 
 .feedback-tip {
   font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text-muted);
   margin: 0;
   padding: 8px 16px;
-  background: var(--accent-light);
-  border-radius: 6px;
-  border: 2px solid var(--ink);
+  background: rgba(99, 102, 241, 0.1);
+  border-radius: 8px;
+  border: 1px solid rgba(99, 102, 241, 0.2);
 }
 </style>
