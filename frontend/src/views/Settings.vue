@@ -384,7 +384,6 @@ import { apiGetApiKeyStatus, apiSaveApiKey, apiDeleteApiKey, apiAddModel, apiDel
 import type { ApiKeyStatus, ModelsEntity } from '@/types'
 
 const userStore = useUserStore()
-const toast = useToast()
 const status = ref<ApiKeyStatus | null>(null)
 const apiKeyInput = ref('')
 const showApiKey = ref(false)
@@ -467,15 +466,15 @@ async function handleAddModel() {
 
   // 前端按类型校验
   if (modelType === 0 && !canAddMainModel.value) {
-    toast.error('主模型已存在，最多只能设置1个主模型')
+    alert('主模型已存在，最多只能设置1个主模型')
     return
   }
   if (modelType === 1 && !canAddAssistantModel.value) {
-    toast.error('辅助模型已达到最大数量限制（2个）')
+    alert('辅助模型已达到最大数量限制（2个）')
     return
   }
   if (modelType === 2 && !canAddVisionModel.value) {
-    toast.error('视觉模型已存在，最多只能设置1个视觉模型')
+    alert('视觉模型已存在，最多只能设置1个视觉模型')
     return
   }
 
@@ -483,17 +482,17 @@ async function handleAddModel() {
   try {
     const res = await apiAddModel(newModelName.value.trim(), modelType)
     if (res.code === 200) {
-      toast.success('模型添加成功')
+      alert('模型添加成功')
       newModelName.value = ''
       newModelIsMain.value = false
       newModelIsVision.value = false
       await loadStatus()
     } else {
-      toast.error(res.message || '模型添加失败')
+      alert(res.message || '模型添加失败')
     }
   } catch (error) {
     console.error('添加模型失败:', error)
-    toast.error('模型添加失败')
+    alert('模型添加失败')
   } finally {
     savingModel.value = false
   }
@@ -507,14 +506,14 @@ async function handleDeleteModel(modelId: number) {
   try {
     const res = await apiDeleteModel(modelId)
     if (res.code === 200) {
-      toast.success('模型删除成功')
+      alert('模型删除成功')
       await loadStatus()
     } else {
-      toast.error(res.message || '模型删除失败')
+      alert(res.message || '模型删除失败')
     }
   } catch (error) {
     console.error('删除模型失败:', error)
-    toast.error('模型删除失败')
+    alert('模型删除失败')
   } finally {
     deletingModelId.value = null
   }
@@ -527,16 +526,18 @@ async function handleSetMainModel(modelId: number) {
   try {
     const res = await apiSetMainModel(modelId)
     if (res.code === 200) {
-      toast.success('主模型设置成功')
+      alert('主模型设置成功')
       await loadStatus()
     } else {
-      toast.error(res.message || '设置主模型失败')
+      alert(res.message || '设置主模型失败')
     }
   } catch (error) {
     console.error('设置主模型失败:', error)
-    toast.error('设置主模型失败')
+    alert('设置主模型失败')
   }
 }
+
+const toast = useToast()
 
 function handleEditModel(model: ModelsEntity) {
   const newName = prompt('请输入新的模型名称：', model.modelName)
@@ -580,22 +581,22 @@ async function doEditModel() {
 async function handleSave() {
   if (!userStore.userId || !apiKeyInput.value.trim()) return
   if (isMaskedKey.value && apiKeyInput.value === MASKED_KEY) {
-    toast.error('请输入新的 API Key')
+    alert('请输入新的 API Key')
     return
   }
   saving.value = true
   try {
     const res = await apiSaveApiKey(apiKeyInput.value.trim())
     if (res.code === 200) {
-      toast.success('API Key 保存成功')
+      alert('API Key 保存成功！')
       apiKeyInput.value = MASKED_KEY
       isMaskedKey.value = true
       await loadStatus()
     } else {
-      toast.error(res.message || '保存失败')
+      alert(res.message || '保存失败')
     }
   } catch (error: unknown) {
-    toast.error((error as Error).message || '保存失败')
+    alert((error as Error).message || '保存失败')
   } finally {
     saving.value = false
   }
@@ -609,15 +610,15 @@ async function handleDelete() {
   try {
     const res = await apiDeleteApiKey()
     if (res.code === 200) {
-      toast.success('API Key 已删除')
+      alert('API Key 已删除')
       apiKeyInput.value = ''
       isMaskedKey.value = false
       await loadStatus()
     } else {
-      toast.error(res.message || '删除失败')
+      alert(res.message || '删除失败')
     }
   } catch (error: unknown) {
-    toast.error((error as Error).message || '删除失败')
+    alert((error as Error).message || '删除失败')
   } finally {
     deleting.value = false
   }
@@ -633,20 +634,21 @@ async function handleFileSelect(event: Event) {
   if (!file) return
 
   if (!file.type.startsWith('image/')) {
-    toast.error('请选择图片文件')
+    alert('请选择图片文件')
     return
   }
 
   if (file.size > 5 * 1024 * 1024) {
-    toast.error('图片大小不能超过 5MB')
+    alert('图片大小不能超过 5MB')
     return
   }
 
   uploading.value = true
   try {
-    const uploadPathRes = await apiGetAvatarUploadPath()
+    // contentType 必传且与下方 PUT 请求头一致，否则 OSS 预签名校验会失败
+    const uploadPathRes = await apiGetAvatarUploadPath(file.type)
     if (uploadPathRes.code !== 200 || !uploadPathRes.data.uploadUrl) {
-      toast.error('获取上传路径失败')
+      alert('获取上传路径失败')
       return
     }
 
@@ -661,20 +663,20 @@ async function handleFileSelect(event: Event) {
     })
 
     if (!uploadResponse.ok) {
-      toast.error('上传失败')
+      alert('上传失败')
       return
     }
 
     const updateRes = await apiUpdateAvatar(objectKey)
     if (updateRes.code === 200 && updateRes.data) {
       userStore.updateAvatar(updateRes.data)
-      toast.success('头像上传成功')
+      alert('头像上传成功！')
     } else {
-      toast.error(updateRes.message || '更新头像失败')
+      alert(updateRes.message || '更新头像失败')
     }
   } catch (error: unknown) {
     console.error('上传头像失败:', error)
-    toast.error((error as Error).message || '上传失败')
+    alert((error as Error).message || '上传失败')
   } finally {
     uploading.value = false
     if (fileInput.value) {
@@ -688,7 +690,7 @@ async function handleUpdateUsername() {
   
   const username = usernameInput.value.trim()
   if (username.length < 2 || username.length > 20) {
-    toast.error('用户名长度应在2-20个字符之间')
+    alert('用户名长度应在2-20个字符之间')
     return
   }
   
@@ -697,13 +699,13 @@ async function handleUpdateUsername() {
     const res = await apiUpdateUsername(username)
     if (res.code === 200) {
       userStore.updateUsername(username)
-      toast.success('用户名修改成功')
+      alert('用户名修改成功！')
       usernameInput.value = ''
     } else {
-      toast.error(res.message || '修改失败')
+      alert(res.message || '修改失败')
     }
   } catch (error: unknown) {
-    toast.error((error as Error).message || '修改失败')
+    alert((error as Error).message || '修改失败')
   } finally {
     savingUsername.value = false
   }
@@ -713,7 +715,7 @@ async function handleUpdatePassword() {
   if (!oldPasswordInput.value || !newPasswordInput.value) return
   
   if (newPasswordInput.value.length < 6) {
-    toast.error('新密码长度不能少于6个字符')
+    alert('新密码长度不能少于6个字符')
     return
   }
   
@@ -721,14 +723,14 @@ async function handleUpdatePassword() {
   try {
     const res = await apiUpdatePassword(oldPasswordInput.value, newPasswordInput.value)
     if (res.code === 200) {
-      toast.success('密码修改成功')
+      alert('密码修改成功！')
       oldPasswordInput.value = ''
       newPasswordInput.value = ''
     } else {
-      toast.error(res.message || '修改失败')
+      alert(res.message || '修改失败')
     }
   } catch (error: unknown) {
-    toast.error((error as Error).message || '修改失败')
+    alert((error as Error).message || '修改失败')
   } finally {
     savingPassword.value = false
   }

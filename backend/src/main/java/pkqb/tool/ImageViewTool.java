@@ -8,18 +8,18 @@ import org.springframework.ai.content.Media;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.util.MimeType;
-import pkqb.service.MinioService;
+import pkqb.service.OssService;
 
 import java.util.function.BiFunction;
 
 @Slf4j
 public class ImageViewTool implements BiFunction<String, ToolContext, String> {
 
-    private final MinioService minioService;
+    private final OssService ossService;
     private final ChatModel visionChatModel;
 
-    public ImageViewTool(MinioService minioService, ChatModel visionChatModel) {
-        this.minioService = minioService;
+    public ImageViewTool(OssService ossService, ChatModel visionChatModel) {
+        this.ossService = ossService;
         this.visionChatModel = visionChatModel;
     }
 
@@ -27,12 +27,12 @@ public class ImageViewTool implements BiFunction<String, ToolContext, String> {
     public String apply(String imageUrl, ToolContext toolContext) {
         log.info("[ImageViewTool] 查看图片: {}", imageUrl);
         try {
-            String objectKey = extractObjectKey(imageUrl);
+            String objectKey = ossService.extractObjectKeyFromUrl(imageUrl);
             if (objectKey == null) {
                 return "无法解析图片地址";
             }
 
-            byte[] imageBytes = minioService.getFile(objectKey);
+            byte[] imageBytes = ossService.getFile(objectKey);
             if (imageBytes == null || imageBytes.length == 0) {
                 return "图片不存在或无法获取";
             }
@@ -55,16 +55,6 @@ public class ImageViewTool implements BiFunction<String, ToolContext, String> {
         }
     }
 
-    private String extractObjectKey(String url) {
-        if (url == null || url.isEmpty()) return null;
-        int bucketEnd = url.indexOf("/", url.indexOf("//") + 2);
-        if (bucketEnd < 0) return null;
-        String path = url.substring(bucketEnd + 1);
-        int slashIdx = path.indexOf("/");
-        if (slashIdx < 0) return null;
-        return path.substring(slashIdx + 1);
-    }
-
     private String guessMimeType(String objectKey) {
         if (objectKey.endsWith(".png")) return "image/png";
         if (objectKey.endsWith(".jpg") || objectKey.endsWith(".jpeg")) return "image/jpeg";
@@ -73,8 +63,8 @@ public class ImageViewTool implements BiFunction<String, ToolContext, String> {
         return "image/png";
     }
 
-    public static FunctionToolCallback createTool(MinioService minioService, ChatModel visionChatModel) {
-        ImageViewTool tool = new ImageViewTool(minioService, visionChatModel);
+    public static FunctionToolCallback createTool(OssService ossService, ChatModel visionChatModel) {
+        ImageViewTool tool = new ImageViewTool(ossService, visionChatModel);
         return FunctionToolCallback.builder("image_view", tool)
                 .description("查看指定图片的详细内容。当需要确认图片属于哪道题、哪个选项，或需要理解图片内容时调用此工具。参数imageUrl是图片的访问地址。")
                 .inputType(String.class)

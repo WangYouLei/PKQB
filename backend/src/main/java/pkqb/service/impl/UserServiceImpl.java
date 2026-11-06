@@ -3,7 +3,6 @@ package pkqb.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,7 +15,7 @@ import pkqb.mapper.ClassMapper;
 import pkqb.mapper.UserMapper;
 import pkqb.pojo.entity.ClassEntity;
 import pkqb.pojo.entity.UserEntity;
-import pkqb.service.MinioService;
+import pkqb.service.OssService;
 import pkqb.service.UserService;
 import pkqb.util.Argon2idUtil;
 import pkqb.util.JwtUtil;
@@ -33,13 +32,7 @@ public class UserServiceImpl implements UserService {
     private final UserMapper userMapper;
     private final ClassMapper classMapper;
     private final JwtUtil jwtUtil;
-    private final MinioService minioService;
-
-    @Value("${minio.endpoint}")
-    private String minioEndpoint;
-
-    @Value("${minio.bucket-name}")
-    private String bucketName;
+    private final OssService ossService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -133,7 +126,7 @@ public class UserServiceImpl implements UserService {
         if (objectKey == null || objectKey.trim().isEmpty()) {
             return null;
         }
-        return minioEndpoint + "/" + bucketName + "/" + objectKey;
+        return ossService.getPublicUrl(objectKey);
     }
 
     @Override
@@ -142,7 +135,7 @@ public class UserServiceImpl implements UserService {
         log.info("开始更新用户 {} 的头像, objectKey: {}", userId, objectKey);
 
         // 安全校验：objectKey 必须位于当前用户自己的头像目录下，
-        // 防止恶意传入他人对象Key（如知识库、试卷文件）导致换头像时被 minioService.remove 删除
+        // 防止恶意传入他人对象Key（如知识库、试卷文件）导致换头像时被 ossService.remove 删除
         String expectedPrefix = "avatar/" + userId + "/";
         if (objectKey == null || !objectKey.startsWith(expectedPrefix)) {
             log.warn("[头像更新] 拒绝非法objectKey, userId={}, objectKey={}", userId, objectKey);
@@ -163,14 +156,14 @@ public class UserServiceImpl implements UserService {
         // DB更新成功后再删旧头像
         if (oldAvatarUrl != null) {
             try {
-                minioService.remove(oldAvatarUrl);
+                ossService.remove(oldAvatarUrl);
                 log.info("删除用户 {} 的旧头像成功: {}", userId, oldAvatarUrl);
             } catch (Exception e) {
                 log.warn("删除用户 {} 的旧头像失败: {}", userId, e.getMessage());
             }
         }
 
-        String publicUrl = minioEndpoint + "/" + bucketName + "/" + objectKey;
+        String publicUrl = ossService.getPublicUrl(objectKey);
         log.info("生成公开URL: {}", publicUrl);
 
         return publicUrl;

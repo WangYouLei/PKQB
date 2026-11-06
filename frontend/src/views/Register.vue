@@ -84,11 +84,9 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { apiRegister } from '@/api'
-import { useToast } from '@/composables/useToast'
 import type { RegisterRequest } from '@/types'
 
 const router = useRouter()
-const toast = useToast()
 const form = ref<RegisterRequest>({ username: '', password: '', studentNo: '', classId: null, className: '' })
 const loading = ref(false)
 
@@ -97,14 +95,14 @@ async function handleRegister() {
   try {
     const res = await apiRegister(form.value)
     if (res.code === 200) {
-      toast.success('注册成功，请登录')
+      alert('注册成功，请登录')
       router.push('/login')
     } else {
-      toast.error(res.message || '注册失败')
+      alert(res.message || '注册失败')
     }
   } catch (e: unknown) {
     const msg = (e as { message?: string })?.message || '注册失败，请重试'
-    toast.error(msg)
+    alert(msg)
   } finally {
     loading.value = false
   }

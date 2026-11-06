@@ -253,9 +253,9 @@ export const apiSetMainModel = async (modelId: number) => {
 
 // ========== 用户头像管理 ==========
 
-/** 获取头像上传路径 */
-export const apiGetAvatarUploadPath = async () => {
-  const res = await get<{ objectKey: string; uploadUrl: string }>('/user/avatar/upload-path')
+/** 获取头像上传路径（contentType 必传且与上传时携带的 Content-Type 头一致，OSS 签名校验要求） */
+export const apiGetAvatarUploadPath = async (contentType: string) => {
+  const res = await get<{ objectKey: string; uploadUrl: string }>('/user/avatar/upload-path', { contentType })
   return res
 }
 

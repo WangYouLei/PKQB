@@ -20,7 +20,6 @@
         <jackson-bom.version>2.17.1</jackson-bom.version>
         <mybatis-plus.version>3.5.5</mybatis-plus.version>
         <jjwt.version>0.12.5</jjwt.version>
-        <minio.version>8.5.7</minio.version>
         <poi.version>5.4.0</poi.version>
         <pdfbox.version>3.0.1</pdfbox.version>
         <aliyun-oss.version>3.18.1</aliyun-oss.version>
@@ -101,13 +100,6 @@
             <artifactId>jjwt-jackson</artifactId>
             <version>${jjwt.version}</version>
             <scope>runtime</scope>
-        </dependency>
-
-        <!-- MinIO -->
-        <dependency>
-            <groupId>io.minio</groupId>
-            <artifactId>minio</artifactId>
-            <version>${minio.version}</version>
         </dependency>
 
         <!-- Apache POI -->

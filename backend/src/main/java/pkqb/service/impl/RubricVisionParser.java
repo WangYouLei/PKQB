@@ -341,12 +341,13 @@ public class RubricVisionParser {
                                              List<ExtractedImage> extractedImages,
                                              ChatModel sharedVisionModel,
                                              java.util.function.Consumer<String> progress) {
-        List<AiRubric> merged = new ArrayList<>();
-        boolean prevTailIncomplete = false;
-        List<Integer> prevChunkPages = null;
-        AiRubric prevTailQuestion = null;
+        List<AiRubric> merged = new ArrayList<>();          // 最终合并结果
+        boolean prevTailIncomplete = false;                 // 上一片尾题是否不完整（跨页嫌疑）
+        List<Integer> prevChunkPages = null;                // 上一片页码，取末页拼补漏分片
+        AiRubric prevTailQuestion = null;                   // 上一片尾题对象，补漏失败时恢复
 
         for (ChunkParseResult chunk : chunkResults) {
+            //空白页、非题目页直接跳过
             if (chunk.questions.isEmpty()) continue;
 
             if (prevTailIncomplete && chunk.firstQuestionIsContinuation && prevChunkPages != null) {

@@ -22,7 +22,7 @@ public interface FileService {
 
     /**
      * 删除文件
-     * 从MinIO和数据库中删除指定文件
+     * 从OSS和数据库中删除指定文件
      *
      * @param fileId 文件ID
      * @param userId 用户ID

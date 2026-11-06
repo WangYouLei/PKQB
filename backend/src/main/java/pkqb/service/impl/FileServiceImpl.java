@@ -3,7 +3,6 @@ package pkqb.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import pkqb.config.GlobalExceptionHandler.ResourceNotFoundException;
@@ -14,7 +13,7 @@ import pkqb.pojo.dto.FileResponse;
 import pkqb.pojo.entity.FileEntity;
 import pkqb.pojo.entity.UserEntity;
 import pkqb.service.FileService;
-import pkqb.service.MinioService;
+import pkqb.service.OssService;
 import pkqb.service.RagDataIsolationService;
 
 import java.util.List;
@@ -33,14 +32,8 @@ public class FileServiceImpl implements FileService {
 
     private final FileMapper fileMapper;
     private final UserMapper userMapper;
-    private final MinioService minioService;
+    private final OssService ossService;
     private final RagDataIsolationService ragDataIsolationService;
-
-    @Value("${minio.endpoint}")
-    private String minioEndpoint;
-
-    @Value("${minio.bucket-name}")
-    private String bucketName;
 
     @Override
     public List<FileResponse> getUserFiles(Long userId) {
@@ -69,7 +62,7 @@ public class FileServiceImpl implements FileService {
 
         fileMapper.deleteById(fileId);
 
-        minioService.remove(entity.getMinioKey());
+        ossService.remove(entity.getMinioKey());
 
         // 同步清理向量库中该文件的文档片段，避免已删文件仍可被 RAG 检索到
         ragDataIsolationService.deleteDocumentsByFileId(fileId);
@@ -118,7 +111,7 @@ public class FileServiceImpl implements FileService {
             throw new PermissionDeniedException("无权访问该文件");
         }
 
-        byte[] content = minioService.getFile(entity.getMinioKey());
+        byte[] content = ossService.getFile(entity.getMinioKey());
         log.info("[文件管理] 用户 {} 下载文件 fileId={} size={}B", userId, fileId, content.length);
         return new FileDownload(entity, content);
     }
@@ -206,12 +199,12 @@ public class FileServiceImpl implements FileService {
         if (!ownedFiles.isEmpty()) {
             // 批量删除DB记录
             fileMapper.deleteBatchIds(ownedFiles.stream().map(FileEntity::getId).toList());
-            // 逐个清理MinIO对象（失败仅告警，接受孤立文件）
+            // 逐个清理OSS文件（失败仅告警，接受孤立文件）
             for (FileEntity entity : ownedFiles) {
                 try {
-                    minioService.remove(entity.getMinioKey());
+                    ossService.remove(entity.getMinioKey());
                 } catch (Exception e) {
-                    log.warn("[文件删除] Minio文件删除失败，fileId={}, minioKey={}: {}",
+                    log.warn("[文件删除] OSS文件删除失败，fileId={}, objectKey={}: {}",
                             entity.getId(), entity.getMinioKey(), e.getMessage());
                 }
             }

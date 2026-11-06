@@ -35,7 +35,7 @@ public interface UserService {
      * 更新用户头像路径，并删除旧头像文件
      *
      * @param userId 用户ID
-     * @param objectKey MinIO对象存储路径
+     * @param objectKey OSS对象objectKey（avatar/{userId}/前缀）
      * @return 头像公开访问URL
      */
     String updateAvatar(Long userId, String objectKey);

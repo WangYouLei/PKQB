@@ -5,7 +5,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.web.util.HtmlUtils;
@@ -28,7 +27,6 @@ import pkqb.pojo.entity.QuestionResourceEntity;
 import pkqb.pojo.entity.RubricEntity;
 import pkqb.pojo.entity.UserEntity;
 import pkqb.pojo.entity.ClassEntity;
-import pkqb.service.MinioService;
 import pkqb.service.NotificationService;
 import pkqb.service.OssService;
 import pkqb.service.QuestionResourceService;
@@ -58,30 +56,25 @@ public class RubricServiceImpl implements RubricService {
     private final FileMapper fileMapper;
     private final UserMapper userMapper;
     private final ClassMapper classMapper;
-    private final MinioService minioService;
     private final OssService ossService;
     private final ObjectMapper objectMapper;
     private final NotificationService notificationService;
     private final QuestionResourceService questionResourceService;
-    // 手动事务边界：网络IO（图片迁移/MinIO上传）在事务外执行，仅DB写入走事务，避免长事务占死连接
+    // 手动事务边界：网络IO（图片迁移/OSS上传）在事务外执行，仅DB写入走事务，避免长事务占死连接
     private final TransactionTemplate transactionTemplate;
-
-    @Value("${minio.endpoint}")
-    private String minioEndpoint;
-
-    @Value("${minio.bucket-name}")
-    private String bucketName;
 
     /**
      * 规范化资源类型：将旧的非标准 type（如 "image"/"img"）统一为前端期望的类型
      */
 
     /**
-     * 将OSS图片迁移到MinIO：下载OSS图片→上传到MinIO→替换URL→删除OSS原文件
+     * 将OSS临时图片转存为持久存储：下载OSS图片→上传到持久前缀→替换URL→删除原文件
+     * question-image/ 前缀受1天生命周期规则约束（解析期间的临时中转），
+     * question-image-persistent/ 不受该规则影响，用于保存后的持久化
      * @param originalUrl 原始URL（可能是OSS URL）
-     * @return 迁移后的MinIO URL；如果不需要迁移则返回原始URL
+     * @return 转存后的持久URL；如果不需要迁移则返回原始URL
      */
-    private String migrateOssImageToMinio(String originalUrl) {
+    private String migrateOssImageToPermanent(String originalUrl) {
         if (originalUrl == null || originalUrl.isEmpty() || !ossService.isOssUrl(originalUrl)) {
             return originalUrl;
         }
@@ -92,33 +85,37 @@ public class RubricServiceImpl implements RubricService {
                 return originalUrl;
             }
 
+            // 已经在持久前缀下，无需迁移
+            if (objectKey.startsWith("question-image-persistent/")) {
+                return originalUrl;
+            }
+
             // 从OSS下载图片
             OssService.OssFileData fileData = ossService.download(objectKey);
 
-            // 生成MinIO存储路径：保留原始路径结构中的文件名部分
-            String minioObjectKey = "question-image/" + UUID.randomUUID() + "-" +
+            // 生成持久存储路径：保留原始路径结构中的文件名部分
+            String persistentKey = "question-image-persistent/" + UUID.randomUUID() + "-" +
                     objectKey.substring(objectKey.lastIndexOf('/') + 1);
 
-            // 上传到MinIO
+            // 上传到持久前缀
             ByteArrayInputStream inputStream = new ByteArrayInputStream(fileData.getData());
-            minioService.upload(minioObjectKey, inputStream, fileData.getContentType(), fileData.getData().length);
+            ossService.upload(persistentKey, inputStream, fileData.getContentType(), fileData.getData().length);
 
-            // 生成MinIO访问URL
-            String minioUrl = minioService.getFileUrl(minioObjectKey);
+            // 生成访问URL
+            String persistentUrl = ossService.getPublicUrl(persistentKey);
 
-            // 删除OSS原文件
-            ossService.delete(objectKey);
-
-            log.info("[OSS迁移] 图片迁移成功: {} → {}", originalUrl, minioUrl);
-            return minioUrl;
+            // 不主动删除临时原文件：转存发生在事务外，若后续DB事务回滚、用户重试时
+            // 原URL对象仍需可下载；question-image/ 的1天生命周期规则会自动清理临时对象
+            log.info("[OSS迁移] 图片转存成功: {} → {}", originalUrl, persistentUrl);
+            return persistentUrl;
         } catch (Exception e) {
-            log.error("[OSS迁移] 图片迁移失败，保留原OSS URL: {}, error: {}", originalUrl, e.getMessage());
+            log.error("[OSS迁移] 图片转存失败，保留原OSS URL: {}, error: {}", originalUrl, e.getMessage());
             return originalUrl;
         }
     }
 
     /**
-     * 迁移题目资源列表中的所有OSS图片到MinIO
+     * 转存题目资源列表中的所有OSS临时图片到持久前缀
      * @param resources 题目资源列表
      */
 
@@ -149,7 +146,7 @@ public class RubricServiceImpl implements RubricService {
 
     @Override
     public Result<?> addRubric(RubricRequest rubricRequest) {
-        // 事务外先完成OSS→MinIO图片迁移（网络IO），事务内只做DB写入，避免长事务占死数据库连接
+        // 事务外先完成OSS临时图片转存持久前缀（网络IO），事务内只做DB写入，避免长事务占死数据库连接
         migrateAiRubricResources(rubricRequest.getRubrics());
 
         transactionTemplate.executeWithoutResult(tx -> {
@@ -196,7 +193,7 @@ public class RubricServiceImpl implements RubricService {
                 .max(Integer::compareTo)
                 .orElse(0);
 
-        // 事务外先完成OSS→MinIO图片迁移（网络IO），事务内只做DB写入
+        // 事务外先完成OSS临时图片转存持久前缀（网络IO），事务内只做DB写入
         migrateAiRubricResources(rubrics);
 
         transactionTemplate.executeWithoutResult(tx -> {
@@ -214,7 +211,7 @@ public class RubricServiceImpl implements RubricService {
     }
 
     /**
-     * 将AI解析结果中所有OSS图片URL预先迁移到MinIO并原地替换（网络IO，须在事务外调用）
+     * 将AI解析结果中所有OSS临时图片URL预先转存到持久前缀并原地替换（网络IO，须在事务外调用）
      */
     private void migrateAiRubricResources(List<AiRubric> rubrics) {
         if (rubrics == null) {
@@ -225,7 +222,7 @@ public class RubricServiceImpl implements RubricService {
                 continue;
             }
             for (AiRubric.AiResource resource : aiRubric.getResources()) {
-                resource.setUrl(migrateOssImageToMinio(resource.getUrl()));
+                resource.setUrl(migrateOssImageToPermanent(resource.getUrl()));
             }
         }
     }
@@ -266,7 +263,7 @@ public class RubricServiceImpl implements RubricService {
             if (aiRubric.getResources() != null && !aiRubric.getResources().isEmpty()) {
                 int sortOrder = 0;
                 for (AiRubric.AiResource resource : aiRubric.getResources()) {
-                    // OSS→MinIO迁移已在事务外完成（migrateAiRubricResources），此处直接使用替换后的URL
+                    // 图片持久化转存已在事务外完成（migrateAiRubricResources），此处直接使用替换后的URL
                     questionResourceService.saveResource(
                             questionEntity.getId(),
                             resource.getType(),
@@ -462,13 +459,13 @@ public class RubricServiceImpl implements RubricService {
             throw new IllegalArgumentException("题目列表不能为空");
         }
 
-        // 事务外：先将题目资源中的OSS图片迁移到MinIO（网络IO），事务内只做DB写入
+        // 事务外：先将题目资源中的OSS临时图片转存到持久前缀（网络IO），事务内只做DB写入
         for (QuestionEntity q : questions) {
             if (q.getResources() == null) {
                 continue;
             }
             for (QuestionResourceEntity res : q.getResources()) {
-                res.setUrl(migrateOssImageToMinio(res.getUrl()));
+                res.setUrl(migrateOssImageToPermanent(res.getUrl()));
             }
         }
 
@@ -493,7 +490,7 @@ public class RubricServiceImpl implements RubricService {
                 q.setExplanation(HtmlEscapeUtil.escapeBasic(q.getExplanation()));
                 questionMapper.insert(q);
 
-                // 保存资源（如果有）；OSS→MinIO迁移已在事务外完成，此处直接使用替换后的URL
+                // 保存资源（如果有）；图片持久化转存已在事务外完成，此处直接使用替换后的URL
                 if (q.getResources() != null && !q.getResources().isEmpty()) {
                     int sortOrder = 0;
                     for (QuestionResourceEntity res : q.getResources()) {
@@ -539,7 +536,7 @@ public class RubricServiceImpl implements RubricService {
                    .eq(FileEntity::getUserId, userId);
         FileEntity existFile = fileMapper.selectOne(existWrapper);
         if (existFile != null) {
-            throw new IllegalArgumentException("HTML文件已经存在，请在MinIO文件中查看");
+            throw new IllegalArgumentException("HTML文件已经存在，请在我上传的文件中查看");
         }
 
         // 3. 获取所有题目
@@ -552,14 +549,14 @@ public class RubricServiceImpl implements RubricService {
         // 4. 生成HTML内容
         String htmlContent = generateHtmlContent(rubric, questions);
 
-        // 5. 上传到MinIO
+        // 5. 上传到OSS
         String fileName = request.getFileName() != null && !request.getFileName().isEmpty()
                 ? request.getFileName()
                 : rubric.getTitle() + ".html";
         String objectKey = "rubric/" + userId + "/" + UUID.randomUUID() + ".html";
 
         // 单条insert自带原子性，不再用方法级@Transactional：
-        // 此前图片下载/MinIO上传等网络IO全被包进长事务，会长时间占用数据库连接
+        // 此前图片下载/OSS上传等网络IO全被包进长事务，会长时间占用数据库连接
         FileEntity fileEntity = new FileEntity();
         fileEntity.setUserId(userId);
         fileEntity.setRubricId(request.getRubricId());
@@ -568,12 +565,12 @@ public class RubricServiceImpl implements RubricService {
         fileEntity.setIsPrivate(request.getIsPrivate() != null ? request.getIsPrivate() : false);
         fileMapper.insert(fileEntity);
 
-        // 再上传 Minio（失败则补偿删除DB记录，避免出现指向不存在文件的记录）
+        // 再上传OSS（失败则补偿删除DB记录，避免出现指向不存在文件的记录）
         try {
             ByteArrayInputStream inputStream = new ByteArrayInputStream(htmlContent.getBytes(StandardCharsets.UTF_8));
-            minioService.upload(objectKey, inputStream, "text/html", htmlContent.getBytes(StandardCharsets.UTF_8).length);
+            ossService.upload(objectKey, inputStream, "text/html", htmlContent.getBytes(StandardCharsets.UTF_8).length);
         } catch (Exception e) {
-            log.warn("[HTML生成] MinIO上传失败，补偿删除DB记录, fileId={}, objectKey={}", fileEntity.getId(), objectKey);
+            log.warn("[HTML生成] OSS上传失败，补偿删除DB记录, fileId={}, objectKey={}", fileEntity.getId(), objectKey);
             fileMapper.deleteById(fileEntity.getId());
             throw e;
         }
@@ -582,7 +579,7 @@ public class RubricServiceImpl implements RubricService {
         RubricGenerateResponse response = new RubricGenerateResponse();
         response.setFileId(fileEntity.getId());
         response.setFileName(fileName);
-        response.setDownloadUrl(minioEndpoint + "/" + bucketName + "/" + objectKey);
+        response.setDownloadUrl(ossService.getPublicUrl(objectKey));
         response.setCreateTime(fileEntity.getCreateTime());
 
         notificationService.notifyHtmlGenerateComplete(userId, rubric.getTitle());
@@ -732,15 +729,8 @@ public class RubricServiceImpl implements RubricService {
             byte[] imageBytes = null;
             String detectedMimeType = mimeType;
 
-            // 优先从 MinIO 下载
-            if (isMinioUrl(imageUrl)) {
-                String objectKey = extractMinioObjectKey(imageUrl);
-                if (objectKey != null) {
-                    imageBytes = minioService.getFile(objectKey);
-                }
-            }
-            // 其次从 OSS 下载
-            else if (ossService.isOssUrl(imageUrl)) {
+            // 优先从 OSS 下载
+            if (ossService.isOssUrl(imageUrl)) {
                 String objectKey = ossService.extractObjectKeyFromUrl(imageUrl);
                 if (objectKey != null) {
                     OssService.OssFileData fileData = ossService.download(objectKey);
@@ -750,7 +740,7 @@ public class RubricServiceImpl implements RubricService {
                     }
                 }
             }
-            // 兜底：直接从 URL 下载
+            // 兜底：直接从 URL 下载（含历史遗留的外部/内网URL）
             if (imageBytes == null) {
                 HttpURLConnection conn = (HttpURLConnection) new URL(imageUrl).openConnection();
                 conn.setConnectTimeout(5000);
@@ -775,28 +765,6 @@ public class RubricServiceImpl implements RubricService {
             log.warn("下载图片失败，跳过: url={}, error={}", imageUrl, e.getMessage());
             return null;
         }
-    }
-
-    /**
-     * 判断是否为 MinIO URL
-     */
-    private boolean isMinioUrl(String url) {
-        if (url == null || url.isEmpty()) return false;
-        String baseEndpoint = minioEndpoint.replaceAll("/+$", "");
-        String prefix = baseEndpoint + "/" + bucketName + "/";
-        return url.startsWith(prefix);
-    }
-
-    /**
-     * 从 MinIO URL 中提取 objectKey
-     */
-    private String extractMinioObjectKey(String url) {
-        String baseEndpoint = minioEndpoint.replaceAll("/+$", "");
-        String prefix = baseEndpoint + "/" + bucketName + "/";
-        if (url.startsWith(prefix)) {
-            return url.substring(prefix.length());
-        }
-        return null;
     }
 
     /**

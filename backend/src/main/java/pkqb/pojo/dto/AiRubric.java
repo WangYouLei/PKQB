@@ -80,7 +80,7 @@ public class AiRubric {
         @Schema(description = "标签，选项图片时填A/B/C/D", example = "A")
         private String label;
 
-        @Schema(description = "资源URL", example = "http://192.168.236.200:9000/pkqb-files/question-image/xxx.png")
+        @Schema(description = "资源URL", example = "https://pkqb-oss.oss-cn-guangzhou.aliyuncs.com/question-image/1/xxx.png")
         private String url;
     }
 }

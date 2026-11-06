@@ -9,7 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 import pkqb.common.Result;
 import pkqb.pojo.dto.AvatarUpdateRequest;
-import pkqb.service.MinioService;
+import pkqb.service.OssService;
 import pkqb.service.UserService;
 
 @Slf4j
@@ -20,22 +20,24 @@ import pkqb.service.UserService;
 public class AvatarController {
 
     private final UserService userService;
-    private final MinioService minioService;
+    private final OssService ossService;
 
     @GetMapping("/upload-path")
     @Operation(summary = "获取头像上传路径", description = "获取头像上传的objectKey和限时预签名上传URL")
     public Result<AvatarUploadInfo> getUploadPath(
-            @Parameter(description = "用户ID") @RequestAttribute("userId") Long userId) {
+            @Parameter(description = "用户ID") @RequestAttribute("userId") Long userId,
+            @Parameter(description = "文件Content-Type，必传且须与上传请求头一致（OSS签名校验要求，浏览器对File会自动带该头）")
+            @RequestParam String contentType) {
         String objectKey = "avatar/" + userId + "/" + System.currentTimeMillis();
         // 返回预签名PUT地址：仅对该objectKey生效且10分钟内有效，
-        // 不再把内网MinIO endpoint与桶的写权限直接暴露给前端
-        String uploadUrl = minioService.getPresignedPutUrl(objectKey, 600);
+        // 不把OSS桶的写权限直接暴露给前端
+        String uploadUrl = ossService.generatePresignedPutUrl(objectKey, contentType, 600);
         log.info("[头像管理] 用户 {} 获取头像上传地址 objectKey={}", userId, objectKey);
         return Result.success(new AvatarUploadInfo(objectKey, uploadUrl));
     }
 
     @PutMapping
-    @Operation(summary = "更新头像", description = "更新用户头像（上传后调用，传入MinIO对象路径）")
+    @Operation(summary = "更新头像", description = "更新用户头像（上传后调用，传入OSS对象objectKey）")
     public Result<String> updateAvatar(
             @Parameter(description = "用户ID") @RequestAttribute("userId") Long userId,
             @Valid @RequestBody AvatarUpdateRequest request) {

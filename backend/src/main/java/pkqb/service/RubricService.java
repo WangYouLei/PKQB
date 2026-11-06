@@ -67,7 +67,7 @@ public interface RubricService {
     Result<?> deleteRubric(Long rubricId, Long userId);
     
     /**
-     * 根据Rubric生成HTML文件并保存到MinIO，同时保存记录到file表
+     * 根据Rubric生成HTML文件并保存到OSS，同时保存记录到file表
      * @param request 生成请求（包含rubricId）
      * @param userId 当前用户ID
      * @return 结果（包含文件信息）

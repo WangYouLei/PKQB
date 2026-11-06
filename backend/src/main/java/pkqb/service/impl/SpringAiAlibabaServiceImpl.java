@@ -36,7 +36,7 @@ import pkqb.pojo.dto.RubricParseTaskStatus;
 import pkqb.pojo.entity.ModelsEntity;
 import pkqb.mapper.FileMapper;
 import pkqb.pojo.entity.FileEntity;
-import pkqb.service.MinioService;
+import pkqb.service.OssService;
 import pkqb.service.NotificationService;
 import pkqb.service.RagDataIsolationService;
 import pkqb.service.RateLimitService;
@@ -71,7 +71,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
     private final QuestionExtractContext questionExtractContext;
     private final ReactAgentFactory reactAgentFactory;
     private final DashScopeModelFactory dashScopeModelFactory;
-    private final MinioService minioService;
+    private final OssService ossService;
     private final NotificationService notificationService;
     private final UserApiKeyService userApiKeyService;
     private final FileMapper fileMapper;
@@ -202,7 +202,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                                       QuestionExtractContext questionExtractContext,
                                       ReactAgentFactory reactAgentFactory,
                                       DashScopeModelFactory dashScopeModelFactory,
-                                      MinioService minioService,
+                                      OssService ossService,
                                       NotificationService notificationService,
                                       UserApiKeyService userApiKeyService,
                                       FileMapper fileMapper,
@@ -216,7 +216,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         this.questionExtractContext = questionExtractContext;
         this.reactAgentFactory = reactAgentFactory;
         this.dashScopeModelFactory = dashScopeModelFactory;
-        this.minioService = minioService;
+        this.ossService = ossService;
         this.notificationService = notificationService;
         this.userApiKeyService = userApiKeyService;
         this.fileMapper = fileMapper;
@@ -317,12 +317,12 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                 return Result.error("检测到题目内容，已拒绝上传");
             }
 
-            // 4. 上传文件到 Minio
+            // 4. 上传文件到OSS
             try {
-                minioService.upload(objectKey, file.getInputStream(), file.getContentType(), file.getSize());
-                log.info("[知识库-文件上传] 文件已上传到Minio, objectKey={}", objectKey);
+                ossService.upload(objectKey, file.getInputStream(), file.getContentType(), file.getSize());
+                log.info("[知识库-文件上传] 文件已上传到OSS, objectKey={}", objectKey);
             } catch (Exception e) {
-                log.error("[知识库-文件上传] 上传文件到Minio失败: ", e);
+                log.error("[知识库-文件上传] 上传文件到OSS失败: ", e);
                 return Result.error("上传文件失败，请从新上传");
             }
 
@@ -337,12 +337,12 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                 fileRecordId = fileEntity.getId();
                 log.info("[知识库-文件上传] 文件记录已保存, fileId={}", fileRecordId);
             } catch (Exception e) {
-                // DB写入失败，回滚Minio文件
-                log.error("[知识库-文件上传] 保存文件记录失败，回滚Minio文件: ", e);
+                // DB写入失败，回滚OSS文件
+                log.error("[知识库-文件上传] 保存文件记录失败，回滚OSS文件: ", e);
                 try {
-                    minioService.remove(objectKey);
+                    ossService.remove(objectKey);
                 } catch (Exception removeEx) {
-                    log.error("[知识库-文件上传] 回滚Minio文件失败, objectKey={}: ", objectKey, removeEx);
+                    log.error("[知识库-文件上传] 回滚OSS文件失败, objectKey={}: ", objectKey, removeEx);
                 }
                 return Result.error("上传文件失败，请从新上传");
             }
@@ -350,12 +350,12 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             // 6. 写入向量库
             Result<String> result = processDocumentsContent(content, "文件上传", userId, fileRecordId);
             if (result.getCode() != 200) {
-                // 向量库写入失败，回滚Minio文件和DB记录
-                log.error("[知识库-文件上传] 写入向量库失败，回滚Minio文件和DB记录");
+                // 向量库写入失败，回滚OSS文件和DB记录
+                log.error("[知识库-文件上传] 写入向量库失败，回滚OSS文件和DB记录");
                 try {
-                    minioService.remove(objectKey);
+                    ossService.remove(objectKey);
                 } catch (Exception removeEx) {
-                    log.error("[知识库-文件上传] 回滚Minio文件失败, objectKey={}: ", objectKey, removeEx);
+                    log.error("[知识库-文件上传] 回滚OSS文件失败, objectKey={}: ", objectKey, removeEx);
                 }
                 try {
                     fileMapper.deleteById(fileRecordId);
@@ -369,7 +369,7 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             notificationService.notifyKnowledgeUploadComplete(userId, originalFilename);
             return result;
         } catch (Exception e) {
-            // 未知异常，尝试回滚Minio和DB
+            // 未知异常，尝试回滚OSS和DB
             log.error("[知识库-文件上传] 上传到向量数据库时发生错误: ", e);
             if (fileRecordId != null) {
                 try {
@@ -379,9 +379,9 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                 }
             }
             try {
-                minioService.remove(objectKey);
+                ossService.remove(objectKey);
             } catch (Exception removeEx) {
-                log.error("[知识库-文件上传] 回滚Minio文件失败, objectKey={}: ", objectKey, removeEx);
+                log.error("[知识库-文件上传] 回滚OSS文件失败, objectKey={}: ", objectKey, removeEx);
             }
             notificationService.notifyKnowledgeUploadFailed(userId, originalFilename, e.getMessage());
             return Result.error("上传文件失败，请从新上传");
