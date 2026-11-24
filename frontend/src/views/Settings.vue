@@ -243,7 +243,10 @@
             <!-- 主模型 -->
             <div class="model-item main-model" v-if="mainModel">
               <div class="model-badge main">主模型</div>
-              <div class="model-name">{{ mainModel.modelName }}</div>
+              <div class="model-info">
+                <div class="model-name">{{ mainModel.modelName }}</div>
+                <div class="model-channel-tag">{{ getChannelDisplayName(mainModel.modelChannel) }}</div>
+              </div>
               <div class="model-actions">
                 <span class="model-status">用于所有单模型操作</span>
                 <button class="btn btn-sm btn-outline" @click="handleEditModel(mainModel)" title="修改模型名称">
@@ -259,7 +262,10 @@
             <!-- 辅助模型 -->
             <div class="model-item assistant-model" v-for="model in assistantModels" :key="model.id">
               <div class="model-badge assistant">辅助模型</div>
-              <div class="model-name">{{ model.modelName }}</div>
+              <div class="model-info">
+                <div class="model-name">{{ model.modelName }}</div>
+                <div class="model-channel-tag">{{ getChannelDisplayName(model.modelChannel) }}</div>
+              </div>
               <div class="model-actions">
                 <button class="btn btn-sm btn-outline" @click="handleEditModel(model)" title="修改模型名称">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -290,7 +296,10 @@
             <!-- 视觉模型 -->
             <div class="model-item vision-model" v-if="visionModel">
               <div class="model-badge vision">视觉</div>
-              <div class="model-name">{{ visionModel.modelName }}</div>
+              <div class="model-info">
+                <div class="model-name">{{ visionModel.modelName }}</div>
+                <div class="model-channel-tag">{{ getChannelDisplayName(visionModel.modelChannel) }}</div>
+              </div>
               <div class="model-actions">
                 <span class="model-status">用于图片识别和PDF解析</span>
                 <button class="btn btn-sm btn-outline" @click="handleEditModel(visionModel)" title="修改模型名称">
@@ -317,11 +326,21 @@
           <!-- 添加模型 -->
           <div class="add-model-section" v-if="canAddMainModel || canAddAssistantModel || canAddVisionModel">
             <div class="add-model-form">
+              <div class="model-channel-select">
+                <select v-model="newModelChannel" class="form-select">
+                  <option value="dashscope">阿里云百炼</option>
+                  <option value="openai">OpenAI 兼容接口</option>
+                  <option value="zhipu">智谱 GLM</option>
+                  <option value="kimi">Kimi</option>
+                  <option value="wenxin">百度文心</option>
+                  <option value="hunyuan">腾讯混元</option>
+                </select>
+              </div>
               <input 
                 v-model="newModelName" 
                 type="text" 
                 class="form-input add-model-input" 
-                placeholder="请输入模型名称，如 qwen-plus、qwen-turbo"
+                :placeholder="getPlaceholderForChannel(newModelChannel)"
               />
               <div class="add-model-options">
                 <label class="checkbox-label" :class="{ disabled: !canAddMainModel }">
@@ -340,8 +359,14 @@
                 </button>
               </div>
             </div>
-            <p class="input-hint">
+            <p class="input-hint" v-if="newModelChannel === 'dashscope'">
               不勾选则默认为辅助模型。您可以在 <a href="https://bailian.console.aliyun.com/" target="_blank" rel="noopener">阿里云百炼控制台</a> 获取模型名称
+            </p>
+            <p class="input-hint" v-else-if="newModelChannel === 'openai'">
+              不勾选则默认为辅助模型。OpenAI 兼容接口支持 DeepSeek、Claude 等模型，请确保已配置对应的 API 地址
+            </p>
+            <p class="input-hint" v-else>
+              不勾选则默认为辅助模型。请在对应平台获取模型名称和 API Key
             </p>
           </div>
           
@@ -395,6 +420,7 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const newModelName = ref('')
 const newModelIsMain = ref(false)
 const newModelIsVision = ref(false)
+const newModelChannel = ref('dashscope')
 const savingModel = ref(false)
 const deletingModelId = ref<number | null>(null)
 
@@ -420,6 +446,37 @@ const supportsMultiModel = computed(() => status.value?.supportsMultiModel ?? fa
 const canAddMainModel = computed(() => !mainModel.value)
 const canAddAssistantModel = computed(() => assistantModels.value.length < 2)
 const canAddVisionModel = computed(() => !visionModel.value)
+
+/**
+ * 获取模型渠道的显示名称
+ */
+function getChannelDisplayName(channel: string | undefined): string {
+  if (!channel) return '阿里云百炼'
+  const channelMap: Record<string, string> = {
+    'dashscope': '阿里云百炼',
+    'openai': 'OpenAI 兼容',
+    'zhipu': '智谱 GLM',
+    'kimi': 'Kimi',
+    'wenxin': '百度文心',
+    'hunyuan': '腾讯混元'
+  }
+  return channelMap[channel] || channel
+}
+
+/**
+ * 获取渠道对应的输入提示
+ */
+function getPlaceholderForChannel(channel: string): string {
+  const placeholderMap: Record<string, string> = {
+    'dashscope': '请输入模型名称，如 qwen-plus、deepseek-v4',
+    'openai': '请输入模型名称，如 gpt-4o、claude-3',
+    'zhipu': '请输入模型名称，如 glm-4-plus',
+    'kimi': '请输入模型名称，如 moonshot-v1-128k',
+    'wenxin': '请输入模型名称，如 ernie-4.0-8k-latest',
+    'hunyuan': '请输入模型名称，如 hunyuan-pro'
+  }
+  return placeholderMap[channel] || '请输入模型名称'
+}
 
 onMounted(async () => {
   await loadStatus()
@@ -480,7 +537,7 @@ async function handleAddModel() {
 
   savingModel.value = true
   try {
-    const res = await apiAddModel(newModelName.value.trim(), modelType)
+    const res = await apiAddModel(newModelName.value.trim(), modelType, newModelChannel.value)
     if (res.code === 200) {
       alert('模型添加成功')
       newModelName.value = ''
@@ -1080,6 +1137,35 @@ async function handleUpdatePassword() {
   font-size: 14px;
   font-weight: 500;
   color: var(--text-primary);
+}
+
+.model-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.model-channel-tag {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  width: fit-content;
+}
+
+.model-channel-select {
+  margin-bottom: 8px;
+}
+
+.model-channel-select .form-select {
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
 }
 
 .model-actions {

@@ -1,157 +1,82 @@
 package pkqb.config;
 
-import com.alibaba.cloud.ai.dashscope.api.DashScopeApi;
-import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatModel;
-import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import pkqb.pojo.entity.ModelsEntity;
 
+/**
+ * 阿里云百炼模型工厂（兼容类）
+ *
+ * <p>此类已迁移到 {@link DashScopeModelProvider}，保留此类是为了向后兼容旧代码。
+ * 新代码建议直接使用 {@link DashScopeModelProvider} 或通过 {@link ModelProviderFactory} 获取。
+ *
+ * @deprecated 请使用 {@link DashScopeModelProvider} 或 {@link ModelProviderFactory}
+ */
 @Component
+@Slf4j
+@Deprecated
 public class DashScopeModelFactory {
 
-    @Value("${spring.ai.dashscope.chat.options.model}")
-    private String defaultModel;
+    private final DashScopeModelProvider modelProvider;
 
-    @Value("${spring.ai.dashscope.chat.options.localhost-max-tokens}")
-    private int localMaxTokens;
-
-    @Value("${spring.ai.dashscope.chat.options.personal-max-tokens}")
-    private int personalMaxTokens;
-
-    @Value("${spring.ai.dashscope.vision.model}")
-    private String visionModel;
-
-    @Value("${spring.ai.dashscope.api-key}")
-    private String defaultApiKey;
-
-    private volatile ChatModel visionChatModel;
+    public DashScopeModelFactory(DashScopeModelProvider modelProvider) {
+        this.modelProvider = modelProvider;
+    }
 
     public ChatModel createChatModel(String apiKey) {
-        return createChatModel(apiKey, defaultModel);
+        return modelProvider.createChatModel(apiKey);
     }
 
     public ChatModel createChatModel(String apiKey, String model) {
-        return createChatModel(apiKey, model, personalMaxTokens);
+        return modelProvider.createChatModel(apiKey, model);
     }
 
     public ChatModel createChatModel(String apiKey, String model, int maxTokens) {
-        return createChatModel(apiKey, model, maxTokens, null, false);
+        return modelProvider.createChatModel(apiKey, model, maxTokens);
     }
 
     public ChatModel createChatModel(String apiKey, String model, int maxTokens, Boolean enableThinking) {
-        return createChatModel(apiKey, model, maxTokens, enableThinking, false);
+        return modelProvider.createChatModel(apiKey, model, maxTokens, enableThinking, false);
     }
 
     public ChatModel createChatModel(String apiKey, String model, int maxTokens, Boolean enableThinking, boolean multiModel) {
-        String actualModel = (model != null && !model.isEmpty()) ? model : defaultModel;
-        DashScopeApi dashScopeApi = DashScopeApi.builder()
-                .apiKey(apiKey)
-                .build();
-        // 不设置 temperature：部分模型（如 kimi-k3）不支持指定值，不传时由服务端使用模型默认值
-        return DashScopeChatModel.builder()
-                .dashScopeApi(dashScopeApi)
-                .defaultOptions(DashScopeChatOptions.builder()
-                        .withModel(actualModel)
-                        .withMaxToken(maxTokens)
-                        .withEnableThinking(enableThinking)
-                        .withMultiModel(multiModel)
-                        .build())
-                .build();
+        return modelProvider.createChatModel(apiKey, model, maxTokens, enableThinking, multiModel);
     }
 
-    /**
-     * 按用户模型配置创建 ChatModel（应用 models 表中探测到的调用方式）
-     *
-     * @param model 用户模型实体，为 null 时使用系统默认模型和默认调用方式
-     */
     public ChatModel createChatModel(String apiKey, ModelsEntity model) {
-        if (model == null) {
-            return createChatModel(apiKey, defaultModel, personalMaxTokens, null, false);
-        }
-        return createChatModel(apiKey, model.getModelName(), personalMaxTokens,
-                Boolean.TRUE.equals(model.getEnableThinking()) ? Boolean.TRUE : null,
-                Boolean.TRUE.equals(model.getMultiModel()));
+        return modelProvider.createChatModel(apiKey, model);
     }
 
     public String getDefaultModel() {
-        return defaultModel;
+        return modelProvider.getDefaultModel();
     }
 
     public String getDefaultApiKey() {
-        return defaultApiKey;
+        return modelProvider.getDefaultApiKey();
     }
 
     public String getVisionModel() {
-        return visionModel;
+        return modelProvider.getDefaultVisionModel();
     }
 
-    /**
-     * 创建系统默认视觉模型（使用平台Key和配置文件中的视觉模型名）
-     */
     public ChatModel createVisionChatModel() {
-        if (visionChatModel == null) {
-            synchronized (this) {
-                if (visionChatModel == null) {
-                    DashScopeApi dashScopeApi = DashScopeApi.builder()
-                            .apiKey(defaultApiKey)
-                            .build();
-                    visionChatModel = DashScopeChatModel.builder()
-                            .dashScopeApi(dashScopeApi)
-                            .defaultOptions(DashScopeChatOptions.builder()
-                                    .withModel(visionModel)
-                                    .withMultiModel(true)
-                                    .withMaxToken(4096)
-                                    .withTemperature(0.7)
-                                    .build())
-                            .build();
-                }
-            }
-        }
-        return visionChatModel;
+        return modelProvider.createVisionChatModel();
     }
 
-    /**
-     * 创建用户自定义视觉模型（使用用户Key和自定义模型名）
-     * @param apiKey 用户API Key
-     * @param modelName 视觉模型名称
-     */
     public ChatModel createVisionChatModel(String apiKey, String modelName) {
-        String actualModel = (modelName != null && !modelName.isEmpty()) ? modelName : visionModel;
-        DashScopeApi dashScopeApi = DashScopeApi.builder()
-                .apiKey(apiKey)
-                .build();
-        return DashScopeChatModel.builder()
-                .dashScopeApi(dashScopeApi)
-                .defaultOptions(DashScopeChatOptions.builder()
-                        .withModel(actualModel)
-                        .withMultiModel(true)
-                        .withMaxToken(4096)
-                        .withTemperature(0.7)
-                        .build())
-                .build();
+        return modelProvider.createVisionChatModel(apiKey, modelName);
     }
 
     public int getLocalMaxTokens() {
-        return localMaxTokens;
+        return modelProvider.getLocalMaxTokens();
     }
 
     public int getPersonalMaxTokens() {
-        return personalMaxTokens;
+        return modelProvider.getPersonalMaxTokens();
     }
 
     public ChatModel createLocalChatModel() {
-        DashScopeApi dashScopeApi = DashScopeApi.builder()
-                .apiKey(defaultApiKey)
-                .build();
-        return DashScopeChatModel.builder()
-                .dashScopeApi(dashScopeApi)
-                .defaultOptions(DashScopeChatOptions.builder()
-                        .withModel(defaultModel)
-                        .withMaxToken(localMaxTokens)
-                        .withTemperature(0.7)
-                        .build())
-                .build();
+        return modelProvider.createLocalChatModel();
     }
 }

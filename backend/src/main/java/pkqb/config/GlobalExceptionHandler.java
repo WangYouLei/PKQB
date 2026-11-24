@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import pkqb.common.Result;
 
 import java.util.stream.Collectors;
@@ -60,6 +61,16 @@ public class GlobalExceptionHandler {
     public Result<Void> handleAuthenticationException(AuthenticationException e) {
         log.error("认证失败: {}", e.getMessage());
         return Result.error(401, e.getMessage());
+    }
+
+    /**
+     * 上传文件超过 multipart 大小限制：给出明确业务提示，避免用户只看到 500
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    @ResponseStatus(HttpStatus.PAYLOAD_TOO_LARGE)
+    public Result<Void> handleMaxUploadSizeExceededException(MaxUploadSizeExceededException e) {
+        log.warn("上传文件超过大小限制: {}", e.getMessage());
+        return Result.error(413, "上传文件超过 50MB 上限，请拆分后上传");
     }
 
     /**

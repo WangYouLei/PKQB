@@ -37,12 +37,16 @@ public class RedisVectorStoreConfig {
     @Value("${spring.ai.vectorstore.redis.initialize-schema:false}")
     private boolean initializeSchema;
 
-    /** 权限元数据字段（RAG数据隔离）：TAG类型仅做等值匹配，字段名与 RagDataIsolationServiceImpl 中的常量一致 */
+    /**
+     * 权限元数据字段（RAG数据隔离）：TAG类型仅做等值匹配，字段名与 RagDataIsolationServiceImpl 中的常量一致。
+     * 路径必须是根级 $.xxx：Spring AI 的 RedisVectorStore 写入时将 metadata 平铺在 JSON 根级，
+     * 与 builder 中 MetadataField.tag(...) 自建索引时使用的路径一致（TAG 只索引字符串/布尔，不索引 JSON 数字）
+     */
     private static final List<SchemaField> ISOLATION_METADATA_FIELDS = List.of(
-            TagField.of("$.metadata.userId").as("userId"),
-            TagField.of("$.metadata.classId").as("classId"),
-            TagField.of("$.metadata.isPrivate").as("isPrivate"),
-            TagField.of("$.metadata.fileId").as("fileId")
+            TagField.of("$.userId").as("userId"),
+            TagField.of("$.classId").as("classId"),
+            TagField.of("$.isPrivate").as("isPrivate"),
+            TagField.of("$.fileId").as("fileId")
     );
 
     @Bean

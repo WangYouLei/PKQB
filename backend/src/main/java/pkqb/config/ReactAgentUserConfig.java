@@ -71,17 +71,17 @@ public class ReactAgentUserConfig {
             请直接输出最终答案：
             """;
 
-    private final DashScopeModelFactory modelFactory;
+    private final ModelProviderFactory modelProviderFactory;
     private final MemorySaver memorySaver;
     private final VectorStore vectorStore;
     private final DashScopeRerankService rerankService;
     private final RagDataIsolationService dataIsolationService;
 
-    public ReactAgentUserConfig(DashScopeModelFactory modelFactory, MemorySaver memorySaver,
+    public ReactAgentUserConfig(ModelProviderFactory modelProviderFactory, MemorySaver memorySaver,
                                 VectorStore vectorStore,
                                 DashScopeRerankService rerankService,
                                 RagDataIsolationService dataIsolationService) {
-        this.modelFactory = modelFactory;
+        this.modelProviderFactory = modelProviderFactory;
         this.memorySaver = memorySaver;
         this.vectorStore = vectorStore;
         this.rerankService = rerankService;
@@ -89,13 +89,13 @@ public class ReactAgentUserConfig {
     }
 
     public ReactAgent createUserChatReactAgent(String apiKey) {
-        return createUserChatReactAgent(apiKey, (ModelsEntity) null);
+        return createUserChatReactAgent(apiKey, (String) null);
     }
 
     public ReactAgent createUserChatReactAgent(String apiKey, String model) {
-        String actualModel = (model != null && !model.isEmpty()) ? model : modelFactory.getDefaultModel();
+        String actualModel = (model != null && !model.isEmpty()) ? model : modelProviderFactory.getDefaultProvider().getDefaultModel();
         log.info("[ReactAgent用户配置] 为用户创建个人 ChatReactAgent，模型: {}", actualModel);
-        ChatModel chatModel = modelFactory.createChatModel(apiKey, actualModel);
+        ChatModel chatModel = modelProviderFactory.getDefaultProvider().createChatModel(apiKey, actualModel);
         SummarizationHook userHook = createUserSummarizationHook(chatModel);
         ModelCallLimitHook limitHook = createModelCallLimitHook();
         return ReactAgent.builder()
@@ -108,9 +108,11 @@ public class ReactAgentUserConfig {
     }
 
     public ReactAgent createUserChatReactAgent(String apiKey, ModelsEntity model) {
-        log.info("[ReactAgent用户配置] 为用户创建个人 ChatReactAgent，模型: {}",
-                model != null ? model.getModelName() : modelFactory.getDefaultModel());
-        ChatModel chatModel = modelFactory.createChatModel(apiKey, model);
+        ModelProvider provider = modelProviderFactory.getProvider(model);
+        String modelName = model != null ? model.getModelName() : provider.getDefaultModel();
+        log.info("[ReactAgent用户配置] 为用户创建个人 ChatReactAgent，模型: {}, 渠道: {}",
+                modelName, provider.getChannel());
+        ChatModel chatModel = provider.createChatModel(apiKey, model);
         SummarizationHook userHook = createUserSummarizationHook(chatModel);
         ModelCallLimitHook limitHook = createModelCallLimitHook();
         return ReactAgent.builder()
@@ -123,16 +125,15 @@ public class ReactAgentUserConfig {
     }
 
     public ReactAgent createUserRagReactAgent(String apiKey) {
-        return createUserRagReactAgent(apiKey, (ModelsEntity) null);
+        return createUserRagReactAgent(apiKey, (String) null);
     }
 
     public ReactAgent createUserRagReactAgent(String apiKey, String model) {
-        String actualModel = (model != null && !model.isEmpty()) ? model : modelFactory.getDefaultModel();
+        String actualModel = (model != null && !model.isEmpty()) ? model : modelProviderFactory.getDefaultProvider().getDefaultModel();
         log.info("[ReactAgent用户配置] 为用户创建个人 RagReactAgent，模型: {}", actualModel);
-        ChatModel chatModel = modelFactory.createChatModel(apiKey, actualModel);
+        ChatModel chatModel = modelProviderFactory.getDefaultProvider().createChatModel(apiKey, actualModel);
         SummarizationHook userHook = createUserSummarizationHook(chatModel);
 
-        //ModelCallLimitHook limitHook = createModelCallLimitHook();
         ModelCallLimitHook limitHook = ModelCallLimitHook.builder().runLimit(1).build();
         RagAgentHook ragHook = new RagAgentHook(vectorStore, rerankService, dataIsolationService);
         return ReactAgent.builder()
@@ -147,9 +148,11 @@ public class ReactAgentUserConfig {
     }
 
     public ReactAgent createUserRagReactAgent(String apiKey, ModelsEntity model) {
-        log.info("[ReactAgent用户配置] 为用户创建个人 RagReactAgent，模型: {}",
-                model != null ? model.getModelName() : modelFactory.getDefaultModel());
-        ChatModel chatModel = modelFactory.createChatModel(apiKey, model);
+        ModelProvider provider = modelProviderFactory.getProvider(model);
+        String modelName = model != null ? model.getModelName() : provider.getDefaultModel();
+        log.info("[ReactAgent用户配置] 为用户创建个人 RagReactAgent，模型: {}, 渠道: {}",
+                modelName, provider.getChannel());
+        ChatModel chatModel = provider.createChatModel(apiKey, model);
         SummarizationHook userHook = createUserSummarizationHook(chatModel);
 
         ModelCallLimitHook limitHook = ModelCallLimitHook.builder().runLimit(1).build();
@@ -166,13 +169,13 @@ public class ReactAgentUserConfig {
     }
 
     public ReactAgent createUserSimpleReactAgent(String apiKey) {
-        return createUserSimpleReactAgent(apiKey, (ModelsEntity) null);
+        return createUserSimpleReactAgent(apiKey, (String) null);
     }
 
     public ReactAgent createUserSimpleReactAgent(String apiKey, String model) {
-        String actualModel = (model != null && !model.isEmpty()) ? model : modelFactory.getDefaultModel();
+        String actualModel = (model != null && !model.isEmpty()) ? model : modelProviderFactory.getDefaultProvider().getDefaultModel();
         log.info("[ReactAgent用户配置] 为用户创建个人 SimpleReactAgent，模型: {}", actualModel);
-        ChatModel chatModel = modelFactory.createChatModel(apiKey, actualModel);
+        ChatModel chatModel = modelProviderFactory.getDefaultProvider().createChatModel(apiKey, actualModel);
         return ReactAgent.builder()
                 .name("simple_agent_user")
                 .model(chatModel)
@@ -180,9 +183,11 @@ public class ReactAgentUserConfig {
     }
 
     public ReactAgent createUserSimpleReactAgent(String apiKey, ModelsEntity model) {
-        log.info("[ReactAgent用户配置] 为用户创建个人 SimpleReactAgent，模型: {}",
-                model != null ? model.getModelName() : modelFactory.getDefaultModel());
-        ChatModel chatModel = modelFactory.createChatModel(apiKey, model);
+        ModelProvider provider = modelProviderFactory.getProvider(model);
+        String modelName = model != null ? model.getModelName() : provider.getDefaultModel();
+        log.info("[ReactAgent用户配置] 为用户创建个人 SimpleReactAgent，模型: {}, 渠道: {}",
+                modelName, provider.getChannel());
+        ChatModel chatModel = provider.createChatModel(apiKey, model);
         return ReactAgent.builder()
                 .name("simple_agent_user")
                 .model(chatModel)
@@ -192,20 +197,21 @@ public class ReactAgentUserConfig {
     /**
      * 创建多模型Agent（使用Multi-agent模式）
      * 使用ParallelAgent让两个辅助模型并行回答，然后由主模型整合结果
-     * 
+     *
      * @param apiKey 用户API Key
      * @param mainModel 主模型（用于整合结果）
      * @param assistantModels 辅助模型列表（最多2个）
      * @return 多模型Agent
      */
     public Agent createMultiModelReactAgent(String apiKey, ModelsEntity mainModel, List<ModelsEntity> assistantModels) {
-        log.info("[多模型Agent] 创建多模型Agent，主模型: {}, 辅助模型数量: {}", 
+        log.info("[多模型Agent] 创建多模型Agent，主模型: {}, 辅助模型数量: {}",
                 mainModel.getModelName(), assistantModels.size());
-        
-        ChatModel mainChatModel = modelFactory.createChatModel(apiKey, mainModel);
+
+        ModelProvider mainProvider = modelProviderFactory.getProvider(mainModel);
+        ChatModel mainChatModel = mainProvider.createChatModel(apiKey, mainModel);
         SummarizationHook userHook = createUserSummarizationHook(mainChatModel);
         ModelCallLimitHook limitHook = createModelCallLimitHook();
-        
+
         if (assistantModels == null || assistantModels.isEmpty()) {
             log.info("[多模型Agent] 没有辅助模型，创建单模型Agent");
             return ReactAgent.builder()
@@ -216,34 +222,34 @@ public class ReactAgentUserConfig {
                     .saver(memorySaver)
                     .build();
         }
-        
+
         if (assistantModels.size() == 1) {
             log.info("[多模型Agent] 只有1个辅助模型，创建单辅助模型Agent");
             return createSingleAssistantAgent(apiKey, mainModel, assistantModels.get(0));
         }
-        
+
         ReactAgent assistantAgent1 = createAssistantReactAgent(apiKey, assistantModels.get(0), 1);
         ReactAgent assistantAgent2 = createAssistantReactAgent(apiKey, assistantModels.get(1), 2);
-        
-        log.info("[多模型Agent] 创建并行Agent，辅助模型: {} 和 {}", 
+
+        log.info("[多模型Agent] 创建并行Agent，辅助模型: {} 和 {}",
                 assistantModels.get(0).getModelName(), assistantModels.get(1).getModelName());
-        
+
         ParallelAgent parallelAgent = ParallelAgent.builder()
                 .name("parallel_assistant_agents")
                 .description("两个辅助模型并行回答问题")
                 .subAgents(List.of(assistantAgent1, assistantAgent2))
                 .mergeOutputKey("parallel_results")
                 .build();
-        
+
         ReactAgent summaryAgent = ReactAgent.builder()
                 .name("summary_agent")
                 .model(mainChatModel)
                 .instruction(SUMMARY_AGENT_INSTRUCTION)
                 .outputKey("final_answer")
                 .build();
-        
+
         log.info("[多模型Agent] 创建顺序Agent，整合并行结果");
-        
+
         return SequentialAgent.builder()
                 .name("multi_model_sequential_agent")
                 .description("多模型工作流：并行回答 -> 整合结果")
@@ -255,26 +261,29 @@ public class ReactAgentUserConfig {
      * 创建单辅助模型Agent（一个主模型 + 一个辅助模型）
      */
     private Agent createSingleAssistantAgent(String apiKey, ModelsEntity mainModel, ModelsEntity assistantModel) {
-        log.info("[多模型Agent] 创建单辅助模型Agent，主模型: {}, 辅助模型: {}", 
+        log.info("[多模型Agent] 创建单辅助模型Agent，主模型: {}, 辅助模型: {}",
                 mainModel.getModelName(), assistantModel.getModelName());
-        
-        ChatModel mainChatModel = modelFactory.createChatModel(apiKey, mainModel);
-        ChatModel assistantChatModel = modelFactory.createChatModel(apiKey, assistantModel);
-        
+
+        ModelProvider mainProvider = modelProviderFactory.getProvider(mainModel);
+        ModelProvider assistantProvider = modelProviderFactory.getProvider(assistantModel);
+
+        ChatModel mainChatModel = mainProvider.createChatModel(apiKey, mainModel);
+        ChatModel assistantChatModel = assistantProvider.createChatModel(apiKey, assistantModel);
+
         ReactAgent assistantAgent = ReactAgent.builder()
                 .name("assistant_model_1")
                 .model(assistantChatModel)
                 .instruction(ASSISTANT_AGENT_INSTRUCTION)
                 .outputKey("assistant_1_response")
                 .build();
-        
+
         ReactAgent summaryAgent = ReactAgent.builder()
                 .name("summary_agent")
                 .model(mainChatModel)
                 .instruction(SINGLE_ASSISTANT_SUMMARY_INSTRUCTION)
                 .outputKey("final_answer")
                 .build();
-        
+
         return SequentialAgent.builder()
                 .name("single_assistant_agent")
                 .description("单辅助模型工作流：辅助模型回答 -> 主模型优化")
@@ -287,8 +296,9 @@ public class ReactAgentUserConfig {
      */
     private ReactAgent createAssistantReactAgent(String apiKey, ModelsEntity model, int index) {
         log.info("[多模型Agent] 创建辅助模型Agent {}: {}", index, model.getModelName());
-        ChatModel chatModel = modelFactory.createChatModel(apiKey, model);
-        
+        ModelProvider provider = modelProviderFactory.getProvider(model);
+        ChatModel chatModel = provider.createChatModel(apiKey, model);
+
         return ReactAgent.builder()
                 .name("assistant_model_" + index)
                 .model(chatModel)

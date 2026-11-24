@@ -1,6 +1,7 @@
 package pkqb.service;
 
 import pkqb.enums.ApiKeyMode;
+import pkqb.enums.ModelChannel;
 import pkqb.enums.ModelType;
 import pkqb.pojo.entity.ModelsEntity;
 import pkqb.pojo.dto.ModelValidationResult;
@@ -35,6 +36,20 @@ public interface UserApiKeyService {
     ApiKeyMode getApiKeyMode(Long userId);
 
     boolean hasUserOwnApiKey(Long userId);
+
+    /**
+     * 获取用户的模型渠道
+     * @param userId 用户ID
+     * @return 模型渠道，默认返回 DASHSCOPE
+     */
+    ModelChannel getUserModelChannel(Long userId);
+
+    /**
+     * 设置用户的模型渠道
+     * @param userId 用户ID
+     * @param channel 模型渠道
+     */
+    void setUserModelChannel(Long userId, ModelChannel channel);
 
     /**
      * 获取用户的所有模型列表
@@ -122,4 +137,14 @@ public interface UserApiKeyService {
      * @return 验证结果，isSuccess()为true表示验证通过（含探测到的调用配置），否则含错误信息
      */
     ModelValidationResult validateModel(String apiKey, String modelName, int modelType);
+
+    /**
+     * 验证模型和API Key是否有效（指定渠道）
+     * @param apiKey API Key
+     * @param modelName 模型名称
+     * @param modelType 模型类型
+     * @param channel 模型渠道
+     * @return 验证结果
+     */
+    ModelValidationResult validateModel(String apiKey, String modelName, int modelType, ModelChannel channel);
 }

@@ -10,7 +10,7 @@
       <div class="upload-zone" @click="triggerFileInput" @dragover.prevent="dragOver=true" @dragleave="dragOver=false" @drop.prevent="handleDrop" :class="{'drag-over':dragOver}">
         <div class="upload-zone-icon">📄</div>
         <div class="upload-zone-text">点击或拖拽题目文件到此处</div>
-        <div class="upload-zone-hint">支持 PDF、DOC、DOCX、TXT 等格式</div>
+        <div class="upload-zone-hint">支持 PDF、DOC、DOCX、TXT 等格式，单个文件不超过 50MB</div>
       </div>
       <input ref="fileInput" type="file" accept=".pdf,.doc,.docx,.txt,.md" style="display:none" @change="handleFileSelect" />
       <div v-if="selectedFile" style="margin-top:16px;padding:12px 16px;background:var(--accent-light);border-radius:12px;display:flex;justify-content:space-between;align-items:center">
@@ -299,13 +299,27 @@ const canSubmit = computed(() =>
 )
 
 function triggerFileInput() { fileInput.value?.click() }
+
+/** 与后端 multipart 上限保持一致，超限时提前拦截，避免白等上传 */
+const MAX_FILE_SIZE = 50 * 1024 * 1024
+
+function acceptFile(file: File): boolean {
+  if (file.size > MAX_FILE_SIZE) {
+    alert('文件超过 50MB 上限，请拆分后上传')
+    return false
+  }
+  return true
+}
+
 function handleFileSelect(e: Event) {
   const t = e.target as HTMLInputElement
-  if (t.files && t.files[0]) selectedFile.value = t.files[0]
+  if (t.files && t.files[0] && acceptFile(t.files[0])) selectedFile.value = t.files[0]
 }
 function handleDrop(e: DragEvent) {
   dragOver.value = false
-  if (e.dataTransfer?.files && e.dataTransfer.files[0]) selectedFile.value = e.dataTransfer.files[0]
+  if (e.dataTransfer?.files && e.dataTransfer.files[0] && acceptFile(e.dataTransfer.files[0])) {
+    selectedFile.value = e.dataTransfer.files[0]
+  }
 }
 
 function typeLabel(type: string): string {
@@ -482,13 +496,19 @@ function stopPolling() {
 }
 onUnmounted(stopPolling)
 
-function applyParsedQuestions(questionsArr: QuestionItem[]) {
+function applyParsedQuestions(questionsArr: QuestionItem[], serverMessage?: string) {
   questions.value = questionsArr.map((q) => ({
     ...q,
     // 处理 calculationStepsText
     calculationStepsText: q.calculationSteps?.join('\n') || ''
   }))
-  parseResult.value = { success: true, message: `成功解析 ${questionsArr.length} 道题目` }
+  // 后端会在 message 中提示“部分页/段解析失败”，优先展示，避免用户误以为结果完整
+  parseResult.value = {
+    success: true,
+    message: serverMessage && serverMessage !== 'success'
+      ? serverMessage
+      : `成功解析 ${questionsArr.length} 道题目`
+  }
 }
 
 async function handleFileParse() {
@@ -521,7 +541,7 @@ async function handleFileParse() {
               return
             }
             if (task.status === 'SUCCESS' && task.result && task.result.length > 0) {
-              applyParsedQuestions(task.result)
+              applyParsedQuestions(task.result, task.message)
             } else if (task.status === 'SUCCESS') {
               parseResult.value = { success: false, message: 'AI解析结果为空' }
             } else {

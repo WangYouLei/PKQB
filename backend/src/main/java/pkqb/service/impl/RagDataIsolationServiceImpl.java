@@ -31,14 +31,18 @@ import java.util.stream.Collectors;
  * 其中"已知限制"对应的优化台账条目见 {@code docs/后期优化清单.md} 第 2.4 节。
  *
  * <h2>一、向量库元数据字段</h2>
- * 以下字段在 RedisVectorStoreConfig 中以 TAG 类型建立索引（仅支持等值匹配），
- * 全部落在 RedisJSON 的 {@code $.metadata.xxx} 路径下：
+ * 以下字段在 RedisVectorStoreConfig 中以 TAG 类型建立索引（仅支持等值匹配）。
+ * 注意两点写入约束（违反即检索不到，曾因此返修）：
+ * ① Spring AI 的 RedisVectorStore 会把 Document.metadata 平铺在 JSON 根级，
+ *    因此字段路径是根级 {@code $.xxx}，不存在 $.metadata.xxx 这一层；
+ * ② RediSearch 的 TAG 不索引 JSON 数字，ID 类字段一律以字符串写入；
+ *    isPrivate 是布尔值，布尔可被 TAG 索引（存为 true/false 标签），保持 Boolean。
  * <pre>
  * 字段       含义                          是否参与检索过滤
- * userId     上传者用户ID                  是（永远可见自己的文档）
- * isPrivate  是否私有                      是（同班可见性受其约束）
- * fileId     文件记录ID（file 表主键）      否，仅用于"按文件"同步/清理
- * classId    上传时刻的班级归属（快照）      否，仅留痕，不进入过滤路径
+ * userId     上传者用户ID（字符串）          是（永远可见自己的文档）
+ * isPrivate  是否私有（布尔）               是（同班可见性受其约束）
+ * fileId     文件记录ID（字符串，file 表主键） 否，仅用于"按文件"同步/清理
+ * classId    上传时刻的班级归属（字符串快照）  否，仅留痕，不进入过滤路径
  * </pre>
  *
  * <h2>二、字段按"变更频率"分级处理（这是本设计最核心的取舍）</h2>
@@ -133,13 +137,14 @@ public class RagDataIsolationServiceImpl implements RagDataIsolationService {
     public Map<String, Object> buildUploadMetadata(Long userId, Long fileId) {
         UserEntity user = userId != null ? userMapper.selectById(userId) : null;
         Map<String, Object> metadata = new HashMap<>();
-        metadata.put(META_USER_ID, userId);
+        // RediSearch TAG 不索引 JSON 数字，ID 类字段统一存字符串，等值过滤才能命中
+        metadata.put(META_USER_ID, String.valueOf(userId));
         if (user != null && user.getClassId() != null) {
-            metadata.put(META_CLASS_ID, user.getClassId().longValue());
+            metadata.put(META_CLASS_ID, String.valueOf(user.getClassId()));
         }
         // 知识库上传默认班级共享，与 doAddDocuments 写 file 表的 isPrivate=false 保持一致
         metadata.put(META_IS_PRIVATE, Boolean.FALSE);
-        metadata.put(META_FILE_ID, fileId);
+        metadata.put(META_FILE_ID, String.valueOf(fileId));
         return metadata;
     }
 
@@ -190,8 +195,9 @@ public class RagDataIsolationServiceImpl implements RagDataIsolationService {
                 offset += SEARCH_PAGE_SIZE;
             }
             // 再统一改写元数据（两阶段，避免边遍历边修改索引字段）
+            // 路径为根级 $.isPrivate：Spring AI 写入时 metadata 平铺在文档根级
             for (String key : docKeys) {
-                jedisPooled.jsonSet(key, Path2.of("$.metadata." + META_IS_PRIVATE), isPrivate);
+                jedisPooled.jsonSet(key, Path2.of("$." + META_IS_PRIVATE), isPrivate);
             }
             log.info("[RAG数据隔离] 已同步文件隐私状态到向量片段, fileId={}, isPrivate={}, 片段数={}",
                     fileId, isPrivate, docKeys.size());

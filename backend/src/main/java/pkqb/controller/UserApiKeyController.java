@@ -11,6 +11,7 @@ import org.springframework.web.util.HtmlUtils;
 import pkqb.common.Result;
 import pkqb.config.ReactAgentFactory;
 import pkqb.enums.ApiKeyMode;
+import pkqb.enums.ModelChannel;
 import pkqb.enums.ModelType;
 import pkqb.pojo.dto.SaveApiKeyRequest;
 import pkqb.pojo.entity.ModelsEntity;
@@ -90,7 +91,8 @@ public class UserApiKeyController {
     public Result<String> addModel(
             HttpServletRequest httpRequest,
             @Parameter(description = "模型名称") @RequestParam String modelName,
-            @Parameter(description = "模型类型：0=主模型，1=辅助模型，2=视觉模型") @RequestParam(defaultValue = "1") int modelType) {
+            @Parameter(description = "模型类型：0=主模型，1=辅助模型，2=视觉模型") @RequestParam(defaultValue = "1") int modelType,
+            @Parameter(description = "模型渠道：dashscope=阿里云百炼，openai=OpenAI兼容接口") @RequestParam(required = false) String modelChannel) {
         Long userId = (Long) httpRequest.getAttribute("userId");
         if (userId == null) {
             return Result.error(401, "未登录或登录已过期");
@@ -119,15 +121,19 @@ public class UserApiKeyController {
             return Result.error(400, "无效的模型类型: " + modelType);
         }
 
+        // 解析渠道，默认 dashscope
+        ModelChannel channel = ModelChannel.fromCode(modelChannel);
+
         // 按类型检查数量限制
         if (!userApiKeyService.canAddModel(userId, type)) {
             return Result.error(400, type.getDescription() + "已达到最大数量限制（" + type.getMaxCount() + "个）");
         }
-        
+
         String apiKey = userApiKeyService.getPlainApiKey(userId);
-        ModelValidationResult validationResult = userApiKeyService.validateModel(apiKey, safeModelName, type.getCode());
+        ModelValidationResult validationResult = userApiKeyService.validateModel(apiKey, safeModelName, type.getCode(), channel);
         if (!validationResult.isSuccess()) {
-            log.warn("[模型管理] 模型验证失败: userId={}, modelName={}, error={}", userId, safeModelName, validationResult.error());
+            log.warn("[模型管理] 模型验证失败: userId={}, modelName={}, channel={}, error={}",
+                    userId, safeModelName, channel, validationResult.error());
             return Result.error(400, validationResult.error());
         }
 
@@ -136,20 +142,21 @@ public class UserApiKeyController {
             model.setUserId(userId);
             model.setModelName(safeModelName);
             model.setModelType(type.getCode());
+            model.setModelChannel(channel.getCode());
             // 保存探测到的调用配置（端点、思考模式）
             model.setMultiModel(validationResult.multiModel());
             model.setEnableThinking(validationResult.enableThinking());
-            
+
             // 如果用户没有任何模型，强制设为主模型
             List<ModelsEntity> existingModels = userApiKeyService.getUserModels(userId);
             if (existingModels == null || existingModels.isEmpty()) {
                 model.setModelType(ModelType.MAIN.getCode());
             }
-            
+
             userApiKeyService.saveUserModel(model);
             reactAgentFactory.clearUserCache(userId);
-            
-            log.info("[模型管理] 用户 {} 添加{}成功: {}", userId, type.getDescription(), safeModelName);
+
+            log.info("[模型管理] 用户 {} 添加{}成功: {}, 渠道: {}", userId, type.getDescription(), safeModelName, channel);
             return Result.success(type.getDescription() + "添加成功");
         } catch (Exception e) {
             log.error("[模型管理] 添加模型失败: {}", e.getMessage());

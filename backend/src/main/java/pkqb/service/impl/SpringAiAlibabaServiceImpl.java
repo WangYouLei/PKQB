@@ -50,6 +50,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.regex.Pattern;
@@ -95,7 +96,12 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
 
     /** 题目解析任务状态 Redis key 前缀与过期时间 */
     private static final String RUBRIC_TASK_KEY_PREFIX = "rubric:parse:task:";
-    private static final Duration RUBRIC_TASK_TTL = Duration.ofMinutes(30);
+    /** 长 PDF 解析可能超过 30 分钟，过期时间放宽到 2 小时，避免任务还在跑但状态已丢失 */
+    private static final Duration RUBRIC_TASK_TTL = Duration.ofHours(2);
+
+    /** 单次文本解析允许的最大分段数，超过后提示拆分，避免一次任务触发数百次模型调用 */
+    @org.springframework.beans.factory.annotation.Value("${pkqb.ai.parse.max-text-chunks:200}")
+    private int maxTextChunks;
 
     private static final StringBuilder TYPE_DESC = new StringBuilder();
     static {
@@ -132,7 +138,13 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
         return String.format(QUESTION_ANALYSIS_PROMPT_TEMPLATE, TYPE_DESC, content);
     }
 
-    private static final int RUBRIC_TRUNCATE_LENGTH = 3000;
+    /** 文本解析分片：每片字符数（约 6k 汉字，输入 token 与输出 token 均可控） */
+    private static final int TEXT_CHUNK_CHARS = 6000;
+    /** 文本解析分片并发上限（避免触发模型服务限流） */
+    private static final int TEXT_CHUNK_CONCURRENCY = 3;
+    /** 超长单页切分时保留的重叠字符，避免跨段题目被完全截断 */
+    private static final int TEXT_CHUNK_OVERLAP_CHARS = 150;
+
     private static final int RUBRIC_DETECT_LENGTH = 1500;
     private static final int NOTE_DETECT_LENGTH = 1000;
 
@@ -644,8 +656,13 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                                 RubricParseTaskStatus.STATUS_RUNNING, "analyzing", msg));
                 Result<List<AiRubric>> result = doHandleRubricFile(inMemoryFile, userId, modelType, progress);
                 if (result.getCode() == 200) {
+                    // 用解析结果自带的 message 承载“部分分片失败”等提示，前端轮询可直接展示
+                    String successMessage = result.getMessage();
+                    if (successMessage == null || successMessage.isBlank() || "success".equals(successMessage)) {
+                        successMessage = "解析完成";
+                    }
                     finalStatus = new RubricParseTaskStatus(taskId, userId,
-                            RubricParseTaskStatus.STATUS_SUCCESS, "done", "解析完成");
+                            RubricParseTaskStatus.STATUS_SUCCESS, "done", successMessage);
                     finalStatus.setResult(result.getData());
                 } else {
                     finalStatus = new RubricParseTaskStatus(taskId, userId,
@@ -771,39 +788,45 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
                 return Result.error("文件解析失败");
             }
 
-            String content = documents.stream()
-                    .map(Document::getText)
-                    .collect(Collectors.joining("\n"));
-
-            log.info("[题目文件解析-AI] 文件解析成功，内容长度: {}", content.length());
-
-            // 截断内容，防止超出模型 token 限制
-            if (content.length() > RUBRIC_TRUNCATE_LENGTH) {
-                log.info("[题目文件解析-文本] 内容过长({}字符)，截断到{}字符", content.length(), RUBRIC_TRUNCATE_LENGTH);
-                content = content.substring(0, RUBRIC_TRUNCATE_LENGTH);
+            // 长文档不再截断，按页/字符切分为多段分别解析（原实现只取前 3000 字符）
+            List<String> textChunks = buildTextChunks(documents);
+            if (textChunks.isEmpty()) {
+                log.warn("[题目文件解析-文本] 文档无可提取文本，疑似扫描件");
+                return Result.error("文件无可提取文本，疑似扫描件，请使用视觉模型解析");
             }
-
-            String prompt = getQuestionAnalysisPrompt(content);
+            if (textChunks.size() > maxTextChunks) {
+                log.warn("[题目文件解析-文本] 文档切分为 {} 段，超过单次解析上限 {} 段",
+                        textChunks.size(), maxTextChunks);
+                return Result.error("文档内容过长（" + textChunks.size() + " 段），超过单次解析上限 "
+                        + maxTextChunks + " 段，请拆分后上传");
+            }
+            int totalChars = textChunks.stream().mapToInt(String::length).sum();
+            log.info("[题目文件解析-AI] 文件解析成功，内容长度 {}，切分为 {} 段", totalChars, textChunks.size());
 
             try {
-                log.info("[题目文件解析-AI] 开始调用AI解析题目（结构化输出）");
-                if (progress != null) progress.accept("AI解析中");
-                List<AiRubric> aiRubrics = callForStructuredOutput(prompt, userId);
+                log.info("[题目文件解析-AI] 开始调用AI解析题目（结构化输出，分段并发）");
+                if (progress != null) progress.accept("AI解析中，共 " + textChunks.size() + " 段");
+                TextParseResult parsed = parseTextChunks(textChunks, userId, progress);
 
                 log.info("[题目文件解析-AI] AI解析完成");
 
-                if (aiRubrics == null || aiRubrics.isEmpty()) {
+                if (parsed.rubrics.isEmpty()) {
                     log.warn("[题目文件解析-AI] AI返回为空");
                     return Result.error("AI解析结果为空");
                 }
 
-                log.info("[题目文件解析-AI] 解析完成，共提取 {} 道题目", aiRubrics.size());
+                String successMessage = "解析完成，共 " + parsed.rubrics.size() + " 道题";
+                if (parsed.failedChunks > 0) {
+                    successMessage += "（有 " + parsed.failedChunks + " 段解析失败，题目可能不完整）";
+                }
+                log.info("[题目文件解析-AI] 解析完成，共提取 {} 道题目，失败段数 {}",
+                        parsed.rubrics.size(), parsed.failedChunks);
                 if (visionFailReason != null) {
                     notificationService.notifyRubricParseCompleteWithFallback(userId, "视觉模型", visionFailReason, "文本模型");
                 } else {
                     notificationService.notifyRubricParseComplete(userId, "文本模型");
                 }
-                return Result.success(aiRubrics);
+                return Result.success(successMessage, parsed.rubrics);
             } catch (Exception e) {
                 log.error("[题目文件解析-AI] AI解析失败: {}", e.getMessage(), e);
                 String failReason = visionFailReason != null
@@ -816,6 +839,149 @@ public class SpringAiAlibabaServiceImpl implements SpringAiAlibabaService {
             log.error("[题目文件解析-AI] 纯文本处理失败: ", e);
             return Result.error("处理文件失败: " + e.getMessage());
         }
+    }
+
+    /** 文本分段解析结果：题目 + 失败段数 */
+    private static class TextParseResult {
+        final List<AiRubric> rubrics;
+        final int failedChunks;
+
+        TextParseResult(List<AiRubric> rubrics, int failedChunks) {
+            this.rubrics = rubrics;
+            this.failedChunks = failedChunks;
+        }
+    }
+
+    /**
+     * 按页/字符把文档切成适合单次结构化输出的文本段。
+     * PDF 的 PagePdfDocumentReader 每页一个 Document，整页累积到上限再切；
+     * 单页超过上限时按换行切分，并保留少量重叠，降低跨段题目被截断的概率。
+     */
+    private List<String> buildTextChunks(List<Document> documents) {
+        List<String> chunks = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (Document document : documents) {
+            String text = document == null ? null : document.getText();
+            if (text == null || text.trim().isEmpty()) {
+                continue;
+            }
+            if (text.length() > TEXT_CHUNK_CHARS) {
+                if (current.length() > 0) {
+                    chunks.add(current.toString());
+                    current.setLength(0);
+                }
+                chunks.addAll(splitLongText(text));
+                continue;
+            }
+            if (current.length() > 0 && current.length() + text.length() > TEXT_CHUNK_CHARS) {
+                chunks.add(current.toString());
+                current.setLength(0);
+            }
+            current.append(text).append('\n');
+        }
+        if (current.length() > 0) {
+            chunks.add(current.toString());
+        }
+        return chunks;
+    }
+
+    /** 超长文本按换行边界切分，相邻片段保留少量重叠 */
+    private List<String> splitLongText(String text) {
+        List<String> parts = new ArrayList<>();
+        int start = 0;
+        while (start < text.length()) {
+            int end = Math.min(start + TEXT_CHUNK_CHARS, text.length());
+            if (end < text.length()) {
+                int newline = text.lastIndexOf('\n', end);
+                if (newline > start + TEXT_CHUNK_CHARS / 2) {
+                    end = newline + 1;
+                }
+            }
+            parts.add(text.substring(start, end));
+            if (end >= text.length()) {
+                break;
+            }
+            start = Math.max(end - TEXT_CHUNK_OVERLAP_CHARS, start + 1);
+        }
+        return parts;
+    }
+
+    /**
+     * 分段并发调用结构化输出，按段顺序合并。
+     * 单段失败不影响其他段；全部失败时由调用方返回“解析结果为空”。
+     */
+    private TextParseResult parseTextChunks(List<String> textChunks, Long userId,
+                                            java.util.function.Consumer<String> progress) {
+        java.util.concurrent.Semaphore semaphore = new java.util.concurrent.Semaphore(TEXT_CHUNK_CONCURRENCY);
+        java.util.concurrent.atomic.AtomicInteger completed = new java.util.concurrent.atomic.AtomicInteger();
+        long startMillis = System.currentTimeMillis();
+        List<CompletableFuture<List<AiRubric>>> futures = new ArrayList<>();
+
+        for (int i = 0; i < textChunks.size(); i++) {
+            final int index = i;
+            final String chunk = textChunks.get(i);
+            futures.add(CompletableFuture.supplyAsync(() -> {
+                try {
+                    semaphore.acquire();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return null;
+                }
+                try {
+                    return callForStructuredOutput(getQuestionAnalysisPrompt(chunk), userId);
+                } catch (Exception e) {
+                    log.error("[题目文件解析-文本] 第 {}/{} 段解析失败: {}",
+                            index + 1, textChunks.size(), e.getMessage());
+                    return null;
+                } finally {
+                    semaphore.release();
+                }
+            }, AiCommonSupport.AI_EXECUTOR).thenApply(result -> {
+                int done = completed.incrementAndGet();
+                if (progress != null) {
+                    progress.accept("AI解析中 " + done + "/" + textChunks.size() + " 段，已用 "
+                            + elapsedSeconds(startMillis) + " 秒");
+                }
+                return result;
+            }));
+        }
+
+        List<AiRubric> merged = new ArrayList<>();
+        int failed = 0;
+        for (CompletableFuture<List<AiRubric>> future : futures) {
+            try {
+                List<AiRubric> result = future.join();
+                if (result == null) {
+                    failed++;
+                } else {
+                    merged.addAll(result);
+                }
+            } catch (Exception e) {
+                failed++;
+            }
+        }
+        return new TextParseResult(dedupeRubrics(merged), failed);
+    }
+
+    /** 分段重叠可能导致边界题目重复，按题干前缀去重 */
+    private List<AiRubric> dedupeRubrics(List<AiRubric> rubrics) {
+        java.util.Set<String> seen = new HashSet<>();
+        List<AiRubric> result = new ArrayList<>();
+        for (AiRubric rubric : rubrics) {
+            String question = rubric.getQuestion() == null ? "" : rubric.getQuestion().replaceAll("\\s+", "");
+            if (question.isEmpty()) {
+                continue;
+            }
+            String key = question.length() > 80 ? question.substring(0, 80) : question;
+            if (seen.add(key)) {
+                result.add(rubric);
+            }
+        }
+        return result;
+    }
+
+    private static long elapsedSeconds(long startMillis) {
+        return Math.max(0, (System.currentTimeMillis() - startMillis) / 1000);
     }
 
     @Override

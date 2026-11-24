@@ -1,0 +1,91 @@
+@startuml PKQB 系统用例图
+
+' ============================================================
+' 智能题库与AI学习辅助系统 - 系统用例图
+' 依据：论文 3.3 功能性需求分析（九大功能模块，M1/M9 拆分细化）
+' 参与者：普通用户(User) / 管理员(Admin)
+' 生成日期：2026-09-19
+' ============================================================
+
+' ---- 布局与样式 ----
+' left to right direction: 用例纵向排列；参与者分居左右两侧
+left to right direction
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam DefaultFontName "SimSun"
+skinparam UsecaseFontName "SimSun"
+skinparam ActorFontName "SimSun"
+
+skinparam usecase {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+  ArrowColor #000000
+  FontColor #000000
+}
+skinparam actor {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+  FontColor #000000
+}
+skinparam note {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+}
+
+' ============================================================
+' 参与者（Actor）—— 论文 3.2 角色与权限分析
+' ============================================================
+actor "普通用户" as User
+
+' ============================================================
+' 系统边界
+' ============================================================
+rectangle  <<System>> {
+
+  ' ---------- 由 M1 拆分 ----------
+  usecase "用户认证" as UC_Auth
+  usecase "个人中心" as UC_Profile
+
+  ' ---------- M2 ~ M8 保持原模块 ----------
+  usecase "资源文件管理" as UC_File
+  usecase "智能试卷解析" as UC_Parse
+  usecase "题库与试卷管理" as UC_Rubric
+  usecase "AI智能对话与题目解答" as UC_AI
+  usecase "RAG知识库问答" as UC_RAG
+  usecase "错题集与智能复习" as UC_Wrong
+  usecase "消息通知" as UC_Notice
+
+  ' ---------- 由 M9 拆分 ----------
+  usecase "账号管理" as UC_Account
+  usecase "班级管理" as UC_Class
+
+}
+
+actor "管理员" as Admin
+
+' ============================================================
+' 关联关系（Actor -> UseCase）
+' ============================================================
+
+' ---- 普通用户(User) ----
+User --> UC_Auth
+User --> UC_Profile
+User --> UC_File
+User --> UC_Parse
+User --> UC_Rubric
+User --> UC_AI
+User --> UC_RAG
+User --> UC_Wrong
+User --> UC_Notice
+
+' ---- 管理员(Admin) ----
+Admin --> UC_Auth
+Admin --> UC_Account
+Admin --> UC_Class
+
+' ============================================================
+' 图注
+' ============================================================
+
+
+@enduml

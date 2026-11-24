@@ -59,7 +59,9 @@ export const apiAddDocumentsFile = async (file: File) => {
   formData.append('file', file)
   const { default: request } = await import('./request')
   const res = await request.post('/ai/add-documentsFile', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
+    headers: { 'Content-Type': 'multipart/form-data' },
+    // 50MB 文件上传耗时受网络影响较大，避免默认 30s 超时
+    timeout: 180000
   })
   return res.data as Result<string>
 }
@@ -74,7 +76,8 @@ export const apiAddRubricFile = async (file: File, modelType?: number) => {
   const { default: request } = await import('./request')
   const res = await request.post('/ai/handle-rubricFile', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 60000
+    // 提交阶段需把整份文件读入内存，50MB 文件留足上传时间
+    timeout: 180000
   })
   return res.data as Result<string>
 }
@@ -228,8 +231,8 @@ export const apiGetApiKeyStatus = async () => {
 }
 
 /** 添加用户模型 */
-export const apiAddModel = async (modelName: string, modelType: number = 1) => {
-  const res = await post<string>('/apikey/model', null, { modelName, modelType })
+export const apiAddModel = async (modelName: string, modelType: number = 1, modelChannel?: string) => {
+  const res = await post<string>('/apikey/model', null, { modelName, modelType, modelChannel })
   return res
 }
 

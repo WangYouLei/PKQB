@@ -1,0 +1,36 @@
+@startuml 多Agent协作执行流程
+
+skinparam activity {
+    BackgroundColor #DDEEFF
+    BorderColor #5599DD
+    FontColor #222222
+
+    DiamondBackgroundColor #FFCCCC
+    DiamondBorderColor #FF5555
+
+    StartColor #FFF4B8
+    EndColor #FFF4B8
+}
+
+start
+:用户发起AI解答请求;
+:Agent工厂获取Agent\n(按Key模式/模型配置);
+if (配置多模型?) then (否)
+  :单模型Agent\n直接生成回答;
+else (是)
+  if (辅助模型数量?) then (2个)
+    fork
+      :辅助模型Agent 1\n独立回答;
+    fork again
+      :辅助模型Agent 2\n独立回答;
+    end fork
+    :主模型整合Agent\n提炼最优答案;
+  else (1个)
+    :辅助模型Agent\n先行回答;
+    :主模型Agent\n审核优化答案;
+  endif
+endif
+:返回最终答案给用户;
+stop
+
+@enduml

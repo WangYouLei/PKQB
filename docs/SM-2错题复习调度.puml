@@ -1,0 +1,40 @@
+@startuml SM-2错题复习调度流程
+
+skinparam activity {
+    BackgroundColor #DDEEFF
+    BorderColor #5599DD
+    FontColor #222222
+
+    DiamondBackgroundColor #FFCCCC
+    DiamondBorderColor #FF5555
+
+    StartColor #FFF4B8
+    EndColor #FFF4B8
+}
+
+start
+:练习中答错，自动采集错题;
+if (已有该错题?) then (是)
+  :错误次数+1，EF-0.2\n间隔重置1天，掌握度归0;
+else (否)
+  :新建错题记录\n初始EF=2.5，间隔1天;
+endif
+:次日进入复习队列;
+:调度筛选今日到期题目\n(到期且未完全掌握);
+:用户复习作答;
+if (作答正确?) then (是)
+  :正确次数+1，SM-2更新易度因子;
+  :计算下次复习间隔\n(1天/3天/间隔×EF递增);
+  :更新掌握度等级;
+else (否)
+  :重置复习参数\nEF-0.2，间隔1天，掌握度归0;
+endif
+if (完全掌握?) then (是)
+  :移出复习计划;
+  stop
+else (否)
+  :按新间隔安排下次复习;
+  stop
+endif
+
+@enduml

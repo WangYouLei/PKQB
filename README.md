@@ -85,7 +85,7 @@ PKQB（智能题库生成系统）是一个前后端分离的 AI 教育应用，
 | **缓存/向量库** | Redis | 8.0+ | 缓存、Redis Vector Store、ReactAgent 会话记忆 |
 | **Redis 客户端** | Jedis / Redisson | 5.2.0 / 3.27.2 | 连接池、分布式锁（RedisSaver） |
 | **对象存储** | MinIO | 8.5.7 | 文件、试卷 HTML、头像存储 |
-| **文档解析** | Apache POI / PDFBox | 5.4.0 / 3.0.1 | Word / PDF 文档解析 |
+| **文档解析** | Apache POI / PDFBox | 5.4.0 / 3.0.7 | Word / PDF 文档解析 |
 | **认证** | JJWT | 0.12.5 | JWT Token 生成与校验 |
 | **密码加密** | Argon2 (argon2-jvm) | 2.11 | PHC 冠军密码哈希算法 |
 | **实时通信** | SseEmitter (Spring MVC) | - | 通知实时推送（Server-Sent Events） |

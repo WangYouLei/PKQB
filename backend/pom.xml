@@ -21,7 +21,7 @@
         <mybatis-plus.version>3.5.5</mybatis-plus.version>
         <jjwt.version>0.12.5</jjwt.version>
         <poi.version>5.4.0</poi.version>
-        <pdfbox.version>3.0.1</pdfbox.version>
+        <pdfbox.version>3.0.7</pdfbox.version>
         <aliyun-oss.version>3.18.1</aliyun-oss.version>
         <commons-compress.version>1.27.1</commons-compress.version>
         <tika.version>3.1.0</tika.version>
@@ -127,6 +127,12 @@
             <groupId>com.alibaba.cloud.ai</groupId>
             <artifactId>spring-ai-alibaba-starter-dashscope</artifactId>
             <version>1.1.2.0</version>
+        </dependency>
+
+        <!-- Spring AI OpenAI（支持 OpenAI、DeepSeek、Claude 等兼容 API） -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-openai-spring-boot-starter</artifactId>
         </dependency>
         <!--  Spring AI Alibaba Memory Redis  -->
         <dependency>

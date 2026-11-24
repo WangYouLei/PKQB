@@ -10,7 +10,7 @@
       <div class="upload-zone" @click="triggerFileInput" @dragover.prevent="dragOver=true" @dragleave="dragOver=false" @drop.prevent="handleDrop" :class="{'drag-over':dragOver}">
         <div class="upload-zone-icon">&#128206;</div>
         <div class="upload-zone-text">点击或拖拽文件到此处</div>
-        <div class="upload-zone-hint">支持 PDF、DOC、DOCX、MD 等格式</div>
+        <div class="upload-zone-hint">支持 PDF、DOC、DOCX、MD 等格式，单个文件不超过 50MB</div>
       </div>
       <input ref="fileInput" type="file" accept=".pdf,.doc,.docx,.md,.txt" style="display:none" @change="handleFileSelect" />
       <div v-if="selectedFile" style="margin-top:16px;padding:12px 16px;background:var(--accent-light);border-radius:12px;display:flex;justify-content:space-between;align-items:center">
@@ -56,13 +56,27 @@ function stopPolling() {
 onUnmounted(stopPolling)
 
 function triggerFileInput() { fileInput.value?.click() }
+
+/** 与后端 multipart 上限保持一致，超限时提前拦截 */
+const MAX_FILE_SIZE = 50 * 1024 * 1024
+
+function acceptFile(file: File): boolean {
+  if (file.size > MAX_FILE_SIZE) {
+    alert('文件超过 50MB 上限，请拆分后上传')
+    return false
+  }
+  return true
+}
+
 function handleFileSelect(e: Event) {
   const t = e.target as HTMLInputElement
-  if (t.files && t.files[0]) selectedFile.value = t.files[0]
+  if (t.files && t.files[0] && acceptFile(t.files[0])) selectedFile.value = t.files[0]
 }
 function handleDrop(e: DragEvent) {
   dragOver.value = false
-  if (e.dataTransfer?.files && e.dataTransfer.files[0]) selectedFile.value = e.dataTransfer.files[0]
+  if (e.dataTransfer?.files && e.dataTransfer.files[0] && acceptFile(e.dataTransfer.files[0])) {
+    selectedFile.value = e.dataTransfer.files[0]
+  }
 }
 
 async function handleFileUpload() {

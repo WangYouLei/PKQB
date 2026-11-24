@@ -1,0 +1,214 @@
+@startuml 系统功能模块结构图
+
+' ============================================================
+' 智能题库与AI学习辅助系统 - 系统功能模块结构图
+' 布局：系统名居顶 → 模块左列纵向排列 → 功能点右侧横向展开
+' 适配 A4 竖版页面
+' 生成日期：2026-09-20
+' ============================================================
+
+skinparam shadowing false
+skinparam defaultFontName "SimSun"
+skinparam rectangleFontName "SimSun"
+skinparam ArrowColor #000000
+
+skinparam rectangle {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+  BorderThickness 1
+}
+
+' ---- 系统名称（顶部） ----
+rectangle "智能题库与AI学习辅助系统" as Sys
+
+' ============================================================
+' M1 用户认证与个人中心
+' ============================================================
+rectangle "用户认证与\n个人中心" as M1
+rectangle "用户注册" as M1_1
+rectangle "用户登录与登出" as M1_2
+rectangle "个人资料与头像管理" as M1_3
+rectangle "API密钥与模型配置" as M1_4
+
+Sys --> M1
+M1 -right-> M1_1
+M1 -right-> M1_2
+M1 -right-> M1_3
+M1 -right-> M1_4
+
+' ============================================================
+' M2 资源文件管理
+' ============================================================
+rectangle "资源文件管理" as M2
+rectangle "文件上传" as M2_1
+rectangle "文件下载与删除" as M2_2
+rectangle "文件可见性设置" as M2_3
+rectangle "班级文件共享" as M2_4
+
+Sys --> M2
+M2 -right-> M2_1
+M2 -right-> M2_2
+M2 -right-> M2_3
+M2 -right-> M2_4
+
+' ============================================================
+' M3 智能试卷解析
+' ============================================================
+rectangle "智能试卷解析" as M3
+rectangle "试卷文件上传" as M3_1
+rectangle "AI结构化解析" as M3_2
+rectangle "解析结果编辑" as M3_3
+rectangle "题目批量入库" as M3_4
+
+Sys --> M3
+M3 -right-> M3_1
+M3 -right-> M3_2
+M3 -right-> M3_3
+M3 -right-> M3_4
+
+' ============================================================
+' M4 题库与试卷管理
+' ============================================================
+rectangle "题库与\n试卷管理" as M4
+rectangle "试卷增删改查" as M4_1
+rectangle "题目编辑与批量保存" as M4_2
+rectangle "在线练习与判分" as M4_3
+rectangle "试卷导出HTML" as M4_4
+
+Sys --> M4
+M4 -right-> M4_1
+M4 -right-> M4_2
+M4 -right-> M4_3
+M4 -right-> M4_4
+
+' ============================================================
+' M5 AI智能对话与题目解答
+' ============================================================
+rectangle "AI智能对话与\n题目解答" as M5
+rectangle "多轮AI对话" as M5_1
+rectangle "拍照解题" as M5_2
+rectangle "会话历史管理" as M5_3
+rectangle "用量统计" as M5_4
+
+Sys --> M5
+M5 -right-> M5_1
+M5 -right-> M5_2
+M5 -right-> M5_3
+M5 -right-> M5_4
+
+' ============================================================
+' M6 RAG知识库问答
+' ============================================================
+rectangle "RAG知识库问答" as M6
+rectangle "知识库文档上传" as M6_1
+rectangle "向量化与分块" as M6_2
+rectangle "两阶段检索问答" as M6_3
+rectangle "答案来源标注" as M6_4
+
+Sys --> M6
+M6 -right-> M6_1
+M6 -right-> M6_2
+M6 -right-> M6_3
+M6 -right-> M6_4
+
+' ============================================================
+' M7 错题集与智能复习
+' ============================================================
+rectangle "错题集与\n智能复习" as M7
+rectangle "错题自动入集" as M7_1
+rectangle "SM-2复习调度" as M7_2
+rectangle "今日待复习" as M7_3
+rectangle "掌握程度统计" as M7_4
+
+Sys --> M7
+M7 -right-> M7_1
+M7 -right-> M7_2
+M7 -right-> M7_3
+M7 -right-> M7_4
+
+' ============================================================
+' M8 消息通知
+' ============================================================
+rectangle "消息通知" as M8
+rectangle "SSE实时推送" as M8_1
+rectangle "通知列表查询" as M8_2
+rectangle "已读标记管理" as M8_3
+rectangle "通知删除" as M8_4
+
+Sys --> M8
+M8 -right-> M8_1
+M8 -right-> M8_2
+M8 -right-> M8_3
+M8 -right-> M8_4
+
+' ============================================================
+' M9 后台管理
+' ============================================================
+rectangle "后台管理" as M9
+rectangle "管理员独立登录" as M9_1
+rectangle "用户账号管理" as M9_2
+rectangle "班级管理" as M9_3
+rectangle "角色分配" as M9_4
+
+Sys --> M9
+M9 -right-> M9_1
+M9 -right-> M9_2
+M9 -right-> M9_3
+M9 -right-> M9_4
+
+' ============================================================
+' 布局控制：
+' 1. 模块间隐藏垂直连线，强制纵向排列于左列
+' 2. 功能点间隐藏水平连线，强制横向展开于模块右侧
+' ============================================================
+M1 -[hidden]down-> M2
+M2 -[hidden]down-> M3
+M3 -[hidden]down-> M4
+M4 -[hidden]down-> M5
+M5 -[hidden]down-> M6
+M6 -[hidden]down-> M7
+M7 -[hidden]down-> M8
+M8 -[hidden]down-> M9
+
+M1_1 -[hidden]right-> M1_2
+M1_2 -[hidden]right-> M1_3
+M1_3 -[hidden]right-> M1_4
+
+M2_1 -[hidden]right-> M2_2
+M2_2 -[hidden]right-> M2_3
+M2_3 -[hidden]right-> M2_4
+
+M3_1 -[hidden]right-> M3_2
+M3_2 -[hidden]right-> M3_3
+M3_3 -[hidden]right-> M3_4
+
+M4_1 -[hidden]right-> M4_2
+M4_2 -[hidden]right-> M4_3
+M4_3 -[hidden]right-> M4_4
+
+M5_1 -[hidden]right-> M5_2
+M5_2 -[hidden]right-> M5_3
+M5_3 -[hidden]right-> M5_4
+
+M6_1 -[hidden]right-> M6_2
+M6_2 -[hidden]right-> M6_3
+M6_3 -[hidden]right-> M6_4
+
+M7_1 -[hidden]right-> M7_2
+M7_2 -[hidden]right-> M7_3
+M7_3 -[hidden]right-> M7_4
+
+M8_1 -[hidden]right-> M8_2
+M8_2 -[hidden]right-> M8_3
+M8_3 -[hidden]right-> M8_4
+
+M9_1 -[hidden]right-> M9_2
+M9_2 -[hidden]right-> M9_3
+M9_3 -[hidden]right-> M9_4
+
+' ============================================================
+' 图注
+' ============================================================
+caption 图4-2  系统功能模块结构
+
+@enduml

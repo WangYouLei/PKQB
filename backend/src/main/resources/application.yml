@@ -18,8 +18,9 @@ spring:
     time-zone: Asia/Shanghai
   servlet:
     multipart:
-      max-file-size: 8MB
-      max-request-size: 8MB
+      # 长试卷 PDF 常见超过 8MB，放宽到 50MB；Nginx 侧需同步 client_max_body_size
+      max-file-size: 50MB
+      max-request-size: 50MB
   ai:
     retry:
       max-attempts: 2
@@ -29,7 +30,8 @@ spring:
         options:
           model: deepseek-v4-flash
           temperature: 0.7
-          localhost-max-tokens: 1024
+          # 结构化解析输出（题目+选项+答案解析）远超 1024 tokens，过低会导致 JSON 被截断
+          localhost-max-tokens: 8192
           personal-max-tokens:  8192
       vision:
         model: qwen3.6-plus
@@ -59,6 +61,31 @@ jwt:
 app:
   api-key:
     encrypt-secret: pkqb-api-key-encrypt-secret-32b
+
+# AI 模型 HTTP 调用超时：避免单次调用无限期挂起，长任务整体卡死
+pkqb:
+  ai:
+    request-timeout:
+      connect-seconds: 10
+      read-seconds: 180
+    parse:
+      # 单次解析的规模上限：超过后提示用户拆分，避免一次任务触发数百次模型调用
+      max-pdf-pages: 300
+      max-text-chunks: 200
+    # OpenAI 兼容渠道配置（支持 DeepSeek、Claude 等兼容 API）
+    openai:
+      # 默认模型
+      default-model: gpt-4o-mini
+      # 默认视觉模型
+      default-vision-model: gpt-4o-mini
+      # API 地址（可配置为 DeepSeek、Claude 代理等）
+      base-url: https://api.openai.com/v1
+      # API Key（可选，优先级低于用户个人 Key）
+      api-key: ${PKQB_AI_OPENAI_KEY:}
+      # 本地解析最大 tokens
+      local-max-tokens: 8192
+      # 个人用户解析最大 tokens
+      personal-max-tokens: 8192
 
 aliyun-oss:
   endpoint: oss-cn-guangzhou.aliyuncs.com

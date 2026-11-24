@@ -374,7 +374,7 @@ async function loadWrongQuestions() {
   try {
     const res = await apiGetWrongQuestions()
     if (res.code === 200) {
-      wrongQuestions.value = res.data || []
+      wrongQuestions.value = res.data?.list || []
       // 默认展开第一个分组
       if (wrongQuestions.value.length > 0) {
         expandedGroups.value.add(wrongQuestions.value[0].rubricId)

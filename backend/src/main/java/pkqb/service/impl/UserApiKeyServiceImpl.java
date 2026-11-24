@@ -13,7 +13,10 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import pkqb.config.DashScopeModelFactory;
+import pkqb.config.ModelProvider;
+import pkqb.config.ModelProviderFactory;
 import pkqb.enums.ApiKeyMode;
+import pkqb.enums.ModelChannel;
 import pkqb.enums.ModelType;
 import pkqb.mapper.ModelsMapper;
 import pkqb.mapper.UserMapper;
@@ -39,6 +42,7 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
     private final ModelsMapper modelsMapper;
     private final ApiKeyEncryptor apiKeyEncryptor;
     private final DashScopeModelFactory dashScopeModelFactory;
+    private final ModelProviderFactory modelProviderFactory;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
 
@@ -49,19 +53,22 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
     private static final String ASSISTANT_MODELS_SUFFIX = ":assistant_models";
     private static final String VISION_MODEL_SUFFIX = ":vision_model";
     private static final String ALL_MODELS_SUFFIX = ":all_models";
+    private static final String MODEL_CHANNEL_SUFFIX = ":model_channel";
     
     private static final long CACHE_EXPIRE_HOURS = 24;
 
-    public UserApiKeyServiceImpl(UserMapper userMapper, 
-                                  ModelsMapper modelsMapper, 
-                                  ApiKeyEncryptor apiKeyEncryptor, 
+    public UserApiKeyServiceImpl(UserMapper userMapper,
+                                  ModelsMapper modelsMapper,
+                                  ApiKeyEncryptor apiKeyEncryptor,
                                   DashScopeModelFactory dashScopeModelFactory,
+                                  ModelProviderFactory modelProviderFactory,
                                   StringRedisTemplate stringRedisTemplate,
                                   ObjectMapper objectMapper) {
         this.userMapper = userMapper;
         this.modelsMapper = modelsMapper;
         this.apiKeyEncryptor = apiKeyEncryptor;
         this.dashScopeModelFactory = dashScopeModelFactory;
+        this.modelProviderFactory = modelProviderFactory;
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
     }
@@ -441,14 +448,47 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
         if (!hasUserOwnApiKey(userId)) {
             return false;
         }
-        
+
         ModelsEntity mainModel = getMainModel(userId);
         if (mainModel == null) {
             return false;
         }
-        
+
         List<ModelsEntity> assistantModels = getAssistantModels(userId);
         return !assistantModels.isEmpty();
+    }
+
+    @Override
+    public ModelChannel getUserModelChannel(Long userId) {
+        String cacheKey = CACHE_PREFIX + userId + MODEL_CHANNEL_SUFFIX;
+        String cached = stringRedisTemplate.opsForValue().get(cacheKey);
+
+        if (cached != null) {
+            return ModelChannel.fromCode(cached);
+        }
+
+        LambdaQueryWrapper<UserEntity> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(UserEntity::getId, userId)
+                .select(UserEntity::getModelChannel);
+        UserEntity user = userMapper.selectOne(queryWrapper);
+
+        ModelChannel channel = user != null ? ModelChannel.fromCode(user.getModelChannel()) : ModelChannel.DASHSCOPE;
+
+        stringRedisTemplate.opsForValue().set(cacheKey, channel.getCode(),
+                CACHE_EXPIRE_HOURS, TimeUnit.HOURS);
+
+        return channel;
+    }
+
+    @Override
+    public void setUserModelChannel(Long userId, ModelChannel channel) {
+        LambdaUpdateWrapper<UserEntity> updateWrapper = new LambdaUpdateWrapper<>();
+        updateWrapper.eq(UserEntity::getId, userId)
+                .set(UserEntity::getModelChannel, channel.getCode());
+        userMapper.update(null, updateWrapper);
+
+        clearUserCache(userId);
+        log.info("[API Key管理] 用户 {} 设置模型渠道为 {}", userId, channel.getCode());
     }
 
     @Override
@@ -545,16 +585,114 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
         return chatModel.stream(prompt).blockLast(Duration.ofSeconds(60));
     }
 
-    private void clearUserCache(Long userId) {
-        String prefix = CACHE_PREFIX + userId;
-        stringRedisTemplate.delete(List.of(
-                prefix + HAS_API_KEY_SUFFIX,
-                prefix + PLAIN_API_KEY_SUFFIX,
-                prefix + MAIN_MODEL_SUFFIX,
-                prefix + ASSISTANT_MODELS_SUFFIX,
-                prefix + VISION_MODEL_SUFFIX,
-                prefix + ALL_MODELS_SUFFIX
-        ));
-        log.info("[缓存管理] 清除用户 {} 的Redis缓存", userId);
+    /**
+     * 发起模型验证调用（指定渠道）
+     */
+    private ChatResponse doModelValidationCall(String apiKey, String modelName, Boolean enableThinking, boolean multiModel, ModelChannel channel) {
+        ModelProvider provider = modelProviderFactory.getProvider(channel);
+        ChatModel chatModel = provider.createChatModel(
+                apiKey.trim(), modelName.trim(), 2048, enableThinking, multiModel);
+        Prompt prompt = new Prompt("你好");
+        return chatModel.stream(prompt).blockLast(Duration.ofSeconds(60));
+    }
+
+    /**
+     * 验证模型（指定渠道）
+     */
+    @Override
+    public ModelValidationResult validateModel(String apiKey, String modelName, int modelType, ModelChannel channel) {
+        log.info("[模型验证] 开始验证模型: {}, modelType: {}, channel: {}", modelName, modelType, channel);
+
+        if (apiKey == null || apiKey.trim().isEmpty()) {
+            log.warn("[模型验证] API Key 为空");
+            return ModelValidationResult.fail("API Key 不能为空");
+        }
+
+        if (modelName == null || modelName.trim().isEmpty()) {
+            log.warn("[模型验证] 模型名称为空");
+            return ModelValidationResult.fail("模型名称不能为空");
+        }
+
+        if (modelType == ModelType.VISION.getCode()) {
+            log.info("[模型验证] 视觉模型 {} 跳过调用验证，直接保存", modelName);
+            return ModelValidationResult.success(false, false);
+        }
+
+        // OpenAI 等渠道暂时不支持自动探测，简单验证即可
+        if (channel != ModelChannel.DASHSCOPE) {
+            try {
+                ChatResponse response = doModelValidationCall(apiKey, modelName, null, false, channel);
+                if (response != null && response.getResult() != null) {
+                    log.info("[模型验证] 模型 {} 验证成功 (channel: {})", modelName, channel);
+                    return ModelValidationResult.success(false, false);
+                }
+                return ModelValidationResult.fail("请检查模型名称或API Key是否有误");
+            } catch (Exception e) {
+                log.error("[模型验证] 模型 {} 验证失败: {}", modelName, e.getMessage());
+                if (e.getMessage() != null) {
+                    if (e.getMessage().contains("InvalidApiKey") || e.getMessage().contains("api key")) {
+                        return ModelValidationResult.fail("API Key 无效，请检查");
+                    }
+                    if (e.getMessage().contains("ModelNotFound") || e.getMessage().contains("model not found")) {
+                        return ModelValidationResult.fail("模型不存在，请检查模型名称");
+                    }
+                }
+                return ModelValidationResult.fail("请检查模型名称或API Key是否有误: " + e.getMessage());
+            }
+        }
+
+        // DashScope 渠道使用原有探测逻辑
+        Boolean enableThinking = null;
+        boolean multiModel = false;
+        String lastErrorMessage = null;
+
+        while (true) {
+            try {
+                ChatResponse response = doModelValidationCall(apiKey, modelName, enableThinking, multiModel);
+                if (response != null && response.getResult() != null) {
+                    log.info("[模型验证] 模型 {} 验证成功, multiModel={}, enableThinking={}",
+                            modelName, multiModel, enableThinking);
+                    return ModelValidationResult.success(multiModel, Boolean.TRUE.equals(enableThinking));
+                }
+                log.warn("[模型验证] 模型 {} 验证失败：响应为空", modelName);
+                return ModelValidationResult.fail("请检查模型名称或API Key是否有误");
+            } catch (Exception e) {
+                lastErrorMessage = e.getMessage();
+                log.warn("[模型验证] 模型 {} 验证尝试失败 (multiModel={}, enableThinking={}): {}",
+                        modelName, multiModel, enableThinking, lastErrorMessage);
+
+                boolean needThinking = lastErrorMessage != null && lastErrorMessage.contains("enable_thinking");
+                boolean needMulti = lastErrorMessage != null && lastErrorMessage.contains("url error");
+                if (!needThinking && !needMulti) {
+                    break;
+                }
+
+                boolean changed = false;
+                if (needThinking && enableThinking == null) {
+                    enableThinking = Boolean.TRUE;
+                    changed = true;
+                }
+                if (needMulti && !multiModel) {
+                    multiModel = true;
+                    changed = true;
+                }
+                if (!changed) {
+                    break;
+                }
+            }
+        }
+
+        log.error("[模型验证] 模型 {} 验证失败: {}", modelName, lastErrorMessage);
+
+        if (lastErrorMessage != null) {
+            if (lastErrorMessage.contains("InvalidApiKey") || lastErrorMessage.contains("api key")) {
+                return ModelValidationResult.fail("API Key 无效，请检查");
+            }
+            if (lastErrorMessage.contains("ModelNotFound") || lastErrorMessage.contains("model not found")) {
+                return ModelValidationResult.fail("模型不存在，请检查模型名称");
+            }
+        }
+
+        return ModelValidationResult.fail("请检查模型名称或API Key是否有误");
     }
 }

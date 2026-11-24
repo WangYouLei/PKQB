@@ -115,6 +115,7 @@ export interface ModelsEntity {
   userId: number
   modelName: string
   modelType: number  // 0=主模型，1=辅助模型，2=视觉模型
+  modelChannel?: string  // 模型渠道：dashscope=阿里云百炼，openai=OpenAI兼容接口，zhipu=智谱GLM，kimi=Kimi，wenxin=百度文心，hunyuan=腾讯混元
   createTime: string
   updateTime: string
 }
