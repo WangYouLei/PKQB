@@ -1,0 +1,23 @@
+# 构建产物
+backend/target/
+frontend/dist/
+admin-frontend/dist/
+
+# 依赖
+node_modules/
+
+# IDE
+.idea/
+.codebuddy/
+.trae/
+*.iml
+backend/classpath.txt
+
+# 环境与缓存
+*.log
+.DS_Store
+
+# 文档：docs 下仅提交这两张图，其余（puml/md 等）只保留在本地
+docs/*
+!docs/系统功能模块结构图.png
+!docs/系统用例图.png
