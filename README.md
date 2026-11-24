@@ -2,6 +2,8 @@
 
 > 基于 **Spring AI Alibaba ReactAgent** 的 AI 驱动题库管理与智能学习平台，融合 RAG 知识库问答、AI 自动出题、SM-2 间隔复习等能力，面向学生群体提供"出题 — 练习 — 错题巩固 — 智能答疑"的闭环学习体验。
 
+> 语言：[中文](README.md) | [English](README_EN.md)
+
 ---
 
 ## 目录
@@ -36,8 +38,8 @@ PKQB（智能题库生成系统）是一个前后端分离的 AI 教育应用，
 | 模块 | 功能说明 |
 |------|----------|
 | **用户认证** | 注册 / 登录 / 登出，JWT Token 认证，Argon2id 密码加密 |
-| **模型管理** | 用户自定义 API Key（加密存储），支持配置主模型与辅助模型 |
-| **文件管理** | Word/PDF 解析、图片识别、MinIO 对象存储、班级文件共享 |
+| **模型管理** | 用户自定义 API Key（加密存储），支持阿里云百炼 / OpenAI 兼容等多渠道，配置主模型、辅助模型与视觉模型 |
+| **文件管理** | Word/PDF 解析、图片识别、阿里云 OSS 对象存储、班级文件共享，单文件上限 50MB |
 | **题库管理** | 试卷 CRUD、批量管理、6 种题型、AI 自动生成、导出 HTML 试卷 |
 | **AI 对话** | ReactAgent 多 Agent 对话 + RAG 知识库问答，SSE 流式输出 |
 | **AI 解题** | 拍照/上传题目，AI 识别并给出答案与解析 |
@@ -62,8 +64,8 @@ PKQB（智能题库生成系统）是一个前后端分离的 AI 教育应用，
 - **前端展示层**：学生端 Vue 3 + TypeScript + Vite + Pinia + Axios；管理端独立项目 admin-frontend（同技术栈，端口 3001）
 - **网关代理层**：Nginx 反向代理 + 静态托管
 - **后端服务层**：Spring Boot 3.2（端口 5555），含 Auth / File / AI / Rubric / Wrong / Notification / User 7 大业务模块 + admin 管理端模块
-- **AI 能力层**：Spring AI Alibaba / DashScope / ReactAgent / RAG
-- **数据存储层**：MySQL 8.0（业务数据）+ Redis（缓存/向量库/会话记忆）+ MinIO/OSS（对象存储）
+- **AI 能力层**：Spring AI Alibaba / DashScope / OpenAI 兼容接口 / ReactAgent / RAG
+- **数据存储层**：MySQL 8.0（业务数据）+ Redis（缓存/向量库/会话记忆）+ 阿里云 OSS（对象存储）
 
 ### 功能模块结构
 
@@ -78,13 +80,13 @@ PKQB（智能题库生成系统）是一个前后端分离的 AI 教育应用，
 | 分类 | 技术 | 版本 | 用途 |
 |------|------|------|------|
 | **核心框架** | Spring Boot | 3.2.5 | Web 框架、自动配置 |
-| **AI 框架** | Spring AI Alibaba | 1.1.2.0 | ReactAgent 多 Agent、DashScope 大模型接入 |
-| **AI 工具** | Spring AI | 1.1.2 | Vector Store、Tika/PDF Document Reader、Advisors |
+| **AI 框架** | Spring AI Alibaba | 1.1.2.0 | ReactAgent 多 Agent，统一接入 DashScope 与 OpenAI 兼容渠道 |
+| **AI 工具** | Spring AI | 1.1.2 | Vector Store、Tika/PDF Document Reader、Advisors、OpenAI Starter |
 | **ORM** | MyBatis-Plus | 3.5.5 | 数据持久化、分页、代码生成 |
 | **数据库** | MySQL | 8.0+ | 业务数据存储 |
 | **缓存/向量库** | Redis | 8.0+ | 缓存、Redis Vector Store、ReactAgent 会话记忆 |
 | **Redis 客户端** | Jedis / Redisson | 5.2.0 / 3.27.2 | 连接池、分布式锁（RedisSaver） |
-| **对象存储** | MinIO | 8.5.7 | 文件、试卷 HTML、头像存储 |
+| **对象存储** | 阿里云 OSS | SDK 3.18.1 | 文件、试卷 HTML、头像存储 |
 | **文档解析** | Apache POI / PDFBox | 5.4.0 / 3.0.7 | Word / PDF 文档解析 |
 | **认证** | JJWT | 0.12.5 | JWT Token 生成与校验 |
 | **密码加密** | Argon2 (argon2-jvm) | 2.11 | PHC 冠军密码哈希算法 |
@@ -236,6 +238,17 @@ QuestionExtractStrategy (接口)
 | **软删除** | 试卷、题目采用 `deleted` 字段软删除，避免误删数据丢失 |
 | **管理端权限** | `AdminInterceptor` 拦截 `/api/admin/**`，校验 `role=1`；管理员登录独立接口，不与学生端 `/auth/login` 复用；用户表 `deleted` 字段逻辑删除（`@TableLogic`） |
 
+### 8. 多模型渠道适配（工厂模式）
+
+`ModelProvider` 抽象不同厂商的模型创建逻辑，`ModelProviderFactory` 按渠道注册并路由，用户可为自己的模型指定所属渠道：
+
+- `DashScopeModelProvider`：阿里云百炼（qwen / deepseek 等），支持视觉模型与 multimodal-generation 端点；
+- `OpenAIModelProvider`：OpenAI 兼容接口，通过 `base-url` 接入 OpenAI、DeepSeek、Claude 兼容代理等；
+- 渠道由 `ModelChannel` 枚举定义，模型渠道存入 `models.model_channel`，用户渠道存入 `user.model_channel` 并做 Redis 缓存；
+- 新增渠道只需实现 `ModelProvider` 并注册为 Spring Bean，调用方无需改动。
+
+详见 [ModelProviderFactory.java](backend/src/main/java/pkqb/config/ModelProviderFactory.java)。
+
 ---
 
 ## 数据库设计
@@ -245,21 +258,20 @@ QuestionExtractStrategy (接口)
 | 表名 | 说明 | 关键字段 |
 |------|------|----------|
 | `class` | 班级表 | id, class_name |
-| `user` | 用户表 | id, username, password_hash, student_no, class_id, role（0普通/1管理员）, deleted（逻辑删除） |
+| `user` | 用户表 | id, username, password_hash, student_no, class_id, role（0普通/1管理员）, model_channel（模型渠道）, deleted（逻辑删除） |
 | `rubric` | 试卷表（软删除） | id, title, create_id, is_private, question_count |
 | `question` | 题目表（软删除） | id, rubric_id, question_type, options_json, answer, explanation |
 | `question_resource` | 题目资源表 | 题目配图、选项图片、答案图片等 |
-| `file` | 文件表 | id, user_id, minio_key, is_private |
-| `models` | 用户模型配置表 | 用户自定义的 AI 模型列表 |
+| `file` | 文件表 | id, user_id, minio_key（OSS 对象键，沿用原列名）, is_private |
+| `models` | 用户模型配置表 | id, user_id, model_name, model_type, model_channel, multi_model, enable_thinking |
 | `wrong_question` | 错题本表 | SM-2 参数（ease_factor, interval_days, next_review_date, mastery_level） |
 | `notification` | 通知表 | id, user_id, type, is_read |
 | `audit_log` | 审计日志表 | 操作记录 |
 
-建表 SQL 位于 [docs/](docs/) 目录：
-- [database-schema.sql](docs/database-schema.sql) — 基础表结构
-- [rubric_tables.sql](docs/rubric_tables.sql) — 试卷与题目表
-- [wrong_question_tables.sql](docs/wrong_question_tables.sql) — 错题本表
-- [notification_tables.sql](docs/notification_tables.sql) — 通知表
+增量迁移脚本位于 [backend/src/main/resources/db/migration/](backend/src/main/resources/db/migration/)：
+
+- [V1__add_model_channel.sql](backend/src/main/resources/db/migration/V1__add_model_channel.sql) — 为 `models`、`user` 表补充渠道、多模态与思考模式字段
+- 全新环境先导入基础表结构，再按版本号顺序执行迁移脚本
 
 ---
 
@@ -275,7 +287,7 @@ PKQB/
 │   │   ├── service/                  # 业务服务层
 │   │   │   ├── impl/                 # 服务实现
 │   │   │   └── strategy/             # 策略模式（题型解析）
-│   │   ├── config/                   # 配置类（AI/SSE/Redis/MinIO/Swagger）
+│   │   ├── config/                   # 配置类（AI/模型渠道/SSE/Redis/OSS/Swagger）
 │   │   ├── tool/                     # AI 工具（RAGSearchTool/ImageViewTool）
 │   │   ├── interceptor/              # 拦截器（JWT/Log/Admin 权限）
 │   │   ├── aspect/                   # AOP 切面（审计日志）
@@ -284,11 +296,13 @@ PKQB/
 │   │   ├── pojo/                     # 实体与 DTO
 │   │   │   ├── entity/               # 数据库实体
 │   │   │   └── dto/                  # 数据传输对象（含 admin 子包）
-│   │   ├── enums/                    # 枚举（题型/模型类型等）
+│   │   ├── enums/                    # 枚举（题型/模型类型/模型渠道等）
 │   │   ├── common/                   # 公共类（Result/常量）
 │   │   └── util/                     # 工具类（JWT/Argon2id/ApiKeyEncryptor）
 │   └── src/main/resources/
-│       ├── application.example.yml   # 配置模板
+│       ├── application.yml           # 主配置（MySQL/Redis/OSS/模型渠道/超时与解析上限）
+│       ├── application-prod.yml      # 生产环境覆盖配置
+│       ├── db/migration/             # 数据库增量迁移脚本
 │       └── templates/                # 试卷 HTML 模板
 │
 ├── frontend/                         # 前端应用
@@ -324,13 +338,9 @@ PKQB/
 │       ├── router/                   # 路由配置（含登录守卫）
 │       └── types/                    # TypeScript 类型
 │
-└── docs/                             # 项目文档
-    ├── 系统框架图.puml / .png
-    ├── 系统功能模块结构图.puml / .png
-    ├── 数据库ER图.puml / .png
-    ├── 系统顶层用例图.png
-    ├── 功能更新日志_2026-05-27.md
-    └── *.sql                         # 建表脚本
+└── docs/                             # 设计图（仅以下两张图随仓库提交）
+    ├── 系统功能模块结构图.png
+    └── 系统用例图.png
 ```
 
 ---
@@ -346,7 +356,7 @@ PKQB/
 | Maven | 3.8+ |
 | MySQL | 8.0+ |
 | Redis | 8.0+ |
-| MinIO | 最新版（可选，也可用阿里云 OSS） |
+| 阿里云 OSS | 已开通 Bucket（也可替换为兼容的对象存储） |
 
 ### 1. 准备基础设施
 
@@ -354,28 +364,28 @@ PKQB/
 # 启动 MySQL 和 Redis（以 Docker 为例）
 docker run -d --name mysql -p 3306:3306 -e MYSQL_ROOT_PASSWORD=your_password mysql:8.0
 docker run -d --name redis -p 6379:6379 redis:8.0
-
-# 启动 MinIO
-docker run -d --name minio -p 9000:9000 -p 9001:9001 \
-  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-  minio/minio server /data --console-address ":9001"
 ```
+
+对象存储使用阿里云 OSS，无需本地启动服务，只需在 `application.yml` 中配置 `aliyun-oss` 的 endpoint、AccessKey 与 bucket 名称。
 
 ### 2. 初始化数据库
 
 ```bash
-mysql -u root -p < docs/database-schema.sql
-mysql -u root -p pkqb < docs/rubric_tables.sql
-mysql -u root -p pkqb < docs/wrong_question_tables.sql
-mysql -u root -p pkqb < docs/notification_tables.sql
+# 创建数据库
+mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS pkqb DEFAULT CHARSET utf8mb4"
+
+# 导入基础表结构后，按版本号顺序执行增量迁移
+mysql -u root -p pkqb < backend/src/main/resources/db/migration/V1__add_model_channel.sql
 ```
+
+> 全新环境需先导入项目的基础表结构，再执行 `db/migration/` 下的迁移脚本。
 
 ### 3. 启动后端
 
 ```bash
 cd backend
-cp src/main/resources/application.example.yml src/main/resources/application.yml
-# 编辑 application.yml，填入 MySQL/Redis/MinIO/DashScope API Key 等配置
+# 编辑 src/main/resources/application.yml，填入 MySQL/Redis/阿里云 OSS/DashScope 等配置；
+# 使用 OpenAI 兼容渠道时，另需配置 pkqb.ai.openai.base-url 与 PKQB_AI_OPENAI_KEY
 ./mvnw spring-boot:run
 ```
 
@@ -430,9 +440,11 @@ npm run dev
 |------|------|------|
 | `/api/apikey` | POST/DELETE | 设置/删除 API Key |
 | `/api/apikey/status` | GET | 获取 API Key 状态 |
-| `/api/apikey/model` | POST/DELETE | 添加/删除模型 |
+| `/api/apikey/model` | POST/DELETE | 添加/删除模型（添加时可通过 `modelChannel` 指定渠道：`dashscope` / `openai`） |
 | `/api/apikey/model/main` | PUT | 设置主模型 |
 | `/api/apikey/models` | GET | 获取模型列表 |
+
+> 模型渠道由 `ModelChannel` 定义，当前已实现 `dashscope`（阿里云百炼）与 `openai`（OpenAI 兼容接口）两个 Provider，其余渠道枚举保留扩展位。
 
 ### 题库
 
@@ -474,6 +486,8 @@ npm run dev
 | `/api/ai/get-history-by-sessionId` | GET | 获取指定会话聊天记录 |
 | `/api/ai/delete-history` | DELETE | 删除聊天会话 |
 | `/api/ai/usage` | GET | AI 用量统计 |
+
+> 长试卷解析：单文件上限 50MB，单次解析最多 300 页 / 200 个文本分块（见 `pkqb.ai.parse` 配置），超出时提示拆分上传。
 
 ### 错题本
 
@@ -546,6 +560,9 @@ server {
     listen 80;
     server_name your-domain.com;
 
+    # 试卷 PDF 最大 50MB，需与后端 multipart 限制保持一致
+    client_max_body_size 50m;
+
     # 管理端静态资源（独立路径，避免与学生端冲突）
     location /admin/ {
         alias /path/to/admin-frontend/dist/;
@@ -582,7 +599,8 @@ java -jar target/pkqb-0.0.1-SNAPSHOT.jar
 
 ### 部署注意事项
 
-1. **数据库迁移**：首次部署需依次执行 `docs/` 下的建表 SQL。
+1. **数据库迁移**：首次部署先导入基础表结构，再按版本号顺序执行 `backend/src/main/resources/db/migration/` 下的脚本。
 2. **SSE 代理配置**：Nginx 反代 API 时需 `proxy_buffering off` 并延长 `proxy_read_timeout`（见上方配置），否则通知事件流会被缓冲导致延迟或断连。
 3. **HTTPS 环境**：SSE 基于普通 HTTP，自动适配 `https://`，无需额外配置。
-4. **DashScope API Key**：需在阿里云百炼平台申请，配置到 `application.yml`。
+4. **模型与 OSS 凭证**：默认渠道为阿里云百炼，需配置 `Spring_ai_alibaba`；使用 OpenAI 兼容渠道时配置 `PKQB_AI_OPENAI_KEY` 与 `pkqb.ai.openai.base-url`；对象存储需配置 `AccessKey_ID`、`AccessKey_Secret` 与 bucket 名称。
+5. **上传大小**：后端已放宽到 50MB，Nginx 需同步设置 `client_max_body_size 50m;`，否则大文件会被 413 拦截。
