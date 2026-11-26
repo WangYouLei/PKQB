@@ -87,6 +87,21 @@ pkqb:
       # 个人用户解析最大 tokens
       personal-max-tokens: 8192
 
+    # DeepSeek 渠道配置（OpenAI 兼容协议）
+    deepseek:
+      # 默认模型
+      default-model: deepseek-chat
+      # 默认视觉模型（DeepSeek 暂不支持视觉，保留占位）
+      default-vision-model: deepseek-chat
+      # API 地址
+      base-url: https://api.deepseek.com/v1
+      # API Key（可选，优先级低于用户个人 Key）
+      api-key: ${PKQB_AI_DEEPSEEK_KEY:}
+      # 本地解析最大 tokens
+      local-max-tokens: 8192
+      # 个人用户解析最大 tokens
+      personal-max-tokens: 8192
+
 aliyun-oss:
   endpoint: oss-cn-guangzhou.aliyuncs.com
   access-key-id: ${AccessKey_ID}

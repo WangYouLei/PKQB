@@ -198,17 +198,18 @@ public class ReactAgentUserConfig {
      * 创建多模型Agent（使用Multi-agent模式）
      * 使用ParallelAgent让两个辅助模型并行回答，然后由主模型整合结果
      *
-     * @param apiKey 用户API Key
+     * @param channelKeys 渠道编码 -> 用户 API Key
      * @param mainModel 主模型（用于整合结果）
      * @param assistantModels 辅助模型列表（最多2个）
      * @return 多模型Agent
      */
-    public Agent createMultiModelReactAgent(String apiKey, ModelsEntity mainModel, List<ModelsEntity> assistantModels) {
+    public Agent createMultiModelReactAgent(Map<String, String> channelKeys, ModelsEntity mainModel, List<ModelsEntity> assistantModels) {
         log.info("[多模型Agent] 创建多模型Agent，主模型: {}, 辅助模型数量: {}",
                 mainModel.getModelName(), assistantModels.size());
 
+        String mainApiKey = resolveKey(channelKeys, mainModel);
         ModelProvider mainProvider = modelProviderFactory.getProvider(mainModel);
-        ChatModel mainChatModel = mainProvider.createChatModel(apiKey, mainModel);
+        ChatModel mainChatModel = mainProvider.createChatModel(mainApiKey, mainModel);
         SummarizationHook userHook = createUserSummarizationHook(mainChatModel);
         ModelCallLimitHook limitHook = createModelCallLimitHook();
 
@@ -225,11 +226,11 @@ public class ReactAgentUserConfig {
 
         if (assistantModels.size() == 1) {
             log.info("[多模型Agent] 只有1个辅助模型，创建单辅助模型Agent");
-            return createSingleAssistantAgent(apiKey, mainModel, assistantModels.get(0));
+            return createSingleAssistantAgent(channelKeys, mainModel, assistantModels.get(0));
         }
 
-        ReactAgent assistantAgent1 = createAssistantReactAgent(apiKey, assistantModels.get(0), 1);
-        ReactAgent assistantAgent2 = createAssistantReactAgent(apiKey, assistantModels.get(1), 2);
+        ReactAgent assistantAgent1 = createAssistantReactAgent(channelKeys, assistantModels.get(0), 1);
+        ReactAgent assistantAgent2 = createAssistantReactAgent(channelKeys, assistantModels.get(1), 2);
 
         log.info("[多模型Agent] 创建并行Agent，辅助模型: {} 和 {}",
                 assistantModels.get(0).getModelName(), assistantModels.get(1).getModelName());

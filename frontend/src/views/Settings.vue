@@ -249,7 +249,7 @@
               </div>
               <div class="model-actions">
                 <span class="model-status">用于所有单模型操作</span>
-                <button class="btn btn-sm btn-outline" @click="handleEditModel(mainModel)" title="修改模型名称">
+                <button class="btn btn-sm btn-outline" @click="handleEditModel(mainModel)" title="修改模型名称和渠道">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                     <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
@@ -267,7 +267,7 @@
                 <div class="model-channel-tag">{{ getChannelDisplayName(model.modelChannel) }}</div>
               </div>
               <div class="model-actions">
-                <button class="btn btn-sm btn-outline" @click="handleEditModel(model)" title="修改模型名称">
+                <button class="btn btn-sm btn-outline" @click="handleEditModel(model)" title="修改模型名称和渠道">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                     <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
@@ -302,7 +302,7 @@
               </div>
               <div class="model-actions">
                 <span class="model-status">用于图片识别和PDF解析</span>
-                <button class="btn btn-sm btn-outline" @click="handleEditModel(visionModel)" title="修改模型名称">
+                <button class="btn btn-sm btn-outline" @click="handleEditModel(visionModel)" title="修改模型名称和渠道">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                     <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
@@ -328,12 +328,9 @@
             <div class="add-model-form">
               <div class="model-channel-select">
                 <select v-model="newModelChannel" class="form-select">
-                  <option value="dashscope">阿里云百炼</option>
-                  <option value="openai">OpenAI 兼容接口</option>
-                  <option value="zhipu">智谱 GLM</option>
-                  <option value="kimi">Kimi</option>
-                  <option value="wenxin">百度文心</option>
-                  <option value="hunyuan">腾讯混元</option>
+                  <option v-for="option in channelOptions" :key="option.value" :value="option.value">
+                    {{ option.label }}
+                  </option>
                 </select>
               </div>
               <input 
@@ -363,7 +360,10 @@
               不勾选则默认为辅助模型。您可以在 <a href="https://bailian.console.aliyun.com/" target="_blank" rel="noopener">阿里云百炼控制台</a> 获取模型名称
             </p>
             <p class="input-hint" v-else-if="newModelChannel === 'openai'">
-              不勾选则默认为辅助模型。OpenAI 兼容接口支持 DeepSeek、Claude 等模型，请确保已配置对应的 API 地址
+              不勾选则默认为辅助模型。OpenAI 兼容接口支持 Claude、本地部署模型等，请确保已配置对应的 API 地址
+            </p>
+            <p class="input-hint" v-else-if="newModelChannel === 'deepseek'">
+              不勾选则默认为辅助模型。您可以在 <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">DeepSeek 开放平台</a> 获取 API Key，模型名称如 deepseek-chat、deepseek-reasoner
             </p>
             <p class="input-hint" v-else>
               不勾选则默认为辅助模型。请在对应平台获取模型名称和 API Key
@@ -398,6 +398,57 @@
         </ul>
       </div>
     </div>
+
+    <!-- 修改模型弹窗 -->
+    <div class="modal-overlay" v-if="editingModel" @click.self="closeEditModel">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-label="修改模型">
+        <div class="modal-header">
+          <h3>修改模型</h3>
+          <button class="modal-close" type="button" @click="closeEditModel" :disabled="savingEditModel" aria-label="关闭">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <label class="input-label">模型渠道</label>
+          <select v-model="editingModelChannel" class="form-select modal-select">
+            <option v-for="option in channelOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+
+          <label class="input-label">模型名称</label>
+          <input
+            v-model="editingModelName"
+            type="text"
+            class="form-input"
+            :placeholder="getPlaceholderForChannel(editingModelChannel)"
+            @keyup.enter="submitEditModel"
+          />
+          <p class="input-hint">
+            修改渠道后会使用当前 API Key 在新渠道重新校验模型，请确保该 Key 在目标渠道可用。
+          </p>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-outline" type="button" @click="closeEditModel" :disabled="savingEditModel">
+            取消
+          </button>
+          <button
+            class="btn btn-primary"
+            type="button"
+            @click="submitEditModel"
+            :disabled="savingEditModel || !editingModelName.trim()"
+          >
+            <svg v-if="savingEditModel" class="spinner" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31.4 31.4" stroke-linecap="round"/>
+            </svg>
+            {{ savingEditModel ? '保存中...' : '保存' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -405,7 +456,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useUserStore } from '@/stores/user'
 import { useToast } from '@/composables/useToast'
-import { apiGetApiKeyStatus, apiSaveApiKey, apiDeleteApiKey, apiAddModel, apiDeleteModel, apiUpdateModelName, apiSetMainModel, apiGetAvatarUploadPath, apiUpdateAvatar, apiUpdateUsername, apiUpdatePassword } from '@/api'
+import { apiGetApiKeyStatus, apiSaveApiKey, apiDeleteApiKey, apiAddModel, apiDeleteModel, apiUpdateModel, apiSetMainModel, apiGetAvatarUploadPath, apiUpdateAvatar, apiUpdateUsername, apiUpdatePassword } from '@/api'
 import type { ApiKeyStatus, ModelsEntity } from '@/types'
 
 const userStore = useUserStore()
@@ -423,6 +474,17 @@ const newModelIsVision = ref(false)
 const newModelChannel = ref('dashscope')
 const savingModel = ref(false)
 const deletingModelId = ref<number | null>(null)
+
+/** 可选模型渠道（添加与修改共用） */
+const channelOptions = [
+  { value: 'dashscope', label: '阿里云百炼' },
+  { value: 'openai', label: 'OpenAI 兼容接口' },
+  { value: 'deepseek', label: 'DeepSeek' },
+  { value: 'zhipu', label: '智谱 GLM' },
+  { value: 'kimi', label: 'Kimi' },
+  { value: 'wenxin', label: '百度文心' },
+  { value: 'hunyuan', label: '腾讯混元' }
+]
 
 const MASKED_KEY = '***************'
 const isMaskedKey = ref(false)
@@ -455,6 +517,7 @@ function getChannelDisplayName(channel: string | undefined): string {
   const channelMap: Record<string, string> = {
     'dashscope': '阿里云百炼',
     'openai': 'OpenAI 兼容',
+    'deepseek': 'DeepSeek',
     'zhipu': '智谱 GLM',
     'kimi': 'Kimi',
     'wenxin': '百度文心',
@@ -470,6 +533,7 @@ function getPlaceholderForChannel(channel: string): string {
   const placeholderMap: Record<string, string> = {
     'dashscope': '请输入模型名称，如 qwen-plus、deepseek-v4',
     'openai': '请输入模型名称，如 gpt-4o、claude-3',
+    'deepseek': '请输入模型名称，如 deepseek-chat、deepseek-reasoner',
     'zhipu': '请输入模型名称，如 glm-4-plus',
     'kimi': '请输入模型名称，如 moonshot-v1-128k',
     'wenxin': '请输入模型名称，如 ernie-4.0-8k-latest',
@@ -596,42 +660,57 @@ async function handleSetMainModel(modelId: number) {
 
 const toast = useToast()
 
+const editingModel = ref<ModelsEntity | null>(null)
+const editingModelName = ref('')
+const editingModelChannel = ref('dashscope')
+const savingEditModel = ref(false)
+
 function handleEditModel(model: ModelsEntity) {
-  const newName = prompt('请输入新的模型名称：', model.modelName)
-  if (!newName || !newName.trim()) return
-  if (newName.trim() === model.modelName) {
-    toast.warning('模型名称未变化')
-    return
-  }
-  editingModelId.value = model.id
-  editingModelNewName.value = newName.trim()
-  doEditModel()
+  editingModel.value = model
+  editingModelName.value = model.modelName
+  editingModelChannel.value = model.modelChannel || 'dashscope'
 }
 
-const editingModelId = ref<number | null>(null)
-const editingModelNewName = ref('')
+function closeEditModel() {
+  if (savingEditModel.value) return
+  editingModel.value = null
+}
 
-async function doEditModel() {
-  if (!userStore.userId || editingModelId.value === null) {
+async function submitEditModel() {
+  if (!editingModel.value || !userStore.userId) {
     toast.error('登录状态异常，请重新登录后再试')
     return
   }
+
+  const newName = editingModelName.value.trim()
+  const newChannel = editingModelChannel.value
+  const oldChannel = editingModel.value.modelChannel || 'dashscope'
+
+  if (!newName) {
+    toast.warning('请输入模型名称')
+    return
+  }
+  if (newName === editingModel.value.modelName && newChannel === oldChannel) {
+    toast.warning('模型名称和渠道均未变化')
+    return
+  }
+
+  savingEditModel.value = true
   try {
-    const res = await apiUpdateModelName(editingModelId.value, editingModelNewName.value)
+    const res = await apiUpdateModel(editingModel.value.id, newName, newChannel)
     if (res.code === 200) {
       toast.success('模型修改成功')
+      editingModel.value = null
       await loadStatus()
     } else {
       toast.error(res.message || '模型修改失败')
-      await loadStatus()
     }
   } catch (error) {
     console.error('模型修改失败:', error)
     const err = error as { message?: string }
     toast.error(err?.message || '模型修改失败')
-    await loadStatus()
   } finally {
-    editingModelId.value = null
+    savingEditModel.value = false
   }
 }
 
@@ -1474,6 +1553,103 @@ async function handleUpdatePassword() {
   }
 }
 
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 440px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-glass);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border-glass);
+}
+
+.modal-header h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.modal-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.modal-close:hover:not(:disabled) {
+  background: var(--bg-glass);
+  color: var(--text-primary);
+}
+
+.modal-close svg {
+  width: 18px;
+  height: 18px;
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px;
+}
+
+.modal-select {
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.modal-body .form-input {
+  width: 100%;
+}
+
+.modal-body .input-hint {
+  margin-top: 4px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border-glass);
+}
+
+.modal-actions .btn {
+  min-width: 88px;
+  width: auto;
+}
+
 @media (max-width: 640px) {
   .settings-page {
     padding: 20px;
@@ -1496,6 +1672,11 @@ async function handleUpdatePassword() {
   
   .btn {
     width: 100%;
+  }
+
+  .modal-actions .btn {
+    flex: 1;
+    width: auto;
   }
 }
 </style>

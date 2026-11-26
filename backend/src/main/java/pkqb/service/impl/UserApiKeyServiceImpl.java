@@ -19,8 +19,10 @@ import pkqb.enums.ApiKeyMode;
 import pkqb.enums.ModelChannel;
 import pkqb.enums.ModelType;
 import pkqb.mapper.ModelsMapper;
+import pkqb.mapper.UserApiKeyMapper;
 import pkqb.mapper.UserMapper;
 import pkqb.pojo.entity.ModelsEntity;
+import pkqb.pojo.entity.UserApiKeyEntity;
 import pkqb.pojo.entity.UserEntity;
 import pkqb.pojo.dto.ModelValidationResult;
 import pkqb.service.UserApiKeyService;
@@ -28,6 +30,7 @@ import pkqb.util.ApiKeyEncryptor;
 
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.time.Duration;
@@ -40,6 +43,7 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
 
     private final UserMapper userMapper;
     private final ModelsMapper modelsMapper;
+    private final UserApiKeyMapper userApiKeyMapper;
     private final ApiKeyEncryptor apiKeyEncryptor;
     private final DashScopeModelFactory dashScopeModelFactory;
     private final ModelProviderFactory modelProviderFactory;
@@ -47,6 +51,10 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
     private final ObjectMapper objectMapper;
 
     private static final String CACHE_PREFIX = "user_api_config:";
+    /**
+     * 分渠道 API Key 密文映射缓存：channel -> 加密后的 Key
+     */
+    private static final String API_KEYS_SUFFIX = ":api_keys";
     private static final String HAS_API_KEY_SUFFIX = ":has_api_key";
     private static final String PLAIN_API_KEY_SUFFIX = ":plain_api_key";
     private static final String MAIN_MODEL_SUFFIX = ":main_model";
@@ -59,6 +67,7 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
 
     public UserApiKeyServiceImpl(UserMapper userMapper,
                                   ModelsMapper modelsMapper,
+                                  UserApiKeyMapper userApiKeyMapper,
                                   ApiKeyEncryptor apiKeyEncryptor,
                                   DashScopeModelFactory dashScopeModelFactory,
                                   ModelProviderFactory modelProviderFactory,
@@ -66,6 +75,7 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
                                   ObjectMapper objectMapper) {
         this.userMapper = userMapper;
         this.modelsMapper = modelsMapper;
+        this.userApiKeyMapper = userApiKeyMapper;
         this.apiKeyEncryptor = apiKeyEncryptor;
         this.dashScopeModelFactory = dashScopeModelFactory;
         this.modelProviderFactory = modelProviderFactory;
@@ -75,27 +85,38 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void saveApiKey(Long userId, String apiKey) {
+    public void saveApiKey(Long userId, ModelChannel channel, String apiKey) {
+        ModelChannel actualChannel = channel != null ? channel : ModelChannel.DASHSCOPE;
         String encryptedKey = apiKeyEncryptor.encrypt(apiKey);
-        
-        LambdaUpdateWrapper<UserEntity> updateWrapper = new LambdaUpdateWrapper<>();
-        updateWrapper.eq(UserEntity::getId, userId)
-                .set(UserEntity::getApiKey, encryptedKey);
-        
-        int updated = userMapper.update(null, updateWrapper);
-        if (updated > 0) {
-            clearUserCache(userId);
-            log.info("[API Key管理] 用户 {} 保存 API Key 成功", userId);
+
+        LambdaQueryWrapper<UserApiKeyEntity> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(UserApiKeyEntity::getUserId, userId)
+                .eq(UserApiKeyEntity::getChannel, actualChannel.getCode());
+        UserApiKeyEntity existing = userApiKeyMapper.selectOne(queryWrapper);
+
+        if (existing != null) {
+            LambdaUpdateWrapper<UserApiKeyEntity> updateWrapper = new LambdaUpdateWrapper<>();
+            updateWrapper.eq(UserApiKeyEntity::getId, existing.getId())
+                    .set(UserApiKeyEntity::getApiKey, encryptedKey);
+            userApiKeyMapper.update(null, updateWrapper);
         } else {
-            log.warn("[API Key管理] 用户 {} 保存 API Key 失败，用户不存在", userId);
+            UserApiKeyEntity entity = new UserApiKeyEntity();
+            entity.setUserId(userId);
+            entity.setChannel(actualChannel.getCode());
+            entity.setApiKey(encryptedKey);
+            userApiKeyMapper.insert(entity);
         }
+
+        clearUserCache(userId);
+        log.info("[API Key管理] 用户 {} 保存 {} 渠道 API Key 成功", userId, actualChannel.getCode());
     }
 
     @Override
     public Map<String, Object> getApiKeyStatusView(Long userId) {
         Map<String, Object> status = new HashMap<>();
 
-        boolean hasOwnKey = hasUserOwnApiKey(userId);
+        Map<String, Boolean> apiKeyStatus = getApiKeyStatus(userId);
+        boolean hasOwnKey = apiKeyStatus.values().stream().anyMatch(Boolean::booleanValue);
         // shouldRateLimit的实现即为 !hasUserOwnApiKey，此处直接派生，省一次服务调用
         boolean shouldLimit = !hasOwnKey;
 
@@ -114,6 +135,15 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
                 .filter(m -> m.getModelType().equals(ModelType.VISION.getCode()))
                 .findFirst().orElse(null);
 
+        // 所有已配置模型所属渠道都必须有 Key，多模型协作才能正常调用
+        boolean allModelsConfigured = allModels.stream()
+                .allMatch(m -> hasUserOwnApiKey(userId, m.getModelChannelEnum()));
+
+        status.put("apiKeyStatus", apiKeyStatus);
+        status.put("configuredChannels", apiKeyStatus.entrySet().stream()
+                .filter(Map.Entry::getValue)
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toList()));
         status.put("hasOwnApiKey", hasOwnKey);
         status.put("currentMode", getApiKeyMode(userId).name());
         status.put("hasRateLimit", shouldLimit);
@@ -124,11 +154,32 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
         status.put("modelCount", allModels.size());
         status.put("maxModelCount", MAX_MODEL_COUNT);
         status.put("canAddModel", allModels.size() < MAX_MODEL_COUNT);
-        // 与supportsMultiModel等价：有自己的Key + 有主模型 + 至少1个辅助模型，直接派生省一次调用
-        status.put("supportsMultiModel", hasOwnKey && mainModel != null && !assistantModels.isEmpty());
+        // 与supportsMultiModel等价：有主模型和至少1个辅助模型，且相关渠道都有 Key
+        status.put("supportsMultiModel",
+                hasOwnKey && mainModel != null && !assistantModels.isEmpty() && allModelsConfigured);
 
         log.info("[API Key管理] 用户 {} 状态视图聚合完成, modelCount={}", userId, allModels.size());
         return status;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteApiKey(Long userId, ModelChannel channel) {
+        ModelChannel actualChannel = channel != null ? channel : ModelChannel.DASHSCOPE;
+
+        LambdaQueryWrapper<UserApiKeyEntity> keyDeleteWrapper = new LambdaQueryWrapper<>();
+        keyDeleteWrapper.eq(UserApiKeyEntity::getUserId, userId)
+                .eq(UserApiKeyEntity::getChannel, actualChannel.getCode());
+        userApiKeyMapper.delete(keyDeleteWrapper);
+
+        // 该渠道的模型依赖对应 Key，级联删除，避免留下无法调用的模型
+        LambdaQueryWrapper<ModelsEntity> modelsDeleteWrapper = new LambdaQueryWrapper<>();
+        modelsDeleteWrapper.eq(ModelsEntity::getUserId, userId)
+                .eq(ModelsEntity::getModelChannel, actualChannel.getCode());
+        modelsMapper.delete(modelsDeleteWrapper);
+
+        clearUserCache(userId);
+        log.info("[API Key管理] 用户 {} 删除 {} 渠道 API Key 及关联模型成功", userId, actualChannel.getCode());
     }
 
     @Override
@@ -140,44 +191,31 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
 
         userMapper.update(null, updateWrapper);
 
-        // 级联删除该用户的所有模型
-        LambdaQueryWrapper<ModelsEntity> modelsDeleteWrapper = new LambdaQueryWrapper<>();
-        modelsDeleteWrapper.eq(ModelsEntity::getUserId, userId);
-        modelsMapper.delete(modelsDeleteWrapper);
+        // 删除分渠道 Key 与所有模型
+        userApiKeyMapper.delete(new LambdaQueryWrapper<UserApiKeyEntity>()
+                .eq(UserApiKeyEntity::getUserId, userId));
+        modelsMapper.delete(new LambdaQueryWrapper<ModelsEntity>()
+                .eq(ModelsEntity::getUserId, userId));
 
         clearUserCache(userId);
-        log.info("[API Key管理] 用户 {} 删除 API Key 及关联模型成功", userId);
+        log.info("[API Key管理] 用户 {} 删除所有 API Key 及关联模型成功", userId);
     }
 
     @Override
-    public String getPlainApiKey(Long userId) {
-        String cacheKey = CACHE_PREFIX + userId + PLAIN_API_KEY_SUFFIX;
-        // Redis 只缓存加密后的密文，避免明文 API Key 泄露到 Redis 内存/RDB/AOF；使用时再解密
-        String cachedCipher = stringRedisTemplate.opsForValue().get(cacheKey);
-        if (cachedCipher != null) {
-            try {
-                return apiKeyEncryptor.decrypt(cachedCipher);
-            } catch (Exception e) {
-                // 兼容历史明文缓存：解密失败说明缓存不可信，清除后回源数据库重新加载
-                log.warn("[API Key管理] 用户 {} 的缓存解密失败，清除缓存并回源数据库", userId);
-                stringRedisTemplate.delete(cacheKey);
-            }
+    public String getPlainApiKey(Long userId, ModelChannel channel) {
+        ModelChannel actualChannel = channel != null ? channel : ModelChannel.DASHSCOPE;
+        String cachedCipher = getEncryptedApiKeyMap(userId).get(actualChannel.getCode());
+        if (cachedCipher == null || cachedCipher.isEmpty()) {
+            return null;
         }
-
-        LambdaQueryWrapper<UserEntity> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(UserEntity::getId, userId)
-                .select(UserEntity::getApiKey);
-
-        UserEntity user = userMapper.selectOne(queryWrapper);
-        if (user != null && user.getApiKey() != null && !user.getApiKey().isEmpty()) {
-            // 缓存DB中已有的密文，需要明文时解密返回
-            stringRedisTemplate.opsForValue().set(cacheKey, user.getApiKey(),
-                    CACHE_EXPIRE_HOURS, TimeUnit.HOURS);
-            log.debug("[API Key管理] 用户 {} 缓存API Key密文至Redis", userId);
-            return apiKeyEncryptor.decrypt(user.getApiKey());
+        try {
+            return apiKeyEncryptor.decrypt(cachedCipher);
+        } catch (Exception e) {
+            log.warn("[API Key管理] 用户 {} 的 {} 渠道缓存解密失败，清除缓存并回源数据库",
+                    userId, actualChannel.getCode());
+            clearUserCache(userId);
+            return null;
         }
-
-        return null;
     }
 
     @Override
@@ -189,25 +227,56 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
     }
 
     @Override
-    public boolean hasUserOwnApiKey(Long userId) {
-        String cacheKey = CACHE_PREFIX + userId + HAS_API_KEY_SUFFIX;
-        String cached = stringRedisTemplate.opsForValue().get(cacheKey);
-        
-        if (cached != null) {
-            return "1".equals(cached);
+    public boolean hasUserOwnApiKey(Long userId, ModelChannel channel) {
+        ModelChannel actualChannel = channel != null ? channel : ModelChannel.DASHSCOPE;
+        String cipher = getEncryptedApiKeyMap(userId).get(actualChannel.getCode());
+        return cipher != null && !cipher.isEmpty();
+    }
+
+    @Override
+    public Map<String, Boolean> getApiKeyStatus(Long userId) {
+        Map<String, String> encryptedKeys = getEncryptedApiKeyMap(userId);
+        Map<String, Boolean> result = new LinkedHashMap<>();
+        for (ModelChannel channel : ModelChannel.values()) {
+            String cipher = encryptedKeys.get(channel.getCode());
+            result.put(channel.getCode(), cipher != null && !cipher.isEmpty());
         }
-        
-        LambdaQueryWrapper<UserEntity> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(UserEntity::getId, userId)
-                .select(UserEntity::getApiKey)
-                .isNotNull(UserEntity::getApiKey);
-        
-        UserEntity user = userMapper.selectOne(queryWrapper);
-        boolean result = user != null && user.getApiKey() != null && !user.getApiKey().isEmpty();
-        
-        stringRedisTemplate.opsForValue().set(cacheKey, result ? "1" : "0", 
-                CACHE_EXPIRE_HOURS, TimeUnit.HOURS);
-        
+        return result;
+    }
+
+    /**
+     * 获取用户分渠道 API Key 的密文映射。
+     * Redis 只缓存密文，避免明文 Key 泄露到 Redis 内存/RDB/AOF。
+     */
+    private Map<String, String> getEncryptedApiKeyMap(Long userId) {
+        String cacheKey = CACHE_PREFIX + userId + API_KEYS_SUFFIX;
+        String cached = stringRedisTemplate.opsForValue().get(cacheKey);
+        if (cached != null) {
+            try {
+                return objectMapper.readValue(cached, new TypeReference<Map<String, String>>() {});
+            } catch (JsonProcessingException e) {
+                log.warn("[API Key管理] 解析分渠道 Key 缓存失败: {}", e.getMessage());
+            }
+        }
+
+        List<UserApiKeyEntity> rows = userApiKeyMapper.selectList(
+                new LambdaQueryWrapper<UserApiKeyEntity>()
+                        .eq(UserApiKeyEntity::getUserId, userId));
+        Map<String, String> result = new HashMap<>();
+        for (UserApiKeyEntity row : rows) {
+            if (row.getChannel() != null && row.getApiKey() != null && !row.getApiKey().isEmpty()) {
+                result.put(row.getChannel(), row.getApiKey());
+            }
+        }
+
+        try {
+            stringRedisTemplate.opsForValue().set(cacheKey,
+                    objectMapper.writeValueAsString(result),
+                    CACHE_EXPIRE_HOURS, TimeUnit.HOURS);
+        } catch (JsonProcessingException e) {
+            log.warn("[API Key管理] 分渠道 Key 缓存序列化失败: {}", e.getMessage());
+        }
+
         return result;
     }
 
@@ -363,8 +432,9 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void updateUserModelName(Long modelId, Long userId, String newModelName) {
-        log.info("[模型管理] 修改模型名称, modelId={}, userId={}, newModelName={}", modelId, userId, newModelName);
+    public void updateUserModel(Long modelId, Long userId, String newModelName, ModelChannel modelChannel) {
+        log.info("[模型管理] 修改模型, modelId={}, userId={}, newModelName={}, modelChannel={}",
+                modelId, userId, newModelName, modelChannel);
 
         // 先校验模型存在且属于当前用户，不存在则不进行修改
         LambdaQueryWrapper<ModelsEntity> queryWrapper = new LambdaQueryWrapper<>();
@@ -375,26 +445,33 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
             throw new IllegalArgumentException("模型不存在");
         }
 
-        // 校验新模型名称在 AI 服务商处有效（与添加模型一致），并同步更新调用配置
-        String apiKey = getPlainApiKey(userId);
-        ModelValidationResult result = validateModel(apiKey, newModelName, model.getModelType());
+        // 未指定渠道时沿用原渠道，避免修改名称时意外切换到默认渠道
+        ModelChannel targetChannel = modelChannel != null ? modelChannel : model.getModelChannelEnum();
+
+        // 校验新模型名称在目标渠道处有效（与添加模型一致），并同步更新调用配置
+        String apiKey = getPlainApiKey(userId, targetChannel);
+        if (apiKey == null || apiKey.trim().isEmpty()) {
+            throw new IllegalArgumentException("请先配置 " + targetChannel.getDescription() + " 渠道的 API Key");
+        }
+        ModelValidationResult result = validateModel(apiKey, newModelName, model.getModelType(), targetChannel);
         if (!result.isSuccess()) {
-            log.warn("[模型管理] 修改模型名称验证失败: userId={}, modelId={}, newModelName={}, error={}",
-                    userId, modelId, newModelName, result.error());
+            log.warn("[模型管理] 修改模型验证失败: userId={}, modelId={}, newModelName={}, channel={}, error={}",
+                    userId, modelId, newModelName, targetChannel, result.error());
             throw new IllegalArgumentException(result.error());
         }
 
-        // 验证通过后才执行 update（含探测到的调用配置）
+        // 验证通过后才执行 update（含渠道与探测到的调用配置）
         LambdaUpdateWrapper<ModelsEntity> updateWrapper = new LambdaUpdateWrapper<>();
         updateWrapper.eq(ModelsEntity::getId, modelId)
                 .eq(ModelsEntity::getUserId, userId)
                 .set(ModelsEntity::getModelName, newModelName)
+                .set(ModelsEntity::getModelChannel, targetChannel.getCode())
                 .set(ModelsEntity::getMultiModel, result.multiModel())
                 .set(ModelsEntity::getEnableThinking, result.enableThinking());
         modelsMapper.update(null, updateWrapper);
 
         clearUserCache(userId);
-        log.info("[模型管理] 模型名称修改完成, modelId={}", modelId);
+        log.info("[模型管理] 模型修改完成, modelId={}, channel={}", modelId, targetChannel);
     }
 
     @Override
@@ -455,7 +532,14 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
         }
 
         List<ModelsEntity> assistantModels = getAssistantModels(userId);
-        return !assistantModels.isEmpty();
+        if (assistantModels.isEmpty()) {
+            return false;
+        }
+        if (!hasUserOwnApiKey(userId, mainModel.getModelChannelEnum())) {
+            return false;
+        }
+        return assistantModels.stream()
+                .allMatch(m -> hasUserOwnApiKey(userId, m.getModelChannelEnum()));
     }
 
     @Override
@@ -572,6 +656,21 @@ public class UserApiKeyServiceImpl implements UserApiKeyService {
         return ModelValidationResult.fail("请检查模型名称或API Key是否有误");
     }
     
+    private void clearUserCache(Long userId) {
+        String prefix = CACHE_PREFIX + userId;
+        stringRedisTemplate.delete(List.of(
+                prefix + API_KEYS_SUFFIX,
+                prefix + HAS_API_KEY_SUFFIX,
+                prefix + PLAIN_API_KEY_SUFFIX,
+                prefix + MAIN_MODEL_SUFFIX,
+                prefix + ASSISTANT_MODELS_SUFFIX,
+                prefix + VISION_MODEL_SUFFIX,
+                prefix + ALL_MODELS_SUFFIX,
+                prefix + MODEL_CHANNEL_SUFFIX
+        ));
+        log.info("[缓存管理] 清除用户 {} 的Redis缓存", userId);
+    }
+
     /**
      * 发起一次模型验证调用（流式）
      *

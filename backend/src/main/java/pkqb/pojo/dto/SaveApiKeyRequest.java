@@ -12,4 +12,7 @@ public class SaveApiKeyRequest {
     @Size(min = 1, max = 512, message = "API Key长度不合法")
     @Schema(description = "API Key")
     private String apiKey;
+
+    @Schema(description = "模型渠道：dashscope=阿里云百炼，openai=OpenAI兼容接口，deepseek=DeepSeek 等，默认 dashscope")
+    private String channel;
 }

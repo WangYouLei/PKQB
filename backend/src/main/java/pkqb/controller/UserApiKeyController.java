@@ -39,7 +39,7 @@ public class UserApiKeyController {
     }
 
     @PostMapping
-    @Operation(summary = "保存 API Key", description = "保存或更新用户的阿里云百炼 API Key")
+    @Operation(summary = "保存 API Key", description = "保存或更新用户指定模型渠道的 API Key")
     public Result<String> saveApiKey(
             HttpServletRequest httpRequest,
             @Valid @RequestBody SaveApiKeyRequest request) {
@@ -48,10 +48,16 @@ public class UserApiKeyController {
             return Result.error(401, "未登录或登录已过期");
         }
         String apiKey = request.getApiKey().trim();
+        ModelChannel channel;
         try {
-            userApiKeyService.saveApiKey(userId, apiKey);
+            channel = resolveChannel(request.getChannel());
+        } catch (IllegalArgumentException e) {
+            return Result.error(400, e.getMessage());
+        }
+        try {
+            userApiKeyService.saveApiKey(userId, channel, apiKey);
             reactAgentFactory.clearUserCache(userId);
-            return Result.success("API Key 保存成功");
+            return Result.success(channel.getDescription() + " API Key 保存成功");
         } catch (Exception e) {
             log.error("[API Key管理] 保存 API Key 失败: {}", e.getMessage());
             return Result.error("保存 API Key 失败: " + e.getMessage());
@@ -59,16 +65,26 @@ public class UserApiKeyController {
     }
 
     @DeleteMapping
-    @Operation(summary = "删除 API Key", description = "删除用户的 API Key，切换回使用本地 API Key")
-    public Result<String> deleteApiKey(HttpServletRequest httpRequest) {
+    @Operation(summary = "删除 API Key", description = "删除指定渠道的 API Key；不传渠道时删除全部渠道")
+    public Result<String> deleteApiKey(
+            HttpServletRequest httpRequest,
+            @Parameter(description = "模型渠道，不传则删除全部") @RequestParam(required = false) String channel) {
         Long userId = (Long) httpRequest.getAttribute("userId");
         if (userId == null) {
             return Result.error(401, "未登录或登录已过期");
         }
         try {
-            userApiKeyService.deleteApiKey(userId);
+            if (channel == null || channel.trim().isEmpty()) {
+                userApiKeyService.deleteApiKey(userId);
+                reactAgentFactory.clearUserCache(userId);
+                return Result.success("所有 API Key 已删除，将使用平台 API Key");
+            }
+            ModelChannel modelChannel = resolveChannel(channel);
+            userApiKeyService.deleteApiKey(userId, modelChannel);
             reactAgentFactory.clearUserCache(userId);
-            return Result.success("API Key 已删除，将使用本地 API Key");
+            return Result.success(modelChannel.getDescription() + " API Key 已删除，该渠道下的模型同时删除");
+        } catch (IllegalArgumentException e) {
+            return Result.error(400, e.getMessage());
         } catch (Exception e) {
             log.error("[API Key管理] 删除 API Key 失败: {}", e.getMessage());
             return Result.error("删除 API Key 失败: " + e.getMessage());
@@ -122,14 +138,24 @@ public class UserApiKeyController {
         }
 
         // 解析渠道，默认 dashscope
-        ModelChannel channel = ModelChannel.fromCode(modelChannel);
+        ModelChannel channel;
+        try {
+            channel = resolveChannel(modelChannel);
+        } catch (IllegalArgumentException e) {
+            return Result.error(400, e.getMessage());
+        }
+
+        // 每个模型必须使用对应渠道的 Key
+        if (!userApiKeyService.hasUserOwnApiKey(userId, channel)) {
+            return Result.error(400, "请先配置 " + channel.getDescription() + " 渠道的 API Key 后再添加该渠道模型");
+        }
 
         // 按类型检查数量限制
         if (!userApiKeyService.canAddModel(userId, type)) {
             return Result.error(400, type.getDescription() + "已达到最大数量限制（" + type.getMaxCount() + "个）");
         }
 
-        String apiKey = userApiKeyService.getPlainApiKey(userId);
+        String apiKey = userApiKeyService.getPlainApiKey(userId, channel);
         ModelValidationResult validationResult = userApiKeyService.validateModel(apiKey, safeModelName, type.getCode(), channel);
         if (!validationResult.isSuccess()) {
             log.warn("[模型管理] 模型验证失败: userId={}, modelName={}, channel={}, error={}",
@@ -186,11 +212,12 @@ public class UserApiKeyController {
     }
 
     @PutMapping("/model")
-    @Operation(summary = "修改模型名称", description = "修改用户指定模型的名称（模型不存在时不进行修改）")
-    public Result<String> updateModelName(
+    @Operation(summary = "修改模型", description = "修改用户指定模型的名称和渠道（模型不存在时不进行修改）")
+    public Result<String> updateModel(
             HttpServletRequest httpRequest,
             @Parameter(description = "模型ID") @RequestParam Long modelId,
-            @Parameter(description = "新模型名称") @RequestParam String modelName) {
+            @Parameter(description = "新模型名称") @RequestParam String modelName,
+            @Parameter(description = "新模型渠道，不传则保持原渠道") @RequestParam(required = false) String modelChannel) {
         Long userId = (Long) httpRequest.getAttribute("userId");
         if (userId == null) {
             return Result.error(401, "未登录或登录已过期");
@@ -207,15 +234,25 @@ public class UserApiKeyController {
         // XSS防护 - 转义HTML特殊字符
         String safeModelName = HtmlUtils.htmlEscape(modelName.trim());
 
+        // 解析渠道：不传则保持原渠道；传了非法值直接拒绝，避免静默回退到默认渠道
+        ModelChannel channel = null;
         try {
-            userApiKeyService.updateUserModelName(modelId, userId, safeModelName);
+            if (modelChannel != null && !modelChannel.trim().isEmpty()) {
+                channel = resolveChannel(modelChannel);
+            }
+        } catch (IllegalArgumentException e) {
+            return Result.error(400, e.getMessage());
+        }
+
+        try {
+            userApiKeyService.updateUserModel(modelId, userId, safeModelName, channel);
             reactAgentFactory.clearUserCache(userId);
-            return Result.success("模型名称修改成功");
+            return Result.success("模型修改成功");
         } catch (IllegalArgumentException e) {
             return Result.error(400, e.getMessage());
         } catch (Exception e) {
-            log.error("[模型管理] 修改模型名称失败: {}", e.getMessage());
-            return Result.error("修改模型名称失败: " + e.getMessage());
+            log.error("[模型管理] 修改模型失败: {}", e.getMessage());
+            return Result.error("修改模型失败: " + e.getMessage());
         }
     }
 
@@ -238,5 +275,21 @@ public class UserApiKeyController {
             log.error("[模型管理] 设置主模型失败: {}", e.getMessage());
             return Result.error("设置主模型失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * 解析渠道编码：空值默认阿里云百炼，非法值抛出异常
+     */
+    private ModelChannel resolveChannel(String channel) {
+        if (channel == null || channel.trim().isEmpty()) {
+            return ModelChannel.DASHSCOPE;
+        }
+        String code = channel.trim();
+        for (ModelChannel modelChannel : ModelChannel.values()) {
+            if (modelChannel.getCode().equalsIgnoreCase(code)) {
+                return modelChannel;
+            }
+        }
+        throw new IllegalArgumentException("不支持的模型渠道: " + code);
     }
 }

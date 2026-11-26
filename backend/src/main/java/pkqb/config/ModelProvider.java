@@ -11,6 +11,7 @@ import pkqb.pojo.entity.ModelsEntity;
  * <ul>
  *   <li>{@link DashScopeModelProvider} - 阿里云百炼</li>
  *   <li>{@link OpenAIModelProvider} - OpenAI 兼容接口</li>
+ *   <li>{@link DeepSeekModelProvider} - DeepSeek</li>
  * </ul>
  */
 public interface ModelProvider {

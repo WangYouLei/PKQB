@@ -5,9 +5,12 @@ import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import pkqb.enums.ApiKeyMode;
+import pkqb.enums.ModelChannel;
 import pkqb.pojo.entity.ModelsEntity;
 import pkqb.service.UserApiKeyService;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -100,11 +103,11 @@ public class ReactAgentFactory {
     private ReactAgent getOrCreateUserChatReactAgent(Long userId) {
         evictIfNeeded(userChatAgentCache);
         return userChatAgentCache.computeIfAbsent(userId, id -> {
-            String apiKey = userApiKeyService.getPlainApiKey(id);
             ModelsEntity mainModel = userApiKeyService.getMainModel(id);
+            String apiKey = resolveApiKey(id, mainModel);
 
             if (apiKey == null) {
-                log.warn("[ReactAgent工厂] 用户 {} 没有个人 API Key，使用默认 ChatReactAgent", id);
+                log.warn("[ReactAgent工厂] 用户 {} 没有主模型渠道的个人 API Key，使用默认 ChatReactAgent", id);
                 return chatReactAgent;
             }
             return reactAgentUserConfig.createUserChatReactAgent(apiKey, mainModel);
@@ -114,11 +117,11 @@ public class ReactAgentFactory {
     private ReactAgent getOrCreateUserRagReactAgent(Long userId) {
         evictIfNeeded(userRagAgentCache);
         return userRagAgentCache.computeIfAbsent(userId, id -> {
-            String apiKey = userApiKeyService.getPlainApiKey(id);
             ModelsEntity mainModel = userApiKeyService.getMainModel(id);
+            String apiKey = resolveApiKey(id, mainModel);
 
             if (apiKey == null) {
-                log.warn("[ReactAgent工厂] 用户 {} 没有个人 API Key，使用默认 RagReactAgent", id);
+                log.warn("[ReactAgent工厂] 用户 {} 没有主模型渠道的个人 API Key，使用默认 RagReactAgent", id);
                 return ragReactAgent;
             }
             return reactAgentUserConfig.createUserRagReactAgent(apiKey, mainModel);
@@ -128,11 +131,11 @@ public class ReactAgentFactory {
     private ReactAgent getOrCreateUserSimpleReactAgent(Long userId) {
         evictIfNeeded(userSimpleAgentCache);
         return userSimpleAgentCache.computeIfAbsent(userId, id -> {
-            String apiKey = userApiKeyService.getPlainApiKey(id);
             ModelsEntity mainModel = userApiKeyService.getMainModel(id);
+            String apiKey = resolveApiKey(id, mainModel);
 
             if (apiKey == null) {
-                log.warn("[ReactAgent工厂] 用户 {} 没有个人 API Key，使用默认 SimpleReactAgent", id);
+                log.warn("[ReactAgent工厂] 用户 {} 没有主模型渠道的个人 API Key，使用默认 SimpleReactAgent", id);
                 return simpleReactAgent;
             }
             return reactAgentUserConfig.createUserSimpleReactAgent(apiKey, mainModel);
@@ -146,28 +149,55 @@ public class ReactAgentFactory {
     private Agent getOrCreateMultiModelReactAgent(Long userId) {
         evictIfNeeded(userMultiModelAgentCache);
         return userMultiModelAgentCache.computeIfAbsent(userId, id -> {
-            String apiKey = userApiKeyService.getPlainApiKey(id);
-            if (apiKey == null) {
-                log.warn("[ReactAgent工厂] 用户 {} 没有个人 API Key，使用默认 RagReactAgent", id);
-                return ragReactAgent;
-            }
-            
             ModelsEntity mainModel = userApiKeyService.getMainModel(id);
             if (mainModel == null) {
                 log.warn("[ReactAgent工厂] 用户 {} 没有主模型，使用默认 RagReactAgent", id);
                 return ragReactAgent;
             }
-            
-            List<ModelsEntity> assistantModels = userApiKeyService.getAssistantModels(id);
-            if (assistantModels.isEmpty()) {
-                log.info("[ReactAgent工厂] 用户 {} 没有辅助模型，使用单模型模式", id);
-                return reactAgentUserConfig.createUserRagReactAgent(apiKey, mainModel);
+
+            String mainApiKey = resolveApiKey(id, mainModel);
+            if (mainApiKey == null) {
+                log.warn("[ReactAgent工厂] 用户 {} 的主模型渠道没有个人 API Key，使用默认 RagReactAgent", id);
+                return ragReactAgent;
             }
-            
-            log.info("[ReactAgent工厂] 用户 {} 使用多模型模式，主模型: {}, 辅助模型数量: {}", 
-                    id, mainModel.getModelName(), assistantModels.size());
-            return reactAgentUserConfig.createMultiModelReactAgent(apiKey, mainModel, assistantModels);
+
+            List<ModelsEntity> assistantModels = userApiKeyService.getAssistantModels(id);
+            List<ModelsEntity> usableAssistants = new ArrayList<>();
+            Map<String, String> channelKeys = new HashMap<>();
+            channelKeys.put(channelCode(mainModel), mainApiKey);
+            for (ModelsEntity assistant : assistantModels) {
+                String assistantKey = resolveApiKey(id, assistant);
+                if (assistantKey != null) {
+                    usableAssistants.add(assistant);
+                    channelKeys.putIfAbsent(channelCode(assistant), assistantKey);
+                } else {
+                    log.warn("[ReactAgent工厂] 用户 {} 的辅助模型 {} 所属渠道 {} 没有 API Key，已跳过该辅助模型",
+                            id, assistant.getModelName(), channelCode(assistant));
+                }
+            }
+
+            if (usableAssistants.isEmpty()) {
+                log.info("[ReactAgent工厂] 用户 {} 没有可用辅助模型，使用单模型模式", id);
+                return reactAgentUserConfig.createUserRagReactAgent(mainApiKey, mainModel);
+            }
+
+            log.info("[ReactAgent工厂] 用户 {} 使用多模型模式，主模型: {}, 辅助模型数量: {}",
+                    id, mainModel.getModelName(), usableAssistants.size());
+            return reactAgentUserConfig.createMultiModelReactAgent(channelKeys, mainModel, usableAssistants);
         });
+    }
+
+    /**
+     * 根据模型所属渠道取对应用户 API Key；模型为空时按阿里云百炼处理
+     */
+    private String resolveApiKey(Long userId, ModelsEntity model) {
+        ModelChannel channel = model != null ? model.getModelChannelEnum() : ModelChannel.DASHSCOPE;
+        return userApiKeyService.getPlainApiKey(userId, channel);
+    }
+
+    private String channelCode(ModelsEntity model) {
+        ModelChannel channel = model != null ? model.getModelChannelEnum() : ModelChannel.DASHSCOPE;
+        return channel.getCode();
     }
 
     public void clearUserCache(Long userId) {

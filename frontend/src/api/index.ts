@@ -242,9 +242,9 @@ export const apiDeleteModel = async (modelId: number) => {
   return res
 }
 
-/** 修改用户模型名称 */
-export const apiUpdateModelName = async (modelId: number, modelName: string) => {
-  const res = await put<string>('/apikey/model', null, { modelId, modelName })
+/** 修改用户模型（名称与渠道） */
+export const apiUpdateModel = async (modelId: number, modelName: string, modelChannel?: string) => {
+  const res = await put<string>('/apikey/model', null, { modelId, modelName, modelChannel })
   return res
 }
 

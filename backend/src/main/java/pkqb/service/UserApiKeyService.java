@@ -19,7 +19,29 @@ public interface UserApiKeyService {
     int MAX_VISION_MODEL_COUNT = 1;
     int MAX_MODEL_COUNT = MAX_MAIN_MODEL_COUNT + MAX_ASSISTANT_MODEL_COUNT + MAX_VISION_MODEL_COUNT;
 
-    void saveApiKey(Long userId, String apiKey);
+    /**
+     * 保存指定渠道的 API Key（同一用户每个渠道各存一份）
+     *
+     * @param userId  用户ID
+     * @param channel 模型渠道
+     * @param apiKey  API Key
+     */
+    void saveApiKey(Long userId, ModelChannel channel, String apiKey);
+
+    /**
+     * 保存阿里云百炼渠道的 API Key（兼容旧调用）
+     */
+    default void saveApiKey(Long userId, String apiKey) {
+        saveApiKey(userId, ModelChannel.DASHSCOPE, apiKey);
+    }
+
+    /**
+     * 删除指定渠道的 API Key，同时删除该渠道下已配置的模型
+     *
+     * @param userId  用户ID
+     * @param channel 模型渠道
+     */
+    void deleteApiKey(Long userId, ModelChannel channel);
 
     /**
      * 聚合获取API Key状态视图（主/辅助/视觉模型由一次模型查询派生，供状态接口使用）
@@ -29,13 +51,48 @@ public interface UserApiKeyService {
      */
     Map<String, Object> getApiKeyStatusView(Long userId);
 
+    /**
+     * 删除用户所有渠道的 API Key 及所有模型
+     */
     void deleteApiKey(Long userId);
 
-    String getPlainApiKey(Long userId);
+    /**
+     * 获取指定渠道的明文 API Key
+     *
+     * @param userId  用户ID
+     * @param channel 模型渠道
+     * @return 明文 API Key，未配置时返回 null
+     */
+    String getPlainApiKey(Long userId, ModelChannel channel);
+
+    /**
+     * 获取阿里云百炼渠道的明文 API Key（兼容旧调用）
+     */
+    default String getPlainApiKey(Long userId) {
+        return getPlainApiKey(userId, ModelChannel.DASHSCOPE);
+    }
 
     ApiKeyMode getApiKeyMode(Long userId);
 
-    boolean hasUserOwnApiKey(Long userId);
+    /**
+     * 检查用户是否配置了指定渠道的 API Key
+     */
+    boolean hasUserOwnApiKey(Long userId, ModelChannel channel);
+
+    /**
+     * 检查用户是否配置了任意渠道的 API Key
+     */
+    default boolean hasUserOwnApiKey(Long userId) {
+        return getApiKeyStatus(userId).values().stream().anyMatch(Boolean::booleanValue);
+    }
+
+    /**
+     * 获取用户各渠道 API Key 的配置状态
+     *
+     * @param userId 用户ID
+     * @return channel -> 是否已配置
+     */
+    Map<String, Boolean> getApiKeyStatus(Long userId);
 
     /**
      * 获取用户的模型渠道
@@ -93,12 +150,13 @@ public interface UserApiKeyService {
     void deleteUserModel(Long modelId, Long userId);
 
     /**
-     * 修改模型名称（模型不存在时不进行修改）
+     * 修改模型名称和渠道（模型不存在时不进行修改）
      * @param modelId 模型ID
      * @param userId 用户ID
      * @param newModelName 新模型名称
+     * @param modelChannel 新模型渠道，为 null 时保持原渠道
      */
-    void updateUserModelName(Long modelId, Long userId, String newModelName);
+    void updateUserModel(Long modelId, Long userId, String newModelName, ModelChannel modelChannel);
 
     /**
      * 设置主模型

@@ -3,6 +3,7 @@ package pkqb.config;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import pkqb.enums.ModelChannel;
 import pkqb.pojo.entity.ModelsEntity;
@@ -44,7 +45,7 @@ public class ModelProviderFactory {
     public ModelProviderFactory(
             @Autowired(required = false) List<ModelProvider> providers,
             @Autowired(required = false) DashScopeModelProvider dashScopeProvider,
-            @Autowired(required = false) OpenAIModelProvider openAiProvider) {
+            @Autowired(required = false) @Qualifier("openAIModelProvider") OpenAIModelProvider openAiProvider) {
 
         this.dashScopeProvider = dashScopeProvider;
         this.openAiProvider = openAiProvider;

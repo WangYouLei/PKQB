@@ -23,6 +23,13 @@ public enum ModelChannel {
     OPENAI("openai", "OpenAI 兼容接口"),
 
     /**
+     * DeepSeek
+     * 支持 deepseek-chat、deepseek-reasoner 等模型
+     * 使用 OpenAI 兼容协议，base-url 需指向 DeepSeek 开放平台
+     */
+    DEEPSEEK("deepseek", "DeepSeek"),
+
+    /**
      * 智谱 GLM
      * 支持 glm-4 等智谱模型
      */

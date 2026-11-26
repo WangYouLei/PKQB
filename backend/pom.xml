@@ -132,7 +132,7 @@
         <!-- Spring AI OpenAI（支持 OpenAI、DeepSeek、Claude 等兼容 API） -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-openai-spring-boot-starter</artifactId>
+            <artifactId>spring-ai-openai</artifactId>
         </dependency>
         <!--  Spring AI Alibaba Memory Redis  -->
         <dependency>

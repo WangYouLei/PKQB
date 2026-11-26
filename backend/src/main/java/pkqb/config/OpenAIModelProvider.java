@@ -47,6 +47,20 @@ public class OpenAIModelProvider implements ModelProvider {
     @Value("${pkqb.ai.openai.base-url:https://api.openai.com/v1}")
     private String baseUrl;
 
+    /**
+     * 实际请求的 API 地址。子类可通过覆盖此方法复用 OpenAI 兼容协议实现（如 DeepSeek）。
+     */
+    protected String getBaseUrl() {
+        return baseUrl;
+    }
+
+    /**
+     * 平台级默认 API Key。子类可覆盖为各自渠道的配置。
+     */
+    protected String getDefaultApiKey() {
+        return defaultApiKey;
+    }
+
     /** 模型 HTTP 调用超时（秒） */
     @Value("${pkqb.ai.request-timeout.connect-seconds:10}")
     private int connectTimeoutSeconds;
@@ -91,26 +105,26 @@ public class OpenAIModelProvider implements ModelProvider {
     /**
      * 构建带超时的 OpenAiApi
      */
-    private OpenAiApi buildOpenAiApi(String apiKey) {
+    protected OpenAiApi buildOpenAiApi(String apiKey) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(Duration.ofSeconds(connectTimeoutSeconds));
         requestFactory.setReadTimeout(Duration.ofSeconds(readTimeoutSeconds));
 
         return OpenAiApi.builder()
                 .apiKey(apiKey)
-                .baseUrl(baseUrl)
+                .baseUrl(getBaseUrl())
                 .restClientBuilder(RestClient.builder().requestFactory(requestFactory))
                 .build();
     }
 
     @Override
     public ChatModel createChatModel(String apiKey) {
-        return createChatModel(apiKey, defaultModel);
+        return createChatModel(apiKey, getDefaultModel());
     }
 
     @Override
     public ChatModel createChatModel(String apiKey, String model) {
-        return createChatModel(apiKey, model, personalMaxTokens);
+        return createChatModel(apiKey, model, getPersonalMaxTokens());
     }
 
     @Override
@@ -120,7 +134,7 @@ public class OpenAIModelProvider implements ModelProvider {
 
     @Override
     public ChatModel createChatModel(String apiKey, String model, int maxTokens, Boolean enableThinking, boolean multiModel) {
-        String actualModel = (model != null && !model.isEmpty()) ? model : defaultModel;
+        String actualModel = (model != null && !model.isEmpty()) ? model : getDefaultModel();
         OpenAiApi openAiApi = buildOpenAiApi(apiKey);
 
         OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder()
@@ -142,9 +156,9 @@ public class OpenAIModelProvider implements ModelProvider {
     @Override
     public ChatModel createChatModel(String apiKey, ModelsEntity model) {
         if (model == null) {
-            return createChatModel(apiKey, defaultModel, personalMaxTokens, null, false);
+            return createChatModel(apiKey, getDefaultModel(), getPersonalMaxTokens(), null, false);
         }
-        return createChatModel(apiKey, model.getModelName(), personalMaxTokens,
+        return createChatModel(apiKey, model.getModelName(), getPersonalMaxTokens(),
                 model.getEnableThinking(),
                 Boolean.TRUE.equals(model.getMultiModel()));
     }
@@ -157,14 +171,15 @@ public class OpenAIModelProvider implements ModelProvider {
         if (defaultVisionChatModel == null) {
             synchronized (this) {
                 if (defaultVisionChatModel == null) {
-                    if (defaultApiKey == null || defaultApiKey.isEmpty()) {
+                    String apiKey = getDefaultApiKey();
+                    if (apiKey == null || apiKey.isEmpty()) {
                         throw new IllegalStateException("未配置默认 API Key，无法创建视觉模型");
                     }
-                    OpenAiApi openAiApi = buildOpenAiApi(defaultApiKey);
+                    OpenAiApi openAiApi = buildOpenAiApi(apiKey);
                     defaultVisionChatModel = OpenAiChatModel.builder()
                             .openAiApi(openAiApi)
                             .defaultOptions(OpenAiChatOptions.builder()
-                                    .model(defaultVisionModel)
+                                    .model(getDefaultVisionModel())
                                     .maxTokens(8192)
                                     .build())
                             .build();
@@ -179,7 +194,7 @@ public class OpenAIModelProvider implements ModelProvider {
      */
     @Override
     public ChatModel createVisionChatModel(String apiKey, String modelName) {
-        String actualModel = (modelName != null && !modelName.isEmpty()) ? modelName : defaultVisionModel;
+        String actualModel = (modelName != null && !modelName.isEmpty()) ? modelName : getDefaultVisionModel();
         OpenAiApi openAiApi = buildOpenAiApi(apiKey);
         return OpenAiChatModel.builder()
                 .openAiApi(openAiApi)
@@ -192,15 +207,16 @@ public class OpenAIModelProvider implements ModelProvider {
 
     @Override
     public ChatModel createLocalChatModel() {
-        if (defaultApiKey == null || defaultApiKey.isEmpty()) {
+        String apiKey = getDefaultApiKey();
+        if (apiKey == null || apiKey.isEmpty()) {
             throw new IllegalStateException("未配置默认 API Key，无法创建本地解析模型");
         }
-        OpenAiApi openAiApi = buildOpenAiApi(defaultApiKey);
+        OpenAiApi openAiApi = buildOpenAiApi(apiKey);
         return OpenAiChatModel.builder()
                 .openAiApi(openAiApi)
                 .defaultOptions(OpenAiChatOptions.builder()
-                        .model(defaultModel)
-                        .maxTokens(localMaxTokens)
+                        .model(getDefaultModel())
+                        .maxTokens(getLocalMaxTokens())
                         .temperature(0.2)
                         .build())
                 .build();
